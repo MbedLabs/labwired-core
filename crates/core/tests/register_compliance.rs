@@ -1,7 +1,7 @@
 // LabWired - Firmware Simulation Platform
 // Copyright (C) 2026 Andrii Shylenko
 
-use labwired_config::{Arch, ChipDescriptor};
+use labwired_config::{Arch, ChipDescriptor, SystemManifest};
 use labwired_core::system;
 use labwired_core::Cpu;
 use labwired_core::Machine;
@@ -30,6 +30,23 @@ fn test_register_compliance_all_chips() -> anyhow::Result<()> {
             validate_chip(&path)?;
         }
     }
+
+    Ok(())
+}
+
+#[test]
+fn test_blackpill_f401cc_exposes_i2c1_controller() -> anyhow::Result<()> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let project_root = manifest_dir.parent().unwrap().parent().unwrap();
+    let system_path = project_root.join("examples/blackpill-f401cc/system.yaml");
+
+    let manifest = SystemManifest::from_file(&system_path)?;
+    let chip_path = system_path.parent().unwrap().join(&manifest.chip);
+    let chip = ChipDescriptor::from_file(&chip_path)?;
+    let mut bus = labwired_core::bus::SystemBus::from_config(&chip, &manifest)?;
+
+    bus.write_u32(0x40005408, 0x55AA)?;
+    assert_eq!(bus.read_u32(0x40005408)? & 0xFFFF, 0x55AA);
 
     Ok(())
 }
