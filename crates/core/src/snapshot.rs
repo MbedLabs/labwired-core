@@ -93,6 +93,12 @@ pub struct RiscVCpuSnapshot {
 
     pub mtime: u64,
     pub mtimecmp: u64,
+
+    /// Debug trigger module (hardware breakpoints / watchpoints). Absent in
+    /// snapshots written before it was captured; those still load, with the
+    /// trigger module at reset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub triggers: Option<crate::cpu::riscv::trigger::TriggerSnapshot>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

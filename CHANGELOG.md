@@ -77,6 +77,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   selected by its NSS pad and a master with `SSOE=1` drives it, as on the
   G071 (`examples/gpio-net-buses/env-spi16-nss.yaml`, tested on an F401
   pair).
+- ESP32-C3 CPU snapshots carry the debug trigger module (`tselect`, each
+  trigger's `tdata1`/`tdata2` including its `hit` bit, `tcontrol`), so a
+  resumed machine keeps its breakpoints and watchpoints — both the JSON
+  `RiscVCpuSnapshot` (optional `triggers` field) and the bincode runtime
+  snapshot (`RiscVRuntimeSnapshotV2`, read newest-layout first). Snapshots
+  written before still load, with the trigger module at reset.
 - STM32 SPI slave on a net: a frame that starts with nothing written to
   `DR` shifts out the shift register (the previous frame received) instead
   of zeros, and is counted (`Spi::net_slave_underruns`) and logged once;
