@@ -144,8 +144,8 @@ pub enum SpiSignal {
     Sck,
     Mosi,
     Miso,
-    /// Hardware slave select. Only a part whose AF table routes it (the G0)
-    /// puts it on a pad, and only a controller on a world `gpio_net` drives
+    /// Hardware slave select. Only a part whose AF table routes it (the G0
+    /// and F4 tables) puts it on a pad, and only a controller on a world `gpio_net` drives
     /// or reads it (see `spi_net`).
     Nss,
 }

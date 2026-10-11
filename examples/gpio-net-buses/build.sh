@@ -30,6 +30,8 @@ done
 F4=(--target=thumbv7em-none-eabi -mcpu=cortex-m4 "${COMMON[@]}" -T src/g0.ld)
 for fw in f4_spi16_master f4_spi16_slave; do
     "$CC" "${F4[@]}" "src/$fw.c" -o "firmware/${fw//_/-}.elf"
+    # Hardware NSS: the master's SSOE drives it, the slave (SSM=0) reads it.
+    "$CC" "${F4[@]}" -DHW_NSS=1 "src/$fw.c" -o "firmware/${fw//_/-}-nss.elf"
 done
 # Legacy I2C (CR1/SR1/SR2/CCR) on the STM32F103 (Cortex-M3) and STM32F401.
 F1=(--target=thumbv7m-none-eabi -mcpu=cortex-m3 "${COMMON[@]}" -T src/f1.ld)

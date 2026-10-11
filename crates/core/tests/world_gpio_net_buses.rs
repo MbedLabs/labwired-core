@@ -598,6 +598,73 @@ mod spi16 {
     }
 }
 
+/// The F401 pair of `spi16` on its hardware slave select
+/// (`env-spi16-nss.yaml`): the master's SPI drives PA4 = SPI1_NSS
+/// (CR2.SSOE=1) and the slave (SSM=0) is selected by the level its own PA4
+/// = SPI1_NSS pad reads off the net.
+mod spi16_nss {
+    use super::*;
+
+    const MASTER_TX: [u16; 3] = [0xA55A, 0x0FF0, 0x8001];
+    const SLAVE_TX: [u16; 3] = [0x1234, 0xBEEF, 0x00FF];
+
+    #[test]
+    fn the_masters_ssoe_drives_nss_and_the_slave_follows_its_nss_pad() {
+        let mut world = build("env-spi16-nss.yaml", |s| s);
+        run_us(&mut world, 400);
+        let a = result(&world, "a", 8);
+        assert_eq!(a[7], 1, "master finished: {a:x?}");
+        assert_eq!(&a[..3], SLAVE_TX.map(u32::from).as_slice());
+        assert_eq!(a[4] & (1 << 6), 0, "master: no overrun");
+        let b = result(&world, "b", 8);
+        assert_eq!(&b[..3], MASTER_TX.map(u32::from).as_slice());
+        assert_eq!(b[4], 3, "one RXNE interrupt per 16-bit frame");
+        assert_eq!(b[5], 0, "no OVR");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        // NSS: driven low by SPE=1 with SSOE, released at SPE=0 (pull-up).
+        assert_eq!(net(&reports, "nss").edges, 2);
+        assert!(net(&reports, "nss").level, "released at the end");
+        assert_eq!(net(&reports, "sck").edges, 3 * 16 * 2);
+        // MOSI: the words, then the pull-down once SPE=0 stops the master
+        // driving it (0x8001 left it high).
+        let mut mosi = bits_n(&MASTER_TX, 16);
+        mosi.push(false);
+        assert_eq!(net(&reports, "mosi").edges, edges_of(&mosi, false));
+        // Selected by the NSS fall: MISO carries the three answers, the MSB
+        // (0) of the next word (0x7E7E) at the last trailing edge, then the
+        // pull-down once NSS rises and the slave lets go.
+        let mut miso = bits_n(&SLAVE_TX, 16);
+        miso.push(false);
+        miso.push(false);
+        assert_eq!(net(&reports, "miso").edges, edges_of(&miso, false));
+        assert!(!net(&reports, "miso").level);
+    }
+
+    #[test]
+    fn with_nss_unwired_the_hardware_select_slave_never_answers() {
+        // Without the NSS net the slave's pad reads no level: it is never
+        // selected, takes no frame and leaves MISO to the pull-down.
+        let mut world = build("env-spi16-nss.yaml", |s| {
+            let start = s.find("  - type: gpio_net").unwrap();
+            let end = start + 1 + s[start + 1..].find("  - type: gpio_net").unwrap();
+            format!("{}{}", &s[..start], &s[end..])
+        });
+        run_us(&mut world, 400);
+        let a = result(&world, "a", 8);
+        assert_eq!(a[7], 1, "master finished: {a:x?}");
+        assert_eq!(&a[..3], &[0, 0, 0], "MISO is the pull-down");
+        let b = result(&world, "b", 8);
+        assert_eq!(b[4], 0, "the slave was never selected");
+    }
+
+    #[test]
+    fn hardware_nss_frames_do_not_depend_on_node_order_or_round_size() {
+        assert_order_and_round_independent("env-spi16-nss.yaml", |s| s, ["a", "b"], 400, 8);
+    }
+}
+
 /// The bits of `words`, `n` bits each, MSB first.
 fn bits_n(words: &[u16], n: u8) -> Vec<bool> {
     words

@@ -72,6 +72,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as on silicon; `spi_byte_level_golden`'s FIFO case was re-recorded for its
   `DR` reads only (a 16-bit read at `DS` = 8 now returns both packed frames;
   the wire is byte-identical).
+- STM32F4 SPI hardware NSS on a `gpio_net`: the F4 AF5 table routes
+  SPI1_NSS (PA4, PA15) and SPI2_NSS (PB9, PB12), so a slave with `SSM=0` is
+  selected by its NSS pad and a master with `SSOE=1` drives it, as on the
+  G071 (`examples/gpio-net-buses/env-spi16-nss.yaml`, tested on an F401
+  pair).
 - STM32 SPI slave on a net: a frame that starts with nothing written to
   `DR` shifts out the shift register (the previous frame received) instead
   of zeros, and is counted (`Spi::net_slave_underruns`) and logged once;

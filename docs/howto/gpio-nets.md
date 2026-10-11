@@ -292,7 +292,7 @@ peripherals: the bits are the net's edges, so the net reports, a logic
 analyzer on either board and the timing all show the real waveform, and the
 bus behaves like wires. Runnable examples:
 [`examples/gpio-net-buses`](../../examples/gpio-net-buses) (STM32G071 pairs,
-an STM32F401 pair, STM32F103 / STM32F401 / STM32G071 mixed I²C, and an
+STM32F401 pairs (one on the hardware NSS pads), STM32F103 / STM32F401 / STM32G071 mixed I²C, and an
 RP2040 against a G071 on SPI and on I²C).
 
 One net per wire, as for any other signal:
@@ -310,7 +310,7 @@ One net per wire, as for any other signal:
 
 | Peripheral | Register file | Pads (chip yaml) | Roles |
 |------------|---------------|------------------|-------|
-| STM32 SPI | classic F1/F4/L0 (`CR1.DFF`) / FIFO G0/L4/G4/WB/F7 (`CR2.DS`, `FRXTH`, `FRLVL`/`FTLVL`) | G071 AF0 incl. NSS (`pad_map: stm32g0`); F4 AF5 (SCK/MISO/MOSI, no NSS) | master, slave |
+| STM32 SPI | classic F1/F4/L0 (`CR1.DFF`) / FIFO G0/L4/G4/WB/F7 (`CR2.DS`, `FRXTH`, `FRLVL`/`FTLVL`) | G071 AF0 incl. NSS (`pad_map: stm32g0`); F4 AF5 incl. NSS (PA4/PA15, PB9/PB12) | master, slave |
 | STM32 I²C, modern | L4/G0 `TIMINGR` (`ISR`/`ICR`) | G071 AF6 (`pad_map: stm32g0`); L4 AF4 | controller, target |
 | STM32 I²C, legacy | F1/F2/F4 (`SR1`/`SR2`/`CCR`/`TRISE`) | F103 default mapping (PB6/PB7, PB10/PB11); F401 AF4 | master, slave |
 | RP2040 SPI | PL022 (`SSPCR0`/`SSPCR1`/`SSPDR`/`SSPSR`/`SSPCPSR`) | IO_BANK0 `FUNCSEL` 1: SCK, TX, RX, CSn | master, slave |
@@ -460,7 +460,7 @@ example's tests run every exchange three ways (as written, nodes swapped,
 
 Not modelled on a net yet: other SPI/I²C families (nRF52 SPIM/SPIS and
 TWIM/TWIS, ESP32 SPI/I²C, the H5 SPI v3), the hardware NSS pad of the
-F4 and L4/G4/WB SPI, legacy-I²C 10-bit addressing, SMBus/PEC, modern-I²C slave byte
+L4/G4/WB SPI, legacy-I²C 10-bit addressing, SMBus/PEC, modern-I²C slave byte
 control (`SBC`), the I²C filters and timeouts, SPI CRC, TI mode, the SPI mode
 fault (`MODF`) and DMA on either side (`LDMA_TX`/`LDMA_RX` are stored, no
 STM32 SPI DMA request is modelled). Such a peripheral on a net

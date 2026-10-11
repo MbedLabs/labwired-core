@@ -14,6 +14,7 @@ pull-up reading 1.
 | `env-spi.yaml` | STM32G071 SPI1 master, mode 0, SCK = f/128, CS on a GPIO (PA4) | G071 SPI1 slave, hardware NSS (PA4), RXNE interrupt | `cs` (pull-up), `sck`, `miso`, `mosi` (pull-down) |
 | `env-i2c.yaml` | G071 I2C1 controller (PB6/PB7, open drain) | G071 I2C1 target at 0x42, interrupt driven | `scl`, `sda` (pull-up) |
 | `env-spi16.yaml` | STM32F401 SPI1 master, 16-bit frames | F401 SPI1 slave, software select | `sck`, `miso`, `mosi` |
+| `env-spi16-nss.yaml` | F401 SPI1 master, 16-bit frames, NSS driven by the SPI (`SSOE=1`, PA4 AF5) | F401 SPI1 slave, hardware NSS (`SSM=0`, PA4 AF5) | `nss` (pull-up), `sck`, `miso`, `mosi` |
 | `env-i2c-legacy.yaml` | STM32F103 legacy I2C1 master (PB6/PB7) | F401 legacy I2C1 slave at 0x42 | `scl`, `sda` (pull-up) |
 | `env-spi-rp2040.yaml` | RP2040 SPI0 master (GP2-GP5, hardware CSn) | G071 SPI1 slave | `cs`, `sck`, `miso`, `mosi` |
 | `env-spi-rp2040-slave.yaml` | G071 SPI1 master, mode 3 | RP2040 SPI0 slave | `cs`, `sck`, `miso`, `mosi` |
