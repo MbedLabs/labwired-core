@@ -46,8 +46,8 @@ done
 # (README there); their ELFs are committed beside these.
 for chip in c3 c6; do
     if [ "$chip" = c6 ]; then arch=rv32imac; defs=(-DCHIP_C6); else arch=rv32imc; defs=(); fi
-    ESP=(--target=riscv32-unknown-elf -march=$arch -mabi=ilp32 -Os -ffreestanding -fno-builtin -nostdlib
-         -Wall -Wextra -fuse-ld=lld -Wl,--build-id=none -Wl,--no-relax -T src/esp32c3.ld)
+    ESP=(--target=riscv32-unknown-elf "-march=$arch" -mabi=ilp32 -Os -ffreestanding -fno-builtin -nostdlib
+         -Wall -Wextra -fuse-ld=lld -Xlinker --build-id=none -Xlinker --no-relax -T src/esp32c3.ld)
     for fw in spi_master spi_slave i2c_controller i2c_target; do
         "$CC" "${ESP[@]}" "${defs[@]}" "src/esp32c_$fw.c" -o "firmware/esp32${chip}-${fw//_/-}.elf"
     done
