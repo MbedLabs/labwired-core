@@ -1068,3 +1068,187 @@ mod rp2040_i2c {
         );
     }
 }
+
+/// The nRF52840's SPIM0 / SPIS0 (EasyDMA) against the STM32G071's SPI1, both
+/// ways round (`env-spi-nrf52.yaml`, `env-spi-nrf52-slave.yaml`).
+mod nrf52_spi {
+    use super::*;
+
+    const MASTER_TX: [u8; 4] = [0xA5, 0x3C, 0x5A, 0xC3];
+    const SLAVE_TX: [u8; 4] = [0x81, 0x82, 0x83, 0x84];
+
+    /// MISO in mode 0: the answers; at the last trailing edge the next
+    /// word's MSB (1: the G071's 0x85, the SPIS's ORC 0xFF); the pull-down
+    /// once CS rises and the slave lets go.
+    fn miso_edges() -> u64 {
+        let mut miso = bits_of(&SLAVE_TX, false);
+        miso.push(true);
+        miso.push(false);
+        edges_of(&miso, false)
+    }
+
+    #[test]
+    fn an_nrf52_spim_master_exchanges_its_easydma_buffers_with_a_g071_slave() {
+        let mut world = build("env-spi-nrf52.yaml", |s| s);
+        run_us(&mut world, 600);
+        let nrf = result(&world, "nrf", 8);
+        assert_eq!(nrf[7], 1, "master finished: {nrf:x?}");
+        assert_eq!(&nrf[..4], SLAVE_TX.map(u32::from).as_slice(), "RX buffer");
+        assert_eq!((nrf[4], nrf[5]), (4, 4), "TXD.AMOUNT, RXD.AMOUNT");
+        assert_eq!(nrf[6], 1, "one END interrupt");
+        let b = result(&world, "b", 8);
+        assert_eq!(&b[..4], MASTER_TX.map(u32::from).as_slice());
+        assert_eq!((b[4], b[5]), (4, 0), "one RXNE per frame, no OVR");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        assert_eq!(net(&reports, "sck").edges, 64);
+        assert_eq!(net(&reports, "cs").edges, 2);
+        assert_eq!(net(&reports, "mosi").edges, data_edges(&MASTER_TX, false));
+        assert_eq!(net(&reports, "miso").edges, miso_edges());
+    }
+
+    #[test]
+    fn an_nrf52_spis_slave_answers_a_g071_master_from_its_easydma_buffer() {
+        let mut world = build("env-spi-nrf52-slave.yaml", |s| s);
+        run_us(&mut world, 400);
+        let a = result(&world, "a", 8);
+        assert_eq!(a[7], 1, "master finished: {a:x?}");
+        assert_eq!(&a[..4], SLAVE_TX.map(u32::from).as_slice());
+        let nrf = result(&world, "nrf", 8);
+        assert_eq!(nrf[7], 1, "slave finished: {nrf:x?}");
+        assert_eq!(&nrf[..4], MASTER_TX.map(u32::from).as_slice(), "RX buffer");
+        assert_eq!((nrf[4], nrf[5]), (4, 4), "RXD.AMOUNT, TXD.AMOUNT");
+        assert_eq!(nrf[6], 1, "END_ACQUIRE: the CPU holds the semaphore");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        assert_eq!(net(&reports, "sck").edges, 64);
+        assert_eq!(net(&reports, "cs").edges, 2);
+        assert_eq!(net(&reports, "mosi").edges, data_edges(&MASTER_TX, false));
+        assert_eq!(net(&reports, "miso").edges, miso_edges());
+    }
+
+    #[test]
+    fn nrf52_spi_exchanges_do_not_depend_on_node_order_or_round_size() {
+        assert_order_and_round_independent("env-spi-nrf52.yaml", |s| s, ["nrf", "b"], 600, 8);
+        assert_order_and_round_independent("env-spi-nrf52-slave.yaml", |s| s, ["a", "nrf"], 400, 8);
+    }
+}
+
+/// The nRF52840's TWIM0 / TWIS0 (EasyDMA) against the STM32G071's modern
+/// I²C, both ways round (`env-i2c-nrf52.yaml`, `env-i2c-nrf52-target.yaml`):
+/// the same register-file exchange as `env-i2c.yaml`.
+mod nrf52_i2c {
+    use super::*;
+
+    /// Ten bytes of 9 clocks (address + 3; address + 1, address + 2;
+    /// address), one repeated START, three STOPs.
+    const SCL_EDGES: u64 = 2 * (9 * 10 + 1 + 3);
+
+    fn check_twim(world: &World) {
+        let nrf = result(world, "nrf", 8);
+        assert_eq!(nrf[7], 1, "controller finished: {nrf:x?}");
+        assert_eq!(nrf[2], 0, "0x42 ACKed the write: ERRORSRC clear");
+        assert_eq!(
+            &nrf[..2],
+            &[0xDE, 0xAD],
+            "read back after a repeated START: {nrf:x?} {:x?}",
+            result(world, "b", 8)
+        );
+        assert_eq!(nrf[6], 2, "RXD.AMOUNT");
+        assert_eq!(nrf[3], 2, "nobody at 0x50: ERRORSRC.ANACK");
+        assert_eq!(nrf[5], 0, "TXD.AMOUNT after an address NACK");
+        assert_eq!(nrf[4], 3, "three STOPPED events");
+
+        let b = result(world, "b", 8);
+        assert_eq!(b[0], 2, "the target saw its two transfers end");
+        assert_eq!(&b[1..3], &[0xDE, 0xAD]);
+        assert_eq!(b[3], 4, "pointer + 2 data, then the pointer again");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        let scl = net(&reports, "scl");
+        assert!(
+            scl.level && net(&reports, "sda").level,
+            "bus idle at the end"
+        );
+        assert_eq!(scl.edges, SCL_EDGES, "{scl:#?}");
+    }
+
+    #[test]
+    fn an_nrf52_twim_controller_writes_and_reads_a_g071_target() {
+        let mut world = build("env-i2c-nrf52.yaml", |s| s);
+        run_us(&mut world, 1500);
+        check_twim(&world);
+    }
+
+    #[test]
+    fn a_slow_g071_target_holds_the_nrf52_twim_by_stretching_scl() {
+        // The G071 handler waits about 15 us before it answers ADDR or TXIS,
+        // several of the TWIM's SCL low periods.
+        let mut world = build("env-i2c-nrf52.yaml", |s| {
+            s.replace("i2c-target.elf", "i2c-target-slow.elf")
+        });
+        run_us(&mut world, 2500);
+        check_twim(&world);
+        // K250: a 256-cycle bit, SCL low for 128 of them.
+        let held = longest_low(&world, "nrf", 27);
+        assert!(held > 4 * 128, "SCL held low {held} cycles");
+    }
+
+    fn check_twis(world: &World) {
+        let a = result(world, "a", 8);
+        assert_eq!(a[7], 1, "controller finished: {a:x?}");
+        assert_eq!(a[2], 0, "0x42 ACKed the write");
+        assert_eq!(&a[..2], &[0xDE, 0xAD], "read back through a repeated START");
+        assert_eq!(a[3], 1, "nobody at 0x50: NACKF");
+        assert_eq!(a[4], 3);
+
+        let nrf = result(world, "nrf", 8);
+        assert_eq!(nrf[0], 2, "STOPPED for its two transfers only: {nrf:x?}");
+        assert_eq!(&nrf[1..3], &[0xDE, 0xAD]);
+        assert_eq!(nrf[3], 4, "pointer + 2 data, then the pointer again");
+        assert_eq!(nrf[4], 2, "TXD.AMOUNT: two bytes read");
+        assert_eq!((nrf[5], nrf[6]), (1, 2), "READ and WRITE events");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        let scl = net(&reports, "scl");
+        assert!(scl.level && net(&reports, "sda").level);
+        assert_eq!(scl.edges, SCL_EDGES, "{scl:#?}");
+    }
+
+    #[test]
+    fn a_g071_controller_writes_and_reads_an_nrf52_twis_target() {
+        let mut world = build("env-i2c-nrf52-target.yaml", |s| s);
+        run_us(&mut world, 1500);
+        check_twis(&world);
+    }
+
+    #[test]
+    fn a_slow_nrf52_twis_target_holds_the_controller_by_stretching_scl() {
+        // About 25 us before each prepare: the TWIS holds SCL low after its
+        // address until the firmware hands it a buffer.
+        let mut world = build("env-i2c-nrf52-target.yaml", |s| {
+            s.replace("nrf-twis-target.elf", "nrf-twis-target-slow.elf")
+        });
+        run_us(&mut world, 2500);
+        check_twis(&world);
+        // The G071's own SCL low period is (SCLL + 1) x 8 = 128 cycles.
+        let held = longest_low(&world, "a", 6);
+        assert!(held > 4 * 128, "SCL held low {held} cycles");
+    }
+
+    #[test]
+    fn nrf52_i2c_does_not_depend_on_node_order_or_round_size() {
+        assert_order_and_round_independent("env-i2c-nrf52.yaml", |s| s, ["nrf", "b"], 1500, 8);
+        assert_order_and_round_independent(
+            "env-i2c-nrf52-target.yaml",
+            |s| s,
+            ["a", "nrf"],
+            1500,
+            8,
+        );
+    }
+}

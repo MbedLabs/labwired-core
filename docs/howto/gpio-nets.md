@@ -217,7 +217,7 @@ drives and accept an external level. Every GPIO model in tree does:
 | GPIO model | Capture | Notes |
 |------------|---------|-------|
 | `GpioPort`, every register family (STM32 `v2` and `f1`, nRF52/54, Kinetis, EFR32 series 2, SAM, RA, i.MX RT) | push: the port reports its own edges, idle fast-forward stays on | exercised end to end on STM32 `v2` (G0B1, F401) and `f1` (F103). The EXTI raises edge interrupts for net edges on G0 and U5 (port from `EXTI_EXTICRx`), F1 (port from `AFIO_EXTICRx`), F4 and L0 (port from `SYSCFG_EXTICRx`). Internal pulls on the net, and read by an input nothing outside drives: STM32 `v2` `PUPDR`, STM32 `f1` input-with-pull (`CNF = 10`, `ODR` picks the rail), nRF52 `PIN_CNF.PULL`, EFR32 `INPUTPULL`, SAM `PINCFG.PULLEN`, and, from the block that keeps them outside the GPIO port (the port's `pad_control:` in the chip yaml), Kinetis `PORTx_PCRn.PE/PS`, RA `PmnPFS.PCR` and i.MX RT IOMUXC `SW_PAD_CTL` `PKE/PUE/PUS`. |
-| `GpioPort` pads routed to a peripheral (AF) | as above | the peripheral says what its output stage does (driving, released, input) and reads the level the net delivers; see [Buses over nets](#buses-over-nets). STM32 SPI, modern I²C and legacy (F1/F2/F4) I²C; the RP2040 SIO does the same for SPI and I²C pads (`FUNCSEL`). |
+| `GpioPort` pads routed to a peripheral (AF) | as above | the peripheral says what its output stage does (driving, released, input) and reads the level the net delivers; see [Buses over nets](#buses-over-nets). STM32 SPI, modern I²C and legacy (F1/F2/F4) I²C; the RP2040 SIO does the same for SPI and I²C pads (`FUNCSEL`); the nRF52 `PSEL` pin selects (SPIM/SPIS/TWIM/TWIS) likewise. |
 | `avr_gpio` (ATmega328P `portb`/`portc`/`portd`) | push: the port reports its own edges, idle fast-forward stays on | INT0/INT1 and PCINT0..2 see external edges; a core parked in `SLEEP` is skipped until the next edge or Timer0 overflow. Exercised end to end on the Uno (`gpio-net-two-boards`). An input with its `PORTx` bit set is a pull-up on the net, unless firmware sets `MCUCR.PUD`, which takes every pull-up off. |
 | ESP32 classic `gpio` (member `peripheral: gpio`, pins 0..31) | push | Drive: `GPIO_ENABLE` and `GPIO_OUT`; `GPIO_PINn.PAD_DRIVER` open drain drives only a 0 and, holding a 1, reads the wire on `GPIO_IN`. Interrupts: `GPIO_PINn.INT_TYPE` edge and level types latch `GPIO_STATUS` and raise matrix source 22 for the CPU whose INT_ENA bit is set. GPIO32..39 cannot join a net. The IO_MUX pulls are not modelled on this part. |
 | ESP32-S3 `gpio` (`peripheral: gpio`, pins 0..31) | push | As classic; matrix source 16 (`GPIO_PCPU_INT`, INT_ENA bit 13). The IO_MUX `FUN_WPU` pull-up is on the net. GPIO32..48 cannot join a net. |
@@ -293,7 +293,7 @@ analyzer on either board and the timing all show the real waveform, and the
 bus behaves like wires. Runnable examples:
 [`examples/gpio-net-buses`](../../examples/gpio-net-buses) (STM32G071 pairs,
 an STM32F401 pair, STM32F103 / STM32F401 / STM32G071 mixed I²C, and an
-RP2040 against a G071 on SPI and on I²C).
+RP2040 and an nRF52840 against a G071 on SPI and on I²C).
 
 One net per wire, as for any other signal:
 
@@ -315,6 +315,8 @@ One net per wire, as for any other signal:
 | STM32 I²C, legacy | F1/F2/F4 (`SR1`/`SR2`/`CCR`/`TRISE`) | F103 default mapping (PB6/PB7, PB10/PB11); F401 AF4 | master, slave |
 | RP2040 SPI | PL022 (`SSPCR0`/`SSPCR1`/`SSPDR`/`SSPSR`/`SSPCPSR`) | IO_BANK0 `FUNCSEL` 1: SCK, TX, RX, CSn | master, slave |
 | RP2040 I²C | DW_apb_i2c (`IC_CON`/`IC_TAR`/`IC_SAR`/`IC_DATA_CMD`/...) | IO_BANK0 `FUNCSEL` 3: SDA, SCL | master, slave |
+| nRF52 SPI | SPIM / SPIS, EasyDMA (`TXD`/`RXD` `PTR`/`MAXCNT`/`AMOUNT`) | any pad, by `PSEL.SCK`/`MOSI`/`MISO` (and SPIS `PSEL.CSN`) | master (`ENABLE = 7`), slave (`ENABLE = 2`) |
+| nRF52 I²C | TWIM / TWIS, EasyDMA | any pad, by `PSEL.SCL`/`SDA` | controller (`ENABLE = 6`), target (`ENABLE = 9`) |
 
 **SPI** (STM32 classic/FIFO SPI): SCK, MOSI, MISO and NSS are push-pull
 nets. A master (`MSTR=1`, `SPE=1`) drives SCK and MOSI and samples the level
@@ -411,20 +413,72 @@ slowly for the clock. Not on a net: 10-bit addressing, the general call,
 SMBus, DMA and `RX_FIFO_FULL_HLD_CTRL` (a full RX FIFO drops the byte with
 `RX_OVER`).
 
+**nRF52** (nRF52840 instance 0 at 0x40003000, the window `ENABLE` turns
+into SPIM, SPIS, TWIM or TWIS; also the standalone TWIM1 and SPIM2): the
+pads are whichever ones the `PSEL` registers name, so a peripheral is on a
+net when the pad its pin select names is (and it is enabled). A write that
+moves a `PSEL` or `ENABLE` is bracketed like an RP2040 `FUNCSEL` write: the
+port reports what moved and the net's level reaches the newly routed line.
+The window is one register file: what firmware programs before `ENABLE`
+(buffers, `CONFIG`, `SHORTS`, `INTEN`) reaches every personality. EasyDMA
+reads a TX buffer when its transfer is armed (`TASKS_START`, `STARTTX`,
+`TASKS_RELEASE`, `PREPARETX`) and writes the RX buffer before the event that
+ends it; the events raise the interrupt where `INTEN` asks for it.
+
+- *SPIM*: `TASKS_START` clocks `max(TXD.MAXCNT, RXD.MAXCNT)` bytes back to
+  back at `FREQUENCY` in the `CONFIG` shape (`ORC` past the TX buffer),
+  sampling MISO at the net's level; `EVENTS_STARTED`, then `ENDTX`,
+  `ENDRX`, `END` with the amounts. `TASKS_STOP` ends after the byte on the
+  wire (`STOPPED`). Chip select is a GPIO, as on SPIM0..2.
+- *SPIS*: the semaphore decides. `TASKS_RELEASE` gives the slave the
+  buffers; CSN low then starts a granted transaction (`SEMSTAT = 2`) that
+  shifts out the TX buffer, then `ORC` (`STATUS.OVERREAD`), and fills the RX
+  buffer up to `MAXCNT` (`STATUS.OVERFLOW` past it). With the CPU holding
+  the semaphore it sends `DEF`. CSN high: `ENDRX`, `END`, the amounts, and
+  the semaphore back to the CPU with `ACQUIRED` when it asked
+  (`TASKS_ACQUIRE`) or `SHORTS.END_ACQUIRE` is set. MISO is driven only
+  while CSN is low.
+- *TWIM*: `STARTTX`/`STARTRX` send START (repeated START from a held bus)
+  and `ADDRESS`; `LASTTX`/`LASTRX` fire at the start of the last byte with
+  their shortcuts (`LASTTX_STARTRX`, `_SUSPEND`, `_STOP`, `LASTRX_STARTTX`,
+  `_SUSPEND`, `_STOP`). A received byte is NACKed when STOP or a change of
+  direction follows. A NACK sets `ERRORSRC.ANACK`/`DNACK` with `ERROR` and
+  holds the bus until `TASKS_STOP` (nrfx's `RESUME` + `STOP`). With nothing
+  left to do the TWIM holds SCL low. Timing: `FREQUENCY` (K100/K250/K400 of
+  64 MHz), SCL low and high half a bit each.
+- *TWIS*: ACKs `ADDRESS[0]`/`[1]` as `CONFIG` enables them (`MATCH`),
+  fires `WRITE`/`READ`, and stretches SCL until firmware prepares a buffer
+  (`TASKS_PREPARERX`/`PREPARETX`, or `RESUME` after `WRITE_SUSPEND`/
+  `READ_SUSPEND`); `RXSTARTED`/`TXSTARTED` follow. Past `RXD.MAXCNT` a byte
+  is NACKed with `ERRORSRC.OVERFLOW | DNACK`; past the TX buffer `ORC` goes
+  out (`OVERREAD`). Each phase uses up its prepare; STOP fires `STOPPED`
+  with the amounts.
+
+Tested against an STM32G071 both ways round on each bus (SPIM master /
+SPIS slave in mode 0, TWIM controller / TWIS target with the `env-i2c.yaml`
+register-file exchange, the NACK of an absent address, a slow G071 target
+holding the TWIM and a slow TWIS holding the G071). Not on a net: the
+SPIM3 hardware CSN (`PSEL.CSN`, `CSNPOL`, `IFTIMING`, `DCX`), the legacy
+SPI/TWI (`ENABLE = 1`/`5`), the TWIM `ERRORSRC.OVERRUN`, the nRF5340 and
+nRF54 SPIM/TWIM, and the SPIS/TWIS on a window other than a serial
+instance (the nRF52840 chip yaml has them only at 0x40003000).
+
 Clock stretching is tested on every target: an STM32G071 (modern), an
 STM32F401 (legacy) and an RP2040 slave whose firmware answers several SCL low
 periods late each hold the controller, and the bytes and clock count come
 out the same. A target that ends a stretch with a new bit on SDA releases
 SCL a data setup time later (`SDADEL`-style, one quarter of its own SCL low
-period on the legacy and RP2040 engines), so the change is never read as
-START or STOP.
+period on the legacy and RP2040 engines, 250 ns on the nRF52 TWIS), so the
+change is never read as START or STOP.
 
 The legacy and modern controllers meet only on the wire, so an F103 target
 answers a G071 controller as it answers an F401 one (tested both ways round
 between F103 and F401, and G071 → F103).
 
 Everything is event-scheduled: a master's bits run at their exact cycles, a
-slave or target runs when the net delivers an edge. The one poll is a chip
+slave or target runs when the net delivers an edge (at the cycle the world
+applies it, even on a timed core that publishes its cycle to the bus only at
+peripheral ticks). The one poll is a chip
 holding SCL low until firmware does something with a register *read*, which
 cannot wake the model: reading `RXDR` (modern), or clearing `ADDR` and
 reading `DR` (legacy). It looks every quarter SCL low period, and at every
@@ -443,8 +497,8 @@ The results do not depend on node order or on the world's round size; each
 example's tests run every exchange three ways (as written, nodes swapped,
 37 ns rounds) and compare what every pad saw, cycle by cycle.
 
-Not modelled on a net yet: other SPI/I²C families (nRF52 SPIM/SPIS and
-TWIM/TWIS, ESP32 SPI/I²C, the H5 SPI v3), the hardware NSS pad of the F4 SPI, legacy-I²C 10-bit addressing,
+Not modelled on a net yet: other SPI/I²C families (ESP32 SPI/I²C, the H5
+SPI v3), the hardware NSS pad of the F4 SPI, legacy-I²C 10-bit addressing,
 SMBus/PEC, modern-I²C slave byte control (`SBC`), the I²C filters and
 timeouts, SPI CRC, TI mode and DMA on a slave. Such a peripheral on a net
 keeps its usual behaviour and drives its lines push-pull as before.

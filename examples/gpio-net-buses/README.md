@@ -19,6 +19,10 @@ pull-up reading 1.
 | `env-spi-rp2040-slave.yaml` | G071 SPI1 master, mode 3 | RP2040 SPI0 slave | `cs`, `sck`, `miso`, `mosi` |
 | `env-i2c-rp2040.yaml` | RP2040 I2C0 controller (GP4 SDA, GP5 SCL) | G071 I2C1 target at 0x42 | `scl`, `sda` (pull-up) |
 | `env-i2c-rp2040-target.yaml` | G071 I2C1 controller | RP2040 I2C0 target at 0x42 | `scl`, `sda` (pull-up) |
+| `env-spi-nrf52.yaml` | nRF52840 SPIM0 master (P0.03 SCK, P0.04 MOSI, P0.05 MISO, CS on GPIO P0.02), EasyDMA, END interrupt | G071 SPI1 slave | `cs`, `sck`, `miso`, `mosi` |
+| `env-spi-nrf52-slave.yaml` | G071 SPI1 master, mode 0 | nRF52840 SPIS0 slave (CSN P0.02), semaphore + EasyDMA | `cs`, `sck`, `miso`, `mosi` |
+| `env-i2c-nrf52.yaml` | nRF52840 TWIM0 controller (P0.27 SCL, P0.26 SDA), K250, shortcuts | G071 I2C1 target at 0x42 | `scl`, `sda` (pull-up) |
+| `env-i2c-nrf52-target.yaml` | G071 I2C1 controller | nRF52840 TWIS0 target at 0x42 (polled `WRITE`/`READ`, `PREPARERX`/`TX`) | `scl`, `sda` (pull-up) |
 
 SPI: the master sends `A5 3C 5A C3` and receives `81 82 83 84`, which the
 slave queues from its SPI interrupt (or preloads in its FIFO, on the RP2040).

@@ -147,6 +147,18 @@ pub(crate) struct PadControlLink {
     pub(crate) control: crate::pins::PadControl,
 }
 
+/// Peripherals that name the pads they drive (nRF `PSEL`) and the pin ports
+/// that read those claims, resolved when a world `gpio_net` first joins a pad
+/// (`join_net_pads`). A write to an owner can move a pad between its GPIO
+/// latch and a peripheral line, so it is bracketed like an RP2040 IO_BANK0
+/// write: the ports report what moved, re-register their line taps and hand
+/// the net's levels to newly routed lines. Empty on every bus without a net.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct PadClaimLinks {
+    pub(crate) owners: Vec<usize>,
+    pub(crate) ports: Vec<usize>,
+}
+
 /// One clock-enable bit a peripheral's clock depends on, resolved to a concrete
 /// controller index + register offset at bus-build time (the symbolic `reg`
 /// name from the yaml is mapped via [`Peripheral::clock_gate_reg_offset`]).
@@ -439,6 +451,8 @@ pub struct SystemBus {
     /// like the C3 IO_MUX one, and the port takes the decoded pulls. Empty
     /// on every other bus.
     pad_control_links: Vec<PadControlLink>,
+    /// See [`PadClaimLinks`].
+    pub(crate) pad_claim_links: PadClaimLinks,
     /// Per bus index: the [`PortId`](crate::pins::PortId) of a pin port,
     /// assigned when the port is attached (`rebuild_peripheral_ranges`). Edge
     /// sinks are addressed by it; `None` for everything else.

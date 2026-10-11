@@ -595,6 +595,7 @@ impl crate::Bus for SystemBus {
                 } else {
                     (None, None, false)
                 };
+                let pad_claim_capture = brackets && self.begin_pad_claim_write(idx);
                 let r = {
                     let p = &mut self.peripherals[idx];
                     p.dev.write(off, value)
@@ -603,6 +604,7 @@ impl crate::Bus for SystemBus {
                     self.finish_esp32c3_io_mux_write(c3_io_mux_capture);
                     self.finish_rp2040_io_bank0_write(rp_io_bank0_capture);
                     self.finish_pad_control_write(idx, pad_control_capture);
+                    self.finish_pad_claim_write(pad_claim_capture);
                 }
 
                 self.maybe_service_edge_driven_gpio_devices(idx);
@@ -958,6 +960,7 @@ impl crate::Bus for SystemBus {
             } else {
                 (None, None, false)
             };
+            let pad_claim_capture = brackets && self.begin_pad_claim_write(idx);
             let r = {
                 let p = &mut self.peripherals[idx];
                 p.ticks_remaining = 0;
@@ -967,6 +970,7 @@ impl crate::Bus for SystemBus {
                 self.finish_esp32c3_io_mux_write(c3_io_mux_capture);
                 self.finish_rp2040_io_bank0_write(rp_io_bank0_capture);
                 self.finish_pad_control_write(idx, pad_control_capture);
+                self.finish_pad_claim_write(pad_claim_capture);
             }
 
             self.maybe_service_edge_driven_gpio_devices(idx);
@@ -1122,6 +1126,7 @@ impl crate::Bus for SystemBus {
             } else {
                 (None, None, false)
             };
+            let pad_claim_capture = brackets && self.begin_pad_claim_write(idx);
             let r = {
                 let p = &mut self.peripherals[idx];
                 p.ticks_remaining = 0;
@@ -1131,6 +1136,7 @@ impl crate::Bus for SystemBus {
                 self.finish_esp32c3_io_mux_write(c3_io_mux_capture);
                 self.finish_rp2040_io_bank0_write(rp_io_bank0_capture);
                 self.finish_pad_control_write(idx, pad_control_capture);
+                self.finish_pad_claim_write(pad_claim_capture);
             }
 
             self.maybe_service_edge_driven_gpio_devices(idx);
