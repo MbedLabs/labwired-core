@@ -23,8 +23,11 @@ pull-up reading 1.
 SPI: the master sends `A5 3C 5A C3` and receives `81 82 83 84`, which the
 slave queues from its SPI interrupt (or preloads in its FIFO, on the RP2040).
 The tests also swap in the frame-shape variants (`spi-*-mode1/2/3`,
-`spi-*-lsb`), a slave that feeds every answer from its TXE interrupt
-(`spi-slave-txe`) and one that underruns (`spi-slave-underrun`).
+`spi-*-lsb`), the G071's other `CR2.DS` frame sizes (`spi-*-ds16/12/4`, each
+chip as master in turn), a slave that feeds every answer from its TXE
+interrupt (`spi-slave-txe`), one that underruns (`spi-slave-underrun`) and a
+master that leaves `CR2.FRXTH` at reset (`spi-master-nofrxth`), which the
+G0's FIFO SPI stalls after one 8-bit frame as silicon does.
 
 I²C: the controller writes `10 DE AD` to 0x42 (register pointer 0x10, then two
 bytes), writes the pointer again and reads two bytes back through a repeated

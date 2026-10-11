@@ -1374,8 +1374,8 @@ impl SystemBus {
         // ── STM32G0 parts ───────────────────────────────────────────────────
         //
         // STM32G071 (DS12232, "Port A/Port B alternate function mapping"
-        // tables, AF0 column). The classic register file behind a V2 port
-        // would otherwise pick the F4 table, whose AF5 is not SPI on a G0.
+        // tables, AF0 column). The FIFO register file behind a V2 port would
+        // otherwise pick the L4 table, whose AF5 is not SPI on a G0.
         // Selected by the chip yaml's `pad_map: stm32g0`. NSS is routed here
         // (and only here) because a G0 pair on a world `gpio_net` uses it as
         // the hardware slave select.
@@ -1445,6 +1445,7 @@ impl SystemBus {
                             (true, SpiPadMap::Stm32U5) => U5,
                             (true, _) => H5,
                             (false, SpiPadMap::Stm32G0) => G0,
+                            (false, SpiPadMap::Stm32F4) => F4,
                             (false, _) if fifo => L4,
                             (false, _) => F4,
                         };

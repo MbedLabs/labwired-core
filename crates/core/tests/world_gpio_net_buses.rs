@@ -598,6 +598,168 @@ mod spi16 {
     }
 }
 
+/// The bits of `words`, `n` bits each, MSB first.
+fn bits_n(words: &[u16], n: u8) -> Vec<bool> {
+    words
+        .iter()
+        .flat_map(|w| (0..n).rev().map(move |i| (w >> i) & 1 != 0))
+        .collect()
+}
+
+/// The STM32G071's FIFO-type SPI (RM0444 §35) on the `env-spi.yaml` pair at
+/// other CR2.DS frame sizes, each way round: `spi-*-ds16/12/4` (build.sh).
+/// The 8-bit size is `spi` / `spi_shapes` above.
+mod spi_frame_sizes {
+    use super::*;
+
+    fn mask(ds: u8) -> u16 {
+        ((1u32 << ds) - 1) as u16
+    }
+
+    /// What `src/spi_master.c` sends at `ds` bits.
+    fn master_tx(ds: u8) -> [u16; 4] {
+        let words = if ds <= 8 {
+            [0xA5, 0x3C, 0x5A, 0xC3]
+        } else {
+            [0xA55A, 0x3CC3, 0x5AA5, 0xC33C]
+        };
+        words.map(|w| w & mask(ds))
+    }
+
+    /// `ANSWER(n)` of `src/spi_slave.c`: 0x81+n in both bytes, masked.
+    fn answer(ds: u8, n: u16) -> u16 {
+        (((0x81 + n) * 0x0101) as u32 & u32::from(mask(ds))) as u16
+    }
+
+    /// Node `a` runs the master and `b` the slave, or the other way round
+    /// (`swapped`); the wiring is symmetric, PA4 being the master's GPIO chip
+    /// select and the slave's hardware NSS on either chip.
+    fn env(ds: u8, swapped: bool) -> impl Fn(String) -> String {
+        move |s: String| {
+            let (master, slave) = (
+                format!("\"firmware/spi-master-ds{ds}.elf\""),
+                format!("\"firmware/spi-slave-ds{ds}.elf\""),
+            );
+            let (on_a, on_b) = if swapped {
+                (slave, master)
+            } else {
+                (master, slave)
+            };
+            s.replace("\"firmware/spi-master.elf\"", "MASTER")
+                .replace("\"firmware/spi-slave.elf\"", "SLAVE")
+                .replace("MASTER", &on_a)
+                .replace("SLAVE", &on_b)
+        }
+    }
+
+    fn exchange(ds: u8, swapped: bool) {
+        let mut world = build("env-spi.yaml", env(ds, swapped));
+        run_us(&mut world, 600);
+        let (m, sl) = if swapped { ("b", "a") } else { ("a", "b") };
+        let answers = [0, 1, 2, 3].map(|n| answer(ds, n));
+        let tx = master_tx(ds);
+
+        let mr = result(&world, m, 8);
+        assert_eq!(mr[7], 1, "DS={ds}: master finished: {mr:x?}");
+        assert_eq!(
+            &mr[..4],
+            answers.map(u32::from).as_slice(),
+            "DS={ds}: the master's RX FIFO holds what the slave put on MISO"
+        );
+        assert_eq!(mr[4] & (1 << 6), 0, "master: no overrun");
+        // SR at the end: TXE only — both FIFOs empty (FRLVL = FTLVL = 0).
+        assert_eq!(mr[4], 0x0002, "DS={ds}: master SR");
+        let sr = result(&world, sl, 8);
+        assert_eq!(
+            &sr[..4],
+            tx.map(u32::from).as_slice(),
+            "DS={ds}: the slave's RX FIFO holds what the master put on MOSI"
+        );
+        assert_eq!(sr[4], 4, "DS={ds}: one RXNE interrupt per frame");
+        assert_eq!(sr[5], 0, "no OVR");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        let bits = u64::from(ds);
+        assert_eq!(net(&reports, "sck").edges, 4 * bits * 2, "DS={ds}: SCK");
+        assert_eq!(net(&reports, "cs").edges, 2);
+        assert_eq!(
+            net(&reports, "mosi").edges,
+            edges_of(&bits_n(&tx, ds), false),
+            "DS={ds}: MOSI"
+        );
+        // MISO: the answers, the MSB of the next one (queued from the RXNE
+        // interrupt) at the last trailing edge, the pull-down once CS rises.
+        let mut miso = bits_n(&answers, ds);
+        miso.push((answer(ds, 4) >> (ds - 1)) & 1 != 0);
+        miso.push(false);
+        assert_eq!(
+            net(&reports, "miso").edges,
+            edges_of(&miso, false),
+            "DS={ds}: MISO"
+        );
+    }
+
+    #[test]
+    fn sixteen_bit_frames_cross_whole_both_ways() {
+        exchange(16, false);
+        exchange(16, true);
+    }
+
+    #[test]
+    fn twelve_bit_frames_cross_whole_both_ways() {
+        exchange(12, false);
+        exchange(12, true);
+    }
+
+    #[test]
+    fn four_bit_frames_cross_whole_both_ways() {
+        exchange(4, false);
+        exchange(4, true);
+    }
+
+    #[test]
+    fn eight_bit_frames_cross_both_ways() {
+        // The default firmware is the DS=8 build; swap its roles too.
+        let mut world = build("env-spi.yaml", |s| {
+            s.replace("\"firmware/spi-master.elf\"", "MASTER")
+                .replace("\"firmware/spi-slave.elf\"", "\"firmware/spi-master.elf\"")
+                .replace("MASTER", "\"firmware/spi-slave.elf\"")
+        });
+        run_us(&mut world, 400);
+        let m = result(&world, "b", 8);
+        assert_eq!(m[7], 1, "master on b finished: {m:x?}");
+        assert_eq!(&m[..4], &[0x81, 0x82, 0x83, 0x84]);
+        let s = result(&world, "a", 8);
+        assert_eq!(&s[..4], &[0xA5, 0x3C, 0x5A, 0xC3]);
+        assert_eq!(s[4], 4);
+    }
+
+    #[test]
+    fn an_8_bit_master_without_frxth_waits_for_16_bits_and_stalls() {
+        // CR2.FRXTH left at its reset 0: RXNE needs two bytes in the RX
+        // FIFO, so after one 8-bit frame the master polls RXNE forever —
+        // what an F4-style driver does on a real G0.
+        let mut world = build("env-spi.yaml", |s| {
+            s.replace("firmware/spi-master.elf", "firmware/spi-master-nofrxth.elf")
+        });
+        run_us(&mut world, 400);
+        let a = result(&world, "a", 8);
+        assert_eq!(a[7], 0, "the master never finishes: {a:x?}");
+        assert_eq!(a[0], 0, "and never reads DR");
+        let reports = world.gpio_net_reports();
+        assert_eq!(net(&reports, "sck").edges, 16, "one frame only");
+        assert_eq!(result(&world, "b", 8)[4], 1, "the slave got that frame");
+    }
+
+    #[test]
+    fn frame_sizes_do_not_depend_on_node_order_or_round_size() {
+        for ds in [16, 4] {
+            assert_order_and_round_independent("env-spi.yaml", env(ds, false), ["a", "b"], 600, 8);
+        }
+    }
+}
+
 mod i2c {
     use super::*;
 

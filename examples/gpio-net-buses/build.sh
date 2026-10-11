@@ -12,13 +12,18 @@ for fw in spi_master spi_slave i2c_controller i2c_target i2c_bulk_controller i2c
 done
 # A target too slow for the clock: the controller must be held by the stretch.
 "$CC" "${G0[@]}" -DSLOW=1 src/i2c_target.c -o firmware/i2c-target-slow.elf
-# SPI frame shapes: modes 1-3 and LSB-first, master and slave alike.
-for variant in "mode1 -DCPHA=1" "mode2 -DCPOL=1" "mode3 -DCPOL=1 -DCPHA=1" "lsb -DLSBFIRST=1"; do
+# SPI frame shapes: modes 1-3, LSB-first and CR2.DS frame sizes (16, 12 and
+# 4 bits), master and slave alike.
+for variant in "mode1 -DCPHA=1" "mode2 -DCPOL=1" "mode3 -DCPOL=1 -DCPHA=1" "lsb -DLSBFIRST=1" \
+               "ds16 -DDS=16" "ds12 -DDS=12" "ds4 -DDS=4"; do
     read -r name defs <<<"$variant"
     read -ra defs <<<"$defs"
     "$CC" "${G0[@]}" "${defs[@]}" src/spi_master.c -o "firmware/spi-master-$name.elf"
     "$CC" "${G0[@]}" "${defs[@]}" src/spi_slave.c -o "firmware/spi-slave-$name.elf"
 done
+# An 8-bit master that leaves CR2.FRXTH at reset: on the G0's FIFO SPI
+# RXNE then waits for 16 bits, so it stalls after its first frame.
+"$CC" "${G0[@]}" -DFRXTH=0 src/spi_master.c -o firmware/spi-master-nofrxth.elf
 "$CC" "${G0[@]}" -DTXE_IRQ=1 src/spi_slave.c -o firmware/spi-slave-txe.elf
 "$CC" "${G0[@]}" -DUNDERRUN=1 src/spi_slave.c -o firmware/spi-slave-underrun.elf
 # STM32F401 (Cortex-M4): 16-bit SPI frames.
