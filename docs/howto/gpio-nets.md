@@ -221,7 +221,7 @@ drives and accept an external level. Every GPIO model in tree does:
 | `avr_gpio` (ATmega328P `portb`/`portc`/`portd`) | push: the port reports its own edges, idle fast-forward stays on | INT0/INT1 and PCINT0..2 see external edges; a core parked in `SLEEP` is skipped until the next edge or Timer0 overflow. Exercised end to end on the Uno (`gpio-net-two-boards`). An input with its `PORTx` bit set is a pull-up on the net, unless firmware sets `MCUCR.PUD`, which takes every pull-up off. |
 | ESP32 classic `gpio` (member `peripheral: gpio`, pins 0..31) | push | Drive: `GPIO_ENABLE` and `GPIO_OUT`; `GPIO_PINn.PAD_DRIVER` open drain drives only a 0 and, holding a 1, reads the wire on `GPIO_IN`. Interrupts: `GPIO_PINn.INT_TYPE` edge and level types latch `GPIO_STATUS` and raise matrix source 22 for the CPU whose INT_ENA bit is set. GPIO32..39 cannot join a net. The IO_MUX pulls are not modelled on this part. |
 | ESP32-S3 `gpio` (`peripheral: gpio`, pins 0..31) | push | As classic; matrix source 16 (`GPIO_PCPU_INT`, INT_ENA bit 13). The IO_MUX `FUN_WPU` pull-up is on the net. GPIO32..48 cannot join a net. |
-| ESP32-C3 / ESP32-C6 `gpio` (`peripheral: gpio`, pins 0..25) | push | As classic; matrix source 16 on the C3 and 30 on the C6. The IO_MUX `FUN_WPU` pull-up is on the net where the IO_MUX is wired. Edge types only (level types are not modelled on this block). Exercised end to end on the C6 (`env-esp32c6.yaml`). |
+| ESP32-C3 / ESP32-C6 `gpio` (`peripheral: gpio`, pins 0..25) | push | As classic; matrix source 16 on the C3 and 30 on the C6. The IO_MUX `FUN_WPU` pull-up is on the net where the IO_MUX is wired. Edge types only (level types are not modelled on this block). Exercised end to end on the C6 (`env-esp32c6.yaml`). Pads the GPIO matrix routes to GP-SPI2 or I2C0 (`FUNCn_OUT_SEL_CFG` out, `FUNCn_IN_SEL_CFG` in, each chip's own signal numbers) carry those peripherals' lines; see [Buses over nets](#buses-over-nets). |
 | Declarative `GPIO` descriptor (`ENABLE` / `OUT` / `IN` registers) | poll | Drive from `ENABLE` and `OUT`; no pulls. |
 | RP2040 `sio` (`peripheral: sio`, pins 0..29 = GP0..GP29) | push | Drive: `GPIO_OE` and `GPIO_OUT` while IO_BANK0 selects SIO for the pad (or nothing yet); open drain is firmware toggling `GPIO_OE` with the latch at 0. Interrupts: IO_BANK0 `INTRn` / `PROC0_INTEn` edge and level bits raise `IO_IRQ_BANK0` (NVIC 13) from any change of `GPIO_IN`, the pad's own output included. Exercised end to end (`env-rp2040.yaml`). |
 
@@ -293,7 +293,7 @@ analyzer on either board and the timing all show the real waveform, and the
 bus behaves like wires. Runnable examples:
 [`examples/gpio-net-buses`](../../examples/gpio-net-buses) (STM32G071 pairs,
 an STM32F401 pair, STM32F103 / STM32F401 / STM32G071 mixed I²C, and an
-RP2040 against a G071 on SPI and on I²C).
+RP2040, an ESP32-C3 and an ESP32-C6 against a G071 on SPI and on I²C).
 
 One net per wire, as for any other signal:
 
@@ -315,6 +315,8 @@ One net per wire, as for any other signal:
 | STM32 I²C, legacy | F1/F2/F4 (`SR1`/`SR2`/`CCR`/`TRISE`) | F103 default mapping (PB6/PB7, PB10/PB11); F401 AF4 | master, slave |
 | RP2040 SPI | PL022 (`SSPCR0`/`SSPCR1`/`SSPDR`/`SSPSR`/`SSPCPSR`) | IO_BANK0 `FUNCSEL` 1: SCK, TX, RX, CSn | master, slave |
 | RP2040 I²C | DW_apb_i2c (`IC_CON`/`IC_TAR`/`IC_SAR`/`IC_DATA_CMD`/...) | IO_BANK0 `FUNCSEL` 3: SDA, SCL | master, slave |
+| ESP32-C3 / ESP32-C6 GP-SPI2 | Espressif GP-SPI (`SPI_CMD`/`SPI_USER`/`SPI_MS_DLEN`/`W0..W15`/`SPI_SLAVE`) | GPIO matrix: `FSPICLK`, `FSPID`, `FSPIQ`, `FSPICS0` (63/65/64/68 on both), any pad | master, slave |
+| ESP32-C3 / ESP32-C6 I²C0 | Espressif command list (`CTR`/`COMD0..7`/`DATA` FIFOs/`SLAVE_ADDR`) | GPIO matrix: `I2CEXT0_SCL`/`SDA` (53/54 on the C3, 45/46 on the C6), any pad, out and back in | master, slave |
 
 **SPI** (STM32 classic/FIFO SPI): SCK, MOSI, MISO and NSS are push-pull
 nets. A master (`MSTR=1`, `SPE=1`) drives SCK and MOSI and samples the level
@@ -411,10 +413,58 @@ slowly for the clock. Not on a net: 10-bit addressing, the general call,
 SMBus, DMA and `RX_FIFO_FULL_HLD_CTRL` (a full RX FIFO drops the byte with
 `RX_OVER`).
 
+**SPI, ESP32-C3 / ESP32-C6** (GP-SPI2; the C6 runs the same model): each
+line reaches its pad through the GPIO matrix, out (`FUNCn_OUT_SEL_CFG` with
+the pad's output stage on) and in (`FUNCn_IN_SEL_CFG`, `SEL` set). A master
+(`SPI_SLAVE.MODE = 0`) runs the transaction `SPI_CMD.USR` starts on the
+wire, bit by bit at the `SPI_CLOCK` rate: CS0 low (unless `CS0_DIS`) for
+`CS_SETUP`, the command, address and dummy phases when enabled, then the
+data, full duplex (`DOUTDIN`: `MS_DLEN + 1` bits out of `W0..W15` while
+MISO is sampled) or half duplex (a write phase, then a read phase); the bits
+read land in `W0..`, `USR` clears and `SPI_TRANS_DONE` latches after
+`CS_HOLD`. CPOL is `MISC.CK_IDLE_EDGE`, CPHA `USER.CK_OUT_EDGE` XOR CPOL (how
+esp-idf and esp-hal set the four modes), bit order `CTRL.WR/RD_BIT_ORDER`.
+A slave (`MODE = 1`, CPU-controlled) answers from `W0..W15` as they are when
+CS0 falls, drives MISO only while selected, and when CS0 rises writes the
+bits it sampled to `W0..`, their count to `SLAVE1.DATA_BITLEN`, and latches
+`SPI_TRANS_DONE` (CPOL `CK_IDLE_EDGE`, CPHA `SLAVE.CLK_MODE_13`, as
+`spi_ll_slave_set_mode` sets them). Tested against an STM32G071 both ways
+round on the C3 and the C6 (register-level firmware), and with esp-hal
+1.1's blocking master driver (hardware CS0) on the C3. Not on a net: DMA,
+dual/quad modes, segmented transfers and the master's CS polarity bits.
+
+**I²C, ESP32-C3 / ESP32-C6** (I2C0): the same open-drain wire engine as the
+legacy STM32 and RP2040 I²C, driven by the command list. A master
+(`CTR.MS_MODE`) runs `COMD0..` on `TRANS_START`: `RSTART`, `WRITE n` from
+the TX FIFO (the address is its first byte, as esp-idf and esp-hal queue it)
+with each ACK slot compared to `ack_exp` when `ack_check_en` is set,
+`READ n` into the RX FIFO answered with `ack_value`, `STOP`
+(`TRANS_COMPLETE`) and `END` (`END_DETECT`, SCL held low until the next
+`TRANS_START`); each command sets `command_done`, `SR.RESP_REC` records the
+ACKs. A mismatched ACK latches `NACK` and the master sends STOP (on silicon
+the driver resets the controller after a NACK, which also frees the bus).
+Timing is `CLK_CONF` with `SCL_LOW/HIGH_PERIOD` and `SDA_HOLD`. A slave
+(`MS_MODE = 0`) ACKs its 7-bit `SLAVE_ADDR`, fills the RX FIFO
+(`RXFIFO_WM`), answers reads from the TX FIFO and, with it empty and
+`SLAVE_SCL_STRETCH_EN` set, holds SCL low with `SLAVE_STRETCH` until
+firmware writes `SLAVE_SCL_STRETCH_CLR`; STOP after it was addressed latches
+`TRANS_COMPLETE`. Tested against an STM32G071 both ways round on the C3 and
+the C6, including a NACK and a slow target on either side that stretches
+SCL, and with esp-hal 1.1's blocking master driver on the C3. Not on a net:
+10-bit addressing, the general call, `SLAVE_BYTE_ACK_CTL`, the FIFO-address
+and non-FIFO modes, filters and timeouts.
+
+The ESP matrix routes follow firmware: a line becomes a net line the first
+time firmware routes it (in or out) to a pad on a net. IO_MUX direct
+functions (`MCU_SEL` other than GPIO) and `IN_INV_SEL`/`INV_SEL` are not
+followed, so choose pads without an IO_MUX function for the signal (esp-hal
+then uses the matrix as well).
+
 Clock stretching is tested on every target: an STM32G071 (modern), an
-STM32F401 (legacy) and an RP2040 slave whose firmware answers several SCL low
-periods late each hold the controller, and the bytes and clock count come
-out the same. A target that ends a stretch with a new bit on SDA releases
+STM32F401 (legacy), an RP2040 and an ESP32-C3 slave whose firmware answers
+several SCL low periods late each hold the controller, and the bytes and
+clock count come out the same; a slow G071 target holds an ESP32-C3
+controller (register level and esp-hal) the same way. A target that ends a stretch with a new bit on SDA releases
 SCL a data setup time later (`SDADEL`-style, one quarter of its own SCL low
 period on the legacy and RP2040 engines), so the change is never read as
 START or STOP.
@@ -444,7 +494,7 @@ example's tests run every exchange three ways (as written, nodes swapped,
 37 ns rounds) and compare what every pad saw, cycle by cycle.
 
 Not modelled on a net yet: other SPI/I²C families (nRF52 SPIM/SPIS and
-TWIM/TWIS, ESP32 SPI/I²C, the H5 SPI v3), the hardware NSS pad of the F4 SPI, legacy-I²C 10-bit addressing,
+TWIM/TWIS, ESP32-S3 and classic ESP32 SPI/I²C, the H5 SPI v3), the hardware NSS pad of the F4 SPI, legacy-I²C 10-bit addressing,
 SMBus/PEC, modern-I²C slave byte control (`SBC`), the I²C filters and
 timeouts, SPI CRC, TI mode and DMA on a slave. Such a peripheral on a net
 keeps its usual behaviour and drives its lines push-pull as before.

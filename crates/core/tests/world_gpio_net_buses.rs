@@ -75,9 +75,24 @@ fn same_on_every_driver<T: PartialEq + std::fmt::Debug>(
     assert_eq!(fingerprint(&ff), want, "rounds, idle fast-forward");
 }
 
+/// Where a node's firmware leaves its results: SRAM 0x2000_0100 on the
+/// STM32s and the RP2040, DRAM 0x3FC8_0100 on an ESP32-C3 and HP SRAM
+/// 0x4080_0100 on an ESP32-C6 (nodes named `esp...`).
+fn result_base(world: &World, id: &str) -> u32 {
+    if !id.starts_with("esp") {
+        return 0x2000_0100;
+    }
+    let m = &world.machines[id];
+    if m.read_memory(0x3FC8_0100, 4).is_ok() {
+        0x3FC8_0100
+    } else {
+        0x4080_0100
+    }
+}
+
 fn result(world: &World, id: &str, words: usize) -> Vec<u32> {
     let b = world.machines[id]
-        .read_memory(0x2000_0100, words * 4)
+        .read_memory(result_base(world, id), words * 4)
         .unwrap();
     b.chunks(4)
         .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
@@ -1064,6 +1079,328 @@ mod rp2040_i2c {
             |s| s,
             ["a", "rp"],
             1500,
+            8,
+        );
+    }
+}
+
+/// The ESP32-C3 and ESP32-C6 GP-SPI2 and I2C0 against the STM32G071, both
+/// ways round, routed through the ESP GPIO matrix
+/// (`env-spi-esp32c3*.yaml`, `env-i2c-esp32c3*.yaml`; firmware
+/// `src/esp32c_*.c`). The C6 runs the same sources built with `-DCHIP_C6` on
+/// the same wiring.
+mod esp32c3 {
+    use super::*;
+
+    const MASTER_TX: [u8; 4] = [0xA5, 0x3C, 0x5A, 0xC3];
+    const SLAVE_TX: [u8; 4] = [0x81, 0x82, 0x83, 0x84];
+    /// `SPI_DMA_INT_RAW.TRANS_DONE`.
+    const TRANS_DONE: u32 = 1 << 12;
+
+    /// The same environment with the ESP32-C6 in place of the C3.
+    pub(super) fn c6(yaml: String) -> String {
+        yaml.replace("esp32c3-devkit.yaml", "esp32c6-devkitc.yaml")
+            .replace("firmware/esp32c3-", "firmware/esp32c6-")
+    }
+
+    fn spi_master(chip: fn(String) -> String) {
+        let mut world = build("env-spi-esp32c3.yaml", chip);
+        run_us(&mut world, 1000);
+        let esp = result(&world, "esp", 8);
+        assert_eq!(esp[7], 1, "master finished: {esp:x?}");
+        assert_eq!(
+            &esp[..4],
+            SLAVE_TX.map(u32::from).as_slice(),
+            "W0 holds what the slave put on MISO"
+        );
+        assert_ne!(esp[4] & TRANS_DONE, 0, "TRANS_DONE");
+        let b = result(&world, "b", 8);
+        assert_eq!(&b[..4], MASTER_TX.map(u32::from).as_slice());
+        assert_eq!((b[4], b[5]), (4, 0), "one RXNE per byte, no OVR");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        assert_eq!(net(&reports, "sck").edges, 64);
+        // CS0 frames the whole transaction.
+        assert_eq!(net(&reports, "cs").edges, 2);
+        assert!(net(&reports, "cs").level, "deselected at the end");
+        assert_eq!(net(&reports, "mosi").edges, data_edges(&MASTER_TX, false));
+        // MISO: the four answers, then the next queued answer's MSB (0x85)
+        // at the last trailing edge, then the pull-down once CS rises.
+        assert_eq!(
+            net(&reports, "miso").edges,
+            data_edges(&SLAVE_TX, false) + 2
+        );
+    }
+
+    fn spi_slave(chip: fn(String) -> String) {
+        let mut world = build("env-spi-esp32c3-slave.yaml", chip);
+        run_us(&mut world, 1000);
+        let b = result(&world, "b", 8);
+        assert_eq!(b[7], 1, "master finished: {b:x?}");
+        assert_eq!(&b[..4], SLAVE_TX.map(u32::from).as_slice());
+        let esp = result(&world, "esp", 8);
+        assert_eq!(esp[7], 1, "slave finished: {esp:x?}");
+        assert_eq!(&esp[..4], MASTER_TX.map(u32::from).as_slice());
+        assert_eq!(esp[4], 32, "SLAVE1.DATA_BITLEN");
+        assert_ne!(esp[5] & TRANS_DONE, 0, "TRANS_DONE when CS rose");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        assert_eq!(net(&reports, "sck").edges, 64);
+        assert_eq!(net(&reports, "cs").edges, 2);
+        assert_eq!(net(&reports, "mosi").edges, data_edges(&MASTER_TX, false));
+        // The slave drives MISO only while selected: its four answers, then
+        // the pull-down when it lets go.
+        let mut miso = bits_of(&SLAVE_TX, false);
+        miso.push(false);
+        assert_eq!(net(&reports, "miso").edges, edges_of(&miso, false));
+    }
+
+    fn i2c_controller(chip: fn(String) -> String, target: &str) {
+        let target = target.to_string();
+        let mut world = build("env-i2c-esp32c3.yaml", |s| {
+            chip(s).replace("firmware/i2c-target.elf", &format!("firmware/{target}"))
+        });
+        run_us(&mut world, 3000);
+        let esp = result(&world, "esp", 8);
+        let b = result(&world, "b", 8);
+        assert_eq!(esp[7], 1, "controller finished: {esp:x?} target {b:x?}");
+        assert_eq!(esp[2], 0, "0x42 ACKed the write");
+        assert_eq!(
+            &esp[..2],
+            &[0xDE, 0xAD],
+            "read back through a repeated START"
+        );
+        assert_eq!(esp[3], 1, "nobody at 0x50: NACK");
+        assert_eq!(esp[4], 2, "two transfers ended by TRANS_COMPLETE");
+
+        assert_eq!(b[0], 2, "the target saw its two transfers end");
+        assert_eq!(&b[1..3], &[0xDE, 0xAD]);
+        assert_eq!(b[3], 4, "pointer + 2 data, then the pointer again");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        let scl = net(&reports, "scl");
+        assert!(
+            scl.level && net(&reports, "sda").level,
+            "bus idle at the end"
+        );
+        // Address + 3; address + 1, address + 2 (repeated START); address +
+        // 1 at 0x50, NACKed after the address.
+        assert_eq!(scl.edges, 2 * (9 * 10 + 1 + 3), "{scl:#?}");
+    }
+
+    /// The ESP target firmware, the slow one with `slow`.
+    fn target_firmware(slow: bool) -> impl Fn(String) -> String {
+        move |s: String| {
+            if slow {
+                s.replace("-i2c-target.elf", "-i2c-target-slow.elf")
+            } else {
+                s
+            }
+        }
+    }
+
+    fn i2c_target(chip: fn(String) -> String, slow: bool) {
+        let mut world = build("env-i2c-esp32c3-target.yaml", |s| {
+            target_firmware(slow)(chip(s))
+        });
+        run_us(&mut world, 3000);
+        let a = result(&world, "b", 8);
+        let esp = result(&world, "esp", 8);
+        assert_eq!(a[7], 1, "controller finished: {a:x?} target {esp:x?}");
+        assert_eq!(a[2], 0, "0x42 ACKed the write");
+        assert_eq!(&a[..2], &[0xDE, 0xAD], "read back through a repeated START");
+        assert_eq!(a[3], 1, "nobody at 0x50: NACKF");
+        assert_eq!(a[4], 3);
+
+        assert_eq!(
+            esp[0], 2,
+            "TRANS_COMPLETE for its two transfers only: {esp:x?}"
+        );
+        assert_eq!(&esp[1..3], &[0xDE, 0xAD]);
+        assert_eq!(esp[3], 4, "pointer + 2 data, then the pointer again");
+        assert_eq!(esp[4], 2, "one stretch per byte read");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        let scl = net(&reports, "scl");
+        assert!(scl.level && net(&reports, "sda").level);
+        assert_eq!(scl.edges, 2 * (9 * 10 + 1 + 3), "{scl:#?}");
+    }
+
+    fn same(yaml: String) -> String {
+        yaml
+    }
+
+    #[test]
+    fn an_esp32c3_master_clocks_a_g071_slave() {
+        spi_master(same);
+    }
+
+    #[test]
+    fn a_g071_master_clocks_an_esp32c3_slave() {
+        spi_slave(same);
+    }
+
+    #[test]
+    fn an_esp32c6_master_clocks_a_g071_slave() {
+        spi_master(c6);
+    }
+
+    #[test]
+    fn a_g071_master_clocks_an_esp32c6_slave() {
+        spi_slave(c6);
+    }
+
+    #[test]
+    fn an_esp32c3_controller_writes_and_reads_a_g071_target() {
+        i2c_controller(same, "i2c-target.elf");
+    }
+
+    #[test]
+    fn an_esp32c6_controller_writes_and_reads_a_g071_target() {
+        i2c_controller(c6, "i2c-target.elf");
+    }
+
+    #[test]
+    fn a_slow_g071_target_holds_the_esp32c3_controller_by_stretching_scl() {
+        i2c_controller(same, "i2c-target-slow.elf");
+        let mut world = build("env-i2c-esp32c3.yaml", |s| {
+            s.replace("firmware/i2c-target.elf", "firmware/i2c-target-slow.elf")
+        });
+        run_us(&mut world, 3000);
+        // The C3's own SCL low period is 200 ticks of 40 MHz, 800 cycles.
+        let held = longest_low(&world, "esp", 9);
+        assert!(held > 2 * 800, "SCL held low {held} cycles");
+    }
+
+    #[test]
+    fn a_g071_controller_writes_and_reads_an_esp32c3_target() {
+        i2c_target(same, false);
+    }
+
+    #[test]
+    fn a_g071_controller_writes_and_reads_an_esp32c6_target() {
+        i2c_target(c6, false);
+    }
+
+    #[test]
+    fn a_slow_esp32c3_target_holds_the_g071_controller_by_stretching_scl() {
+        i2c_target(same, true);
+        let mut world = build("env-i2c-esp32c3-target.yaml", target_firmware(true));
+        run_us(&mut world, 3000);
+        // The G071's own SCL low period is (SCLL + 1) x 8 = 128 cycles.
+        let held = longest_low(&world, "b", 6);
+        assert!(held > 4 * 128, "SCL held low {held} cycles");
+    }
+
+    /// Run `env` (rewritten by `rewrite`) until the C3's console says
+    /// `done` (or `max_ms` pass), and return the console.
+    fn esp_hal_run(
+        env: &str,
+        rewrite: impl Fn(String) -> String,
+        done: &str,
+        max_ms: u64,
+    ) -> (World, String) {
+        let mut world = build(env, rewrite);
+        let sink = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        world
+            .machines
+            .get_mut("esp")
+            .unwrap()
+            .attach_uart_tx_sink(sink.clone(), false)
+            .unwrap();
+        let console = || String::from_utf8_lossy(&sink.lock().unwrap()).into_owned();
+        let mut t = 0;
+        while t < max_ms * 1_000_000_000 && !console().contains(done) {
+            t += 100_000_000;
+            for (id, r) in world.run_until_ps(t).unwrap() {
+                r.unwrap_or_else(|e| panic!("node {id}: {e:?}\n{}", console()));
+            }
+        }
+        let text = console();
+        (world, text)
+    }
+
+    /// esp-hal 1.1's own blocking SPI master driver (`esp32c3-esp-hal/`),
+    /// hardware CS0, against the G071 slave.
+    #[test]
+    fn an_esp_hal_spi_master_on_an_esp32c3_clocks_a_g071_slave() {
+        let (world, console) = esp_hal_run(
+            "env-spi-esp32c3.yaml",
+            |s| s.replace("esp32c3-spi-master.elf", "esp32c3-esp-hal-spi-master.elf"),
+            "C3 SPI DONE",
+            200,
+        );
+        assert!(console.contains("C3 spi true 81 82 83 84"), "{console}");
+        let b = result(&world, "b", 8);
+        assert_eq!(&b[..4], MASTER_TX.map(u32::from).as_slice(), "{console}");
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        assert_eq!(net(&reports, "sck").edges, 64);
+        // esp-hal turns the CS pad's output stage on before it routes FSPICS0
+        // to it, so the pad first drives its GPIO latch (0) and then the idle
+        // CS (1): one low pulse at configuration, as on silicon, then the
+        // transaction's.
+        assert_eq!(net(&reports, "cs").edges, 4);
+        assert!(net(&reports, "cs").level);
+    }
+
+    /// esp-hal 1.1's blocking I2C master driver against the G071 target, a
+    /// NACK at 0x50 included, and against the slow target that stretches.
+    #[test]
+    fn an_esp_hal_i2c_master_on_an_esp32c3_writes_and_reads_a_g071_target() {
+        for target in ["i2c-target.elf", "i2c-target-slow.elf"] {
+            let (world, console) = esp_hal_run(
+                "env-i2c-esp32c3.yaml",
+                |s| {
+                    s.replace(
+                        "esp32c3-i2c-controller.elf",
+                        "esp32c3-esp-hal-i2c-master.elf",
+                    )
+                    .replace("firmware/i2c-target.elf", &format!("firmware/{target}"))
+                },
+                "C3 I2C DONE",
+                200,
+            );
+            assert!(console.contains("C3 write true"), "{target}: {console}");
+            assert!(
+                console.contains("C3 read true DE AD"),
+                "{target}: {console}"
+            );
+            assert!(
+                console.contains("C3 nack Err(AcknowledgeCheckFailed("),
+                "{target}: {console}"
+            );
+            let b = result(&world, "b", 8);
+            assert_eq!(b[0], 2, "{target}: two transfers to 0x42: {b:x?}");
+            assert_eq!(&b[1..3], &[0xDE, 0xAD]);
+            let reports = world.gpio_net_reports();
+            no_contention(&reports);
+            assert!(net(&reports, "scl").level && net(&reports, "sda").level);
+        }
+    }
+
+    #[test]
+    fn esp32c3_buses_do_not_depend_on_node_order_or_round_size() {
+        for env in ["env-spi-esp32c3.yaml", "env-spi-esp32c3-slave.yaml"] {
+            assert_order_and_round_independent(env, |s| s, ["esp", "b"], 1000, 8);
+        }
+        for env in ["env-i2c-esp32c3.yaml", "env-i2c-esp32c3-target.yaml"] {
+            assert_order_and_round_independent(env, |s| s, ["esp", "b"], 3000, 8);
+        }
+    }
+
+    #[test]
+    fn esp32c6_buses_do_not_depend_on_node_order_or_round_size() {
+        assert_order_and_round_independent("env-spi-esp32c3.yaml", c6, ["esp", "b"], 1000, 8);
+        assert_order_and_round_independent(
+            "env-i2c-esp32c3-target.yaml",
+            c6,
+            ["esp", "b"],
+            3000,
             8,
         );
     }

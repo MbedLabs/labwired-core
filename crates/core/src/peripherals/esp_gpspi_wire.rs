@@ -77,6 +77,13 @@ pub const SPI_LINES: &[&str] = &["SCK", "MOSI", "CS"];
 pub const LINE_SCK: usize = 0;
 pub const LINE_MOSI: usize = 1;
 pub const LINE_CS: usize = 2;
+/// The lines of a GP-SPI that can also be a slave on a world `gpio_net`
+/// (ESP32-C3/C6): [`SPI_LINES`] plus MISO, which a slave drives and a master
+/// reads (`crate::peripherals::esp_gpspi_net`). The narration above never
+/// touches MISO; off a net its line is an input and a pad routed to it
+/// shows what the outside holds there, never a made-up level.
+pub const SPI_NET_LINES: &[&str] = &["SCK", "MOSI", "CS", "MISO"];
+pub const LINE_MISO: usize = 3;
 
 /// Bytes a narration may hold waiting for the wire before it is published
 /// anyway, compressed. Deeper than the 64-byte W buffer, so a burst reaches
@@ -174,6 +181,24 @@ impl EspSpiWire {
         self.lines
             .get_or_insert_with(|| Arc::new(PadLines::new(SPI_LINES, &[cpol, false, true])))
             .clone()
+    }
+
+    /// [`Self::pad_lines_arc`] with a MISO line ([`SPI_NET_LINES`]), for a
+    /// controller that takes part in a world `gpio_net`. MISO starts as an
+    /// input; the net engine says what each line does from then on.
+    pub fn pad_lines_arc_with_miso(&mut self, cpol: bool) -> Arc<PadLines> {
+        self.lines
+            .get_or_insert_with(|| {
+                let lines = PadLines::new(SPI_NET_LINES, &[cpol, false, true, false]);
+                lines.set_mode(LINE_MISO, super::pad_lines::LineDrive::Input);
+                Arc::new(lines)
+            })
+            .clone()
+    }
+
+    /// The shared cell itself, once created.
+    pub fn lines_arc(&self) -> Option<Arc<PadLines>> {
+        self.lines.clone()
     }
 
     /// `true` once a lab has routed pads to this controller.
