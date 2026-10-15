@@ -2921,7 +2921,6 @@ boards:
     # 2026-10-14 (classic BROM libgcc soft-float thunks): rom_thunks.rs gains
     # IEEE thunks registered only by the classic ESP32 builder; no thunk this
     # board registers changed. ACK, NOT A CAPTURE.
-    drift_ack: 2026-10-14
     # 2026-10-11 (#1366 FIFO SPI / F4 NSS / C3 trigger snapshot): spi.rs gains the
     # FIFO-type profile for G0/F7 (F1/F4/L0 classic unchanged), bus/attach.rs routes
     # F4 SPI NSS pads on nets, riscv.rs carries the C3 trigger module in snapshots.
