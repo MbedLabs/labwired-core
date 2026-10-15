@@ -1228,8 +1228,15 @@ impl SystemBus {
             ("spi3", 'c', 11, 6, Miso, "SPI3_MISO"),
             ("spi3", 'c', 12, 6, Mosi, "SPI3_MOSI"),
         ];
-        // V2 ports, F4 parts (DS8626 Table 9: SPI1-2).
+        // V2 ports, F4 parts (DS8626 Table 9: SPI1-2; the F401's DS9716
+        // Table 9 agrees on every row). NSS is routed as on the G0, so an F4
+        // pair on a world `gpio_net` can use the hardware slave select:
+        // SPI1_NSS on PA4/PA15, SPI2_NSS on PB9/PB12, all AF5.
         const F4: &[(&str, char, u8, u8, SpiSignal, &str)] = &[
+            ("spi1", 'a', 4, 5, Nss, "SPI1_NSS"),
+            ("spi1", 'a', 15, 5, Nss, "SPI1_NSS"),
+            ("spi2", 'b', 9, 5, Nss, "SPI2_NSS"),
+            ("spi2", 'b', 12, 5, Nss, "SPI2_NSS"),
             ("spi1", 'a', 5, 5, Sck, "SPI1_SCK"),
             ("spi1", 'a', 6, 5, Miso, "SPI1_MISO"),
             ("spi1", 'a', 7, 5, Mosi, "SPI1_MOSI"),
@@ -1317,11 +1324,13 @@ impl SystemBus {
         // SPI3_MOSI/AF6 row comes from the datasheet table).
         //
         // The NUCLEO-U575ZI-Q Arduino SPI header is SPI1 on PA4 (NSS) / PA5
-        // (SCK) / PA6 (MISO) / PA7 (MOSI), all AF5. PA4 is NOT routed: this
-        // mechanism carries SCK/MOSI/MISO only (`SpiSignal` has no Nss), the
-        // same honest gap every L4/F4/H5/WBA table has. The U575's AF map is a
-        // third pinout on the shared SPI-v3 register file, which is why it is
-        // a `SpiPadMap` variant and not a wider H5 table.
+        // (SCK) / PA6 (MISO) / PA7 (MOSI), all AF5. PA4 is NOT routed: the
+        // H5-class "SPI v3" model has no net slave to read an NSS pad (only
+        // the classic/FIFO engine does, which is why only the G0 and F4
+        // tables carry NSS rows) — the same gap the L4/H5/WBA tables have.
+        // The U575's AF map is a third pinout on the shared SPI-v3 register
+        // file, which is why it is a `SpiPadMap` variant and not a wider H5
+        // table.
         //
         // ⚠️ SPI3 on this part is NOT uniformly AF6: PD6/AF5 is SPI3_MOSI
         // (AF6 on PD6 is MDF1_SDI1), and PB3/PB4 carry SPI1 SCK/MISO at AF5
@@ -1378,11 +1387,11 @@ impl SystemBus {
         // ── STM32G0 parts ───────────────────────────────────────────────────
         //
         // STM32G071 (DS12232, "Port A/Port B alternate function mapping"
-        // tables, AF0 column). The classic register file behind a V2 port
-        // would otherwise pick the F4 table, whose AF5 is not SPI on a G0.
-        // Selected by the chip yaml's `pad_map: stm32g0`. NSS is routed here
-        // (and only here) because a G0 pair on a world `gpio_net` uses it as
-        // the hardware slave select.
+        // tables, AF0 column). The FIFO register file behind a V2 port would
+        // otherwise pick the L4 table, whose AF5 is not SPI on a G0.
+        // Selected by the chip yaml's `pad_map: stm32g0`. NSS is routed (as
+        // in the F4 table) because a pair on a world `gpio_net` uses it as the
+        // hardware slave select.
         const G0: &[(&str, char, u8, u8, SpiSignal, &str)] = &[
             ("spi1", 'a', 4, 0, Nss, "SPI1_NSS"),
             ("spi1", 'a', 5, 0, Sck, "SPI1_SCK"),
@@ -1449,6 +1458,7 @@ impl SystemBus {
                             (true, SpiPadMap::Stm32U5) => U5,
                             (true, _) => H5,
                             (false, SpiPadMap::Stm32G0) => G0,
+                            (false, SpiPadMap::Stm32F4) => F4,
                             (false, _) if fifo => L4,
                             (false, _) => F4,
                         };

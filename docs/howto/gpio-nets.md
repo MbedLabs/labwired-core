@@ -292,7 +292,7 @@ peripherals: the bits are the net's edges, so the net reports, a logic
 analyzer on either board and the timing all show the real waveform, and the
 bus behaves like wires. Runnable examples:
 [`examples/gpio-net-buses`](../../examples/gpio-net-buses) (STM32G071 pairs,
-an STM32F401 pair, STM32F103 / STM32F401 / STM32G071 mixed I²C, and an
+STM32F401 pairs (one on the hardware NSS pads), STM32F103 / STM32F401 / STM32G071 mixed I²C, and an
 RP2040 against a G071 on SPI and on I²C).
 
 One net per wire, as for any other signal:
@@ -310,7 +310,7 @@ One net per wire, as for any other signal:
 
 | Peripheral | Register file | Pads (chip yaml) | Roles |
 |------------|---------------|------------------|-------|
-| STM32 SPI | classic / FIFO (`CR1`/`CR2`/`SR`/`DR`) | G071 AF0 incl. NSS (`pad_map: stm32g0`); F4 AF5 (SCK/MISO/MOSI, no NSS) | master, slave |
+| STM32 SPI | classic F1/F4/L0 (`CR1.DFF`) / FIFO G0/L4/G4/WB/F7 (`CR2.DS`, `FRXTH`, `FRLVL`/`FTLVL`) | G071 AF0 incl. NSS (`pad_map: stm32g0`); F4 AF5 incl. NSS (PA4/PA15, PB9/PB12) | master, slave |
 | STM32 I²C, modern | L4/G0 `TIMINGR` (`ISR`/`ICR`) | G071 AF6 (`pad_map: stm32g0`); L4 AF4 | controller, target |
 | STM32 I²C, legacy | F1/F2/F4 (`SR1`/`SR2`/`CCR`/`TRISE`) | F103 default mapping (PB6/PB7, PB10/PB11); F401 AF4 | master, slave |
 | RP2040 SPI | PL022 (`SSPCR0`/`SSPCR1`/`SSPDR`/`SSPSR`/`SSPCPSR`) | IO_BANK0 `FUNCSEL` 1: SCK, TX, RX, CSn | master, slave |
@@ -322,18 +322,33 @@ the net delivers to its MISO pad at its own sampling edge; that is what lands
 in `DR`. A slave (`MSTR=0`) has no clock of its own: it reacts to the SCK,
 MOSI and NSS edges the net delivers, shifts MOSI in on its sampling edge and
 puts its transmit word out on MISO on its shift edge. Any CPOL/CPHA, MSB or
-LSB first, 8 or 16 bits (`DFF`): modes 0-3, LSB-first and 16-bit frames each
-have an end-to-end test. A slave sets RXNE with the SPI interrupt when
-`RXNEIE` is set, and OVR when a frame arrives before `DR` was read; `TXEIE`
-interrupts whenever the transmit buffer is empty (enabling it with TXE set
-interrupts at once), so a slave can feed every answer from its TXE interrupt.
-A `DR` write fills the slave's transmit buffer even while `SPE=0`. A frame
-that starts with nothing written to `DR` is an underrun: the shift register
-goes out as it is, which is the previous frame received (0 after reset),
-and `Spi::net_slave_underruns()` counts it (logged once). It drives MISO only
-while selected: `SSM=1, SSI=0`, or `SSM=0` with its NSS pad low. A master
-with `SSOE=1` drives NSS low while enabled. A disabled SPI drives nothing. A
-word store to `DR` is one frame (bits 31:16 are not part of the register).
+LSB first; 8 or 16 bits (`CR1.DFF`) on the classic F1/F4/L0 SPI, 4 to 16
+bits (`CR2.DS`) on the FIFO-type G0/L4/G4/WB/F7 SPI: modes 0-3, LSB-first,
+16-bit frames on an F401 pair, and 4-, 8-, 12- and 16-bit frames on a G071
+pair (each chip as master) each have an end-to-end test. A slave sets RXNE
+with the SPI interrupt when `RXNEIE` is set; `TXEIE` interrupts whenever TXE
+is set (enabling it with TXE set interrupts at once), so a slave can feed
+every answer from its TXE interrupt. A `DR` write fills the slave's transmit
+buffer even while `SPE=0`. A frame that starts with nothing written to `DR`
+is an underrun: the shift register goes out as it is, which is the previous
+frame received (0 after reset), and `Spi::net_slave_underruns()` counts it
+(logged once). It drives MISO only while selected: `SSM=1, SSI=0`, or `SSM=0`
+with its NSS pad low. A master with `SSOE=1` drives NSS low while enabled. A
+disabled SPI drives nothing. A word store to `DR` is one frame (bits 31:16
+are not part of the register).
+
+The two register files differ in their buffers, as on silicon. Classic: one
+receive buffer, RXNE on every frame, OVR when a frame arrives before `DR`
+was read, one transmit buffer. FIFO-type (RM0444 §35.5.9): 32-bit RX and TX
+FIFOs, a frame of up to 8 bits taking one byte and a wider one two; RXNE
+when the RX FIFO holds `CR2.FRXTH`'s threshold (one byte with `FRXTH=1`,
+two with the reset `FRXTH=0` — so 8-bit firmware that never sets `FRXTH`
+waits for a second frame, as it does on a real G0); TXE while the TX FIFO is
+at most half full; `SR.FRLVL`/`FTLVL` report both levels; OVR when a frame
+arrives to a full RX FIFO. `DR` accesses pack: an 8-bit access moves one
+byte, a 16-bit one two (two frames at `DS` ≤ 8). A FIFO master with
+`NSSP=1`, `SSOE=1` and `CPHA=0` pulses NSS high for one SCK period between
+back-to-back frames and leaves it high after the last.
 
 **I²C, modern** (STM32 L4/G0 `TIMINGR` register file): SCL and SDA are
 open-drain nets; put `pull: up` on them. The controller generates START, the
@@ -444,9 +459,11 @@ example's tests run every exchange three ways (as written, nodes swapped,
 37 ns rounds) and compare what every pad saw, cycle by cycle.
 
 Not modelled on a net yet: other SPI/I²C families (nRF52 SPIM/SPIS and
-TWIM/TWIS, ESP32 SPI/I²C, the H5 SPI v3), the hardware NSS pad of the F4 SPI, legacy-I²C 10-bit addressing,
-SMBus/PEC, modern-I²C slave byte control (`SBC`), the I²C filters and
-timeouts, SPI CRC, TI mode and DMA on a slave. Such a peripheral on a net
+TWIM/TWIS, ESP32 SPI/I²C, the H5 SPI v3), the hardware NSS pad of the
+L4/G4/WB SPI, legacy-I²C 10-bit addressing, SMBus/PEC, modern-I²C slave byte
+control (`SBC`), the I²C filters and timeouts, SPI CRC, TI mode, the SPI mode
+fault (`MODF`) and DMA on either side (`LDMA_TX`/`LDMA_RX` are stored, no
+STM32 SPI DMA request is modelled). Such a peripheral on a net
 keeps its usual behaviour and drives its lines push-pull as before.
 
 ## Reports
