@@ -899,6 +899,8 @@ impl Nrf52SpiRegs {
             0x110 => self.events_endrx,
             0x118 => self.events_end,
             0x120 => self.events_endtx,
+            // EVENTS_STARTED: set by the net engine (`spi_nrf_net`) only.
+            0x14C => self.events_started,
             // INTEN / INTENSET / INTENCLR all mirror the inten value
             0x300 | 0x304 | 0x308 => self.inten,
             // Config
@@ -948,6 +950,7 @@ impl Nrf52SpiRegs {
             0x110 if value == 0 => self.events_endrx = 0,
             0x118 if value == 0 => self.events_end = 0,
             0x120 if value == 0 => self.events_endtx = 0,
+            0x14C if value == 0 => self.events_started = 0,
 
             // INTEN (direct write)
             0x300 => self.inten = value,
@@ -1517,6 +1520,14 @@ pub struct Spi {
     nrf52_claim_sck: crate::peripherals::nrf52::pin_select::NrfPinClaim,
     #[serde(skip)]
     nrf52_claim_mosi: crate::peripherals::nrf52::pin_select::NrfPinClaim,
+    /// `PSEL.MISO`'s claim: an input to the SPIM, routed so that a pad on a
+    /// world `gpio_net` hands the net's level to the bit engine
+    /// (`spi_nrf_net`).
+    #[serde(skip)]
+    nrf52_claim_miso: crate::peripherals::nrf52::pin_select::NrfPinClaim,
+    /// The nRF52 SPIM's bit engine on a world `gpio_net` (`spi_nrf_net`).
+    #[serde(skip)]
+    nrf_net: nrf_net::SpimNet,
 
     /// Classic-SPI CR2 writable mask — a per-part delta on the shared classic
     /// layout. F1 implements 0xE7; F4 adds bit 4 (FRF, TI-mode) → 0xF7,
@@ -1759,12 +1770,19 @@ impl Spi {
         claims: &std::sync::Arc<crate::peripherals::nrf52::pin_select::NrfPinClaims>,
         sck_token: u32,
         mosi_token: u32,
+        miso_token: u32,
     ) {
         if !self.is_nrf() {
             return;
         }
         self.nrf52_claim_sck.install(claims.clone(), sck_token);
         self.nrf52_claim_mosi.install(claims.clone(), mosi_token);
+        self.nrf52_claim_miso.install(claims.clone(), miso_token);
+        // MISO is an input to the SPIM: a pad routed to it drives nothing.
+        self.line_levels_arc().pad_lines().set_mode(
+            SpiSignal::Miso as usize,
+            crate::peripherals::pad_lines::LineDrive::Input,
+        );
         self.sync_nrf_pin_claims();
     }
 
@@ -1776,13 +1794,14 @@ impl Spi {
     /// (nRF52840 PS v1.11 §6.25.6.17, p733 — Enabled = 7). With `ENABLE = 6`
     /// the TWIM half is driving, and this half must not claim its pads.
     fn sync_nrf_pin_claims(&mut self) {
-        let (enable, psel_sck, psel_mosi) = match &self.regs {
-            SpiRegs::Nrf52(r) => (r.enable & 0xF, r.psel_sck, r.psel_mosi),
+        let (enable, psel_sck, psel_mosi, psel_miso) = match &self.regs {
+            SpiRegs::Nrf52(r) => (r.enable & 0xF, r.psel_sck, r.psel_mosi, r.psel_miso),
             _ => return,
         };
         let live = enable == NRF52_ENABLE_SPIM;
         self.nrf52_claim_sck.update(psel_sck, live);
         self.nrf52_claim_mosi.update(psel_mosi, live);
+        self.nrf52_claim_miso.update(psel_miso, live);
     }
 
     /// One SCK period in engine cycles, from `FREQUENCY`.
@@ -3496,6 +3515,11 @@ impl crate::Peripheral for Spi {
         self.lines.as_ref().map(|levels| &**levels.pad_lines())
     }
 
+    /// The nRF52 SPIM names its pads in `PSEL` (see `wire_nrf52_pads`).
+    fn claims_pads(&self) -> bool {
+        self.is_nrf()
+    }
+
     fn wire_input_edge(&mut self, line: usize, level: bool, cycle: u64) -> bool {
         self.stm32_set_stamp(Some(cycle));
         let wake = self.net_slave_edge(line, level);
@@ -3579,14 +3603,12 @@ impl crate::Peripheral for Spi {
             } else {
                 false
             };
-            if start_triggered {
-                self.nrf52_pending_start = true;
-            }
             // ENABLE (0x500) and PSEL.SCK/MOSI (0x508/0x50C) all move which pad
             // this controller's wire reaches. Republishing on every nRF write
             // rather than only on those three offsets keeps the ONE call site:
             // `update` is two comparisons when nothing moved.
             self.sync_nrf_pin_claims();
+            self.nrf_after_write(reg_offset, new, start_triggered);
             return Ok(());
         }
 
@@ -3672,11 +3694,9 @@ impl crate::Peripheral for Spi {
             } else {
                 false
             };
-            if start_triggered {
-                self.nrf52_pending_start = true;
-            }
             // See the byte-write path: one call site for every pad-moving write.
             self.sync_nrf_pin_claims();
+            self.nrf_after_write(reg_offset, value, start_triggered);
             return Ok(());
         }
         // STM32H5: 32-bit registers must be written atomically — a word write
@@ -3811,6 +3831,10 @@ impl crate::Peripheral for Spi {
     /// deadline by up to one tick interval) and re-arms via `reschedule_delay`
     /// until the frame (and any queued frames) complete.
     fn take_scheduled_events(&mut self) -> Vec<(u64, u32)> {
+        // nRF52 SPIM on a world `gpio_net`: the bit engine's own chain.
+        if self.nrf_net_mode() || self.nrf_net_needs_bus() {
+            return self.nrf_net_take_events();
+        }
         // nRF52 SPIM EasyDMA: delay-0 completion (next cycle after TASKS_START).
         if self.nrf52_pending_start {
             return vec![(0, SPI_NRF52_EASYDMA_TOKEN)];
@@ -3860,6 +3884,9 @@ impl crate::Peripheral for Spi {
         sched: &mut crate::sched::EventScheduler,
         bus: &mut dyn crate::Bus,
     ) -> crate::sched::EventResult {
+        if event_token == nrf_net::NRF_NET_TOKEN {
+            return self.nrf_net_on_event(sched.now(), bus);
+        }
         if event_token == SPI_NRF52_EASYDMA_TOKEN {
             if self.nrf52_pending_start {
                 self.do_nrf52_easydma(bus);
@@ -3944,6 +3971,7 @@ impl crate::Peripheral for Spi {
     /// nRF52 SPIM EasyDMA needs bus access to read/write RAM buffers.
     fn needs_bus_tick(&self) -> bool {
         self.nrf52_pending_start
+            || self.nrf_net_needs_bus()
             || self.has_external_bus_device()
             || self.selected_devices.iter().any(|selected| *selected)
     }
@@ -3954,6 +3982,9 @@ impl crate::Peripheral for Spi {
         self.poll_external_bus_devices();
         if self.nrf52_pending_start {
             self.do_nrf52_easydma(bus);
+        }
+        if self.nrf_net_needs_bus() {
+            self.nrf_net_dma(bus);
         }
     }
 
@@ -3970,6 +4001,10 @@ impl crate::Peripheral for Spi {
         let mut irq = false;
         let mut fired: Vec<u32> = Vec::new();
 
+        // ── nRF52 SPIM on a world `gpio_net`: the bit engine's due steps ─────
+        if self.is_nrf() {
+            self.nrf_net_tick();
+        }
         // ── nRF52 SPIM: raise IRQ for any enabled+pending EVENTS ─────────────
         if let SpiRegs::Nrf52(r) = &self.regs {
             if r.map == NrfSpimMap::Nrf54l {
@@ -4018,6 +4053,10 @@ impl crate::Peripheral for Spi {
             if r.events_endtx != 0 && r.inten & INTEN_ENDTX != 0 {
                 irq = true;
                 fired.push(0x120);
+            }
+            if r.events_started != 0 && r.inten & nrf_net::INTEN_STARTED != 0 {
+                irq = true;
+                fired.push(0x14C);
             }
             return crate::PeripheralTickResult {
                 irq,
@@ -4107,6 +4146,28 @@ impl crate::Peripheral for Spi {
 }
 
 impl Spi {
+    /// After an nRF register write: hand `TASKS_START` / `TASKS_STOP` to the
+    /// net engine when the SPIM is on a world `gpio_net`, and re-state its
+    /// line drives.
+    fn nrf_after_write(&mut self, reg_offset: u64, value: u32, start_triggered: bool) {
+        let net = self.nrf_net_mode();
+        if start_triggered {
+            if net {
+                self.nrf_net_start();
+            } else {
+                self.nrf52_pending_start = true;
+            }
+        }
+        if net {
+            if reg_offset == 0x014 && value != 0 {
+                self.nrf_net_stop();
+            }
+            self.nrf_net_apply_drive();
+        } else if self.nrf_net_needs_bus() || self.nrf_net_busy() {
+            self.nrf_net_disable();
+        }
+    }
+
     fn sync_nrf52_gpio_cs(&mut self, bus: &dyn Bus) {
         if !matches!(self.regs, SpiRegs::Nrf52(_)) {
             return;
@@ -4309,6 +4370,9 @@ impl Spi {
 
 #[path = "spi_net.rs"]
 mod net;
+
+#[path = "spi_nrf_net.rs"]
+mod nrf_net;
 
 #[cfg(test)]
 #[path = "spi_tests.rs"]

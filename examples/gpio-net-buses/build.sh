@@ -47,3 +47,10 @@ for fw in rp2040_spi_master rp2040_spi_slave rp2040_i2c_controller rp2040_i2c_ta
     "$CC" "${RP[@]}" "src/$fw.c" -o "firmware/${fw//_/-}.elf"
 done
 "$CC" "${RP[@]}" -DSLOW=1 src/rp2040_i2c_target.c -o firmware/rp2040-i2c-target-slow.elf
+# nRF52840 (Cortex-M4, serial instance 0: SPIM0 / SPIS0 / TWIM0 / TWIS0),
+# against the G071.
+NRF=(--target=thumbv7em-none-eabi -mcpu=cortex-m4 "${COMMON[@]}" -T src/nrf52.ld)
+for fw in nrf_spim_master nrf_spis_slave nrf_twim_controller nrf_twis_target; do
+    "$CC" "${NRF[@]}" "src/$fw.c" -o "firmware/${fw//_/-}.elf"
+done
+"$CC" "${NRF[@]}" -DSLOW=1 src/nrf_twis_target.c -o firmware/nrf-twis-target-slow.elf

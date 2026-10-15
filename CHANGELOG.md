@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- nRF52 SPI and I²C over `gpio_net`s (`docs/howto/gpio-nets.md`, "Buses
+  over nets"): the nRF52840 SPIM, SPIS, TWIM and TWIS talk to other chips
+  bit by bit at the pads their `PSEL` registers name, with EasyDMA buffers
+  (`TXD`/`RXD` `PTR`/`MAXCNT`/`AMOUNT`) and their events and interrupts
+  (`STARTED`/`END`/`ENDRX`/`ENDTX`/`STOPPED`; SPIS semaphore `ACQUIRED`,
+  `SEMSTAT`, `DEF`/`ORC`, `OVERREAD`/`OVERFLOW`; TWIM `LASTTX`/`LASTRX`
+  shortcuts, `SUSPEND`/`RESUME`, `ERROR` with `ANACK`/`DNACK`; TWIS
+  `WRITE`/`READ`, `PREPARERX`/`PREPARETX` with clock stretching until
+  firmware prepares, `MATCH`). The serial instance at 0x40003000 gains its
+  SPIS (`ENABLE = 2`) and TWIS (`ENABLE = 9`) personalities, and the window
+  is one register file: what firmware programs before `ENABLE` reaches every
+  personality (a SPIM whose `TXD.MAXCNT` was written while disabled used to
+  clock nothing). A new chip-neutral SPI wire engine
+  (`peripherals::spi_bitbus`) serves the SPIM and SPIS; the TWIM and TWIS use
+  `peripherals::i2c_bitbus`. Tested against an STM32G071 both ways round on
+  each bus (`examples/gpio-net-buses`, `env-spi-nrf52*.yaml`,
+  `env-i2c-nrf52*.yaml`, clang-built firmware), including an address NACK,
+  a slow G071 target stretching the TWIM's clock and a slow TWIS stretching
+  the G071's, each re-run with the nodes swapped and with 37 ns rounds.
 - ESP32-C3 debug trigger module: `tselect` / `tdata1` / `tdata2` / `tdata3` /
   `tinfo` / `tcontrol` (CSRs 0x7A0-0x7A5) with 8 `mcontrol` triggers, exact
   and NAPOT address match on load / store / execute, and action 0 (breakpoint
@@ -50,6 +69,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     with the nodes swapped and with 37 ns rounds.
 
 ### Fixed
+- A peripheral answering a `gpio_net` edge on a timed core (the nRF52's
+  Cortex-M4) stamped its answer with the bus cycle, which lags the core
+  between peripheral ticks: the answer's time then depended on the world's
+  round size. The world brings the bus up to the core's cycle before it
+  applies an edge.
 - STM32G071 and STM32F767 SPI are the FIFO-type IP (RM0444 §35, RM0410
   §35: `CR2.DS` 4-16 bits, `FRXTH`, 32-bit RX/TX FIFOs, `FRLVL`/`FTLVL`,
   `NSSP`, `LDMA_TX`/`LDMA_RX`), not the classic F1/F4 one: both now load the

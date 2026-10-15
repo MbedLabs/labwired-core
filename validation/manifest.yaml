@@ -457,7 +457,7 @@ boards:
     drift_ack: 2026-09-17
     # 2026-09-17 (merge #1138): VFP FPSCR FZ/DN interpreter semantics landed on
     # top of the perf/bus-scheduler changes; digest re-stamped over the merged tree.
-    drift_ack_digest: a20b87552bf46754b6fc60e785ee6861c22d726fc9f48a219790d93df1dfbbd3
+    drift_ack_digest: ad2b09313013b5e9d4e3ce26c5547052cb678718b2483fba64f72b3a6db4b553
     # 2026-09-18: no execution change, step_execute arm bodies moved verbatim into cpu/cortex_m/exec/*; perf gate within noise; ACK, NOT A CAPTURE
     drift_ack: 2026-09-18
     models:
@@ -607,6 +607,11 @@ boards:
     # machine world hooks gained a read-only idle query. No register map, reset
     # value or instruction semantics changed; pinned by the lockstep-vs-scheduler
     # equivalence tests. Approved by the maintainer. ACK, NOT A CAPTURE.
+    drift_ack: 2026-10-11
+    # 2026-10-11 (#1367 nRF52 buses over nets): nRF serial instance, shared SPI wire
+    # engine, bus pad-claim bracket and Machine::drive_gpio_input changed for SPIM/SPIS/
+    # TWIM/TWIS over gpio nets. No register map or reset value of this board changed.
+    # Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-11
   - id: seeed-xiao-nrf52840-sense
     # 2026-09-16 (#1128): Cortex-M browser JIT rides `Machine::advance_with_window_runner` — the advance loop now plans and commits the window (tick cadence, reset drains, idle fast forward) and a compiled backend only supplies the instruction stream; the JIT batch gates (takeable exception, SysTick crossing, SYSRESETREQ latch) become public for `jit-framework` so the browser adapter refuses the same windows `run_jit_loop` does. In `cortex_m.rs`: `note_chained` only counts a chain that retired instructions, `sysreset_latched` is pub. Interpreter path unchanged — the gates are the ones `run_jit_loop` already used; pinned by `cortex_m_jit_alu_lockstep` and new window-runner cadence tests. No silicon capture pins JIT.
@@ -916,7 +921,7 @@ boards:
     drift_ack: 2026-09-17
     # 2026-09-17 (merge #1138): VFP FPSCR FZ/DN interpreter semantics landed on
     # top of the perf/bus-scheduler changes; digest re-stamped over the merged tree.
-    drift_ack_digest: a20b87552bf46754b6fc60e785ee6861c22d726fc9f48a219790d93df1dfbbd3
+    drift_ack_digest: ad2b09313013b5e9d4e3ce26c5547052cb678718b2483fba64f72b3a6db4b553
     # 2026-09-18: no execution change, step_execute arm bodies moved verbatim into cpu/cortex_m/exec/*; perf gate within noise; ACK, NOT A CAPTURE
     drift_ack: 2026-09-18
     models:
@@ -1066,6 +1071,11 @@ boards:
     # machine world hooks gained a read-only idle query. No register map, reset
     # value or instruction semantics changed; pinned by the lockstep-vs-scheduler
     # equivalence tests. Approved by the maintainer. ACK, NOT A CAPTURE.
+    drift_ack: 2026-10-11
+    # 2026-10-11 (#1367 nRF52 buses over nets): nRF serial instance, shared SPI wire
+    # engine, bus pad-claim bracket and Machine::drive_gpio_input changed for SPIM/SPIS/
+    # TWIM/TWIS over gpio nets. No register map or reset value of this board changed.
+    # Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-11
   - id: stm32h563
     # 2026-09-16 (#1128): Cortex-M browser JIT rides `Machine::advance_with_window_runner` — the advance loop now plans and commits the window (tick cadence, reset drains, idle fast forward) and a compiled backend only supplies the instruction stream; the JIT batch gates (takeable exception, SysTick crossing, SYSRESETREQ latch) become public for `jit-framework` so the browser adapter refuses the same windows `run_jit_loop` does. In `cortex_m.rs`: `note_chained` only counts a chain that retired instructions, `sysreset_latched` is pub. Interpreter path unchanged — the gates are the ones `run_jit_loop` already used; pinned by `cortex_m_jit_alu_lockstep` and new window-runner cadence tests. No silicon capture pins JIT.
@@ -1521,7 +1531,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: 82482e6fb4d42587441ab7ba989b376f9661d2c60cfae59e859c4a5918a3978b
+    drift_ack_digest: 308c79de86f855ff66b916075cd1efa892d099c7ee6daf4343b6dd5813695fb1
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -2028,6 +2038,10 @@ boards:
     # No register map or reset value of this board changed. Pinned by spi_tests,
     # world_gpio_net_buses and esp32c3_trigger_systimer. Approved by the maintainer.
     # ACK, NOT A CAPTURE.
+    # 2026-10-11 (#1367 nRF52 buses over nets): nRF serial instance, shared SPI wire
+    # engine, bus pad-claim bracket and Machine::drive_gpio_input changed for SPIM/SPIS/
+    # TWIM/TWIS over gpio nets. No register map or reset value of this board changed.
+    # Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-11
   - id: esp32c3
     # 2026-09-15 (#932): SPI edge sampling is opt-in (`SpiSampling::Byte` default). Byte-level golden pins the pre-feature path. Controllers without a bit engine reject opt-in at config time.
@@ -3366,7 +3380,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: 616cd168a379fe4fee01f1b22fa137a8a5e1ceb6816223696851c621f4e43bd3
+    drift_ack_digest: e04eb6c6d6ce65b52269b1377e3cf972fa56e09ae5e43aadf1a5ea0edb5838e5
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -3844,6 +3858,10 @@ boards:
     # No register map or reset value of this board changed. Pinned by spi_tests,
     # world_gpio_net_buses and esp32c3_trigger_systimer. Approved by the maintainer.
     # ACK, NOT A CAPTURE.
+    # 2026-10-11 (#1367 nRF52 buses over nets): nRF serial instance, shared SPI wire
+    # engine, bus pad-claim bracket and Machine::drive_gpio_input changed for SPIM/SPIS/
+    # TWIM/TWIS over gpio nets. No register map or reset value of this board changed.
+    # Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-11
   - id: nucleo-l073rz
     # 2026-09-16 (#1128): Cortex-M browser JIT rides `Machine::advance_with_window_runner` — the advance loop now plans and commits the window (tick cadence, reset drains, idle fast forward) and a compiled backend only supplies the instruction stream; the JIT batch gates (takeable exception, SysTick crossing, SYSRESETREQ latch) become public for `jit-framework` so the browser adapter refuses the same windows `run_jit_loop` does. In `cortex_m.rs`: `note_chained` only counts a chain that retired instructions, `sysreset_latched` is pub. Interpreter path unchanged — the gates are the ones `run_jit_loop` already used; pinned by `cortex_m_jit_alu_lockstep` and new window-runner cadence tests. No silicon capture pins JIT.
@@ -4241,7 +4259,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: 863d0c21cee6391aef4f91f4703d1254b95927398880e7ef3373251ca0cde896
+    drift_ack_digest: aabef8b3856f8573eda385384485459ea00450d69df229df7e30fa6cdd9ccb0d
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -4661,6 +4679,10 @@ boards:
     # No register map or reset value of this board changed. Pinned by spi_tests,
     # world_gpio_net_buses and esp32c3_trigger_systimer. Approved by the maintainer.
     # ACK, NOT A CAPTURE.
+    # 2026-10-11 (#1367 nRF52 buses over nets): nRF serial instance, shared SPI wire
+    # engine, bus pad-claim bracket and Machine::drive_gpio_input changed for SPIM/SPIS/
+    # TWIM/TWIS over gpio nets. No register map or reset value of this board changed.
+    # Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-11
   - id: stm32f103
     # 2026-09-16 (#1128): Cortex-M browser JIT rides `Machine::advance_with_window_runner` — the advance loop now plans and commits the window (tick cadence, reset drains, idle fast forward) and a compiled backend only supplies the instruction stream; the JIT batch gates (takeable exception, SysTick crossing, SYSRESETREQ latch) become public for `jit-framework` so the browser adapter refuses the same windows `run_jit_loop` does. In `cortex_m.rs`: `note_chained` only counts a chain that retired instructions, `sysreset_latched` is pub. Interpreter path unchanged — the gates are the ones `run_jit_loop` already used; pinned by `cortex_m_jit_alu_lockstep` and new window-runner cadence tests. No silicon capture pins JIT.
@@ -5112,7 +5134,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: b3d7608adee9cdb9c000515e05756beeac69e8138fa0bf1c760ec3354be85cd4
+    drift_ack_digest: 98c7d1001b024bcf4da11e6a50be63a9762973146353d66dc0dd25d2ac50e6e4
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -5607,6 +5629,10 @@ boards:
     # No register map or reset value of this board changed. Pinned by spi_tests,
     # world_gpio_net_buses and esp32c3_trigger_systimer. Approved by the maintainer.
     # ACK, NOT A CAPTURE.
+    # 2026-10-11 (#1367 nRF52 buses over nets): nRF serial instance, shared SPI wire
+    # engine, bus pad-claim bracket and Machine::drive_gpio_input changed for SPIM/SPIS/
+    # TWIM/TWIS over gpio nets. No register map or reset value of this board changed.
+    # Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-11
   - id: stm32f407
     # 2026-09-16 (#1128): Cortex-M browser JIT rides `Machine::advance_with_window_runner` — the advance loop now plans and commits the window (tick cadence, reset drains, idle fast forward) and a compiled backend only supplies the instruction stream; the JIT batch gates (takeable exception, SysTick crossing, SYSRESETREQ latch) become public for `jit-framework` so the browser adapter refuses the same windows `run_jit_loop` does. In `cortex_m.rs`: `note_chained` only counts a chain that retired instructions, `sysreset_latched` is pub. Interpreter path unchanged — the gates are the ones `run_jit_loop` already used; pinned by `cortex_m_jit_alu_lockstep` and new window-runner cadence tests. No silicon capture pins JIT.
@@ -6022,7 +6048,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: 43733464f5e97088a0563e89e61b102f167ab1036c687af469c01a4bfd60778a
+    drift_ack_digest: 9e2ff9e47b137702ae0686a87d85df146cc73b87affb4385cdd2299689b51601
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -6452,6 +6478,10 @@ boards:
     # No register map or reset value of this board changed. Pinned by spi_tests,
     # world_gpio_net_buses and esp32c3_trigger_systimer. Approved by the maintainer.
     # ACK, NOT A CAPTURE.
+    # 2026-10-11 (#1367 nRF52 buses over nets): nRF serial instance, shared SPI wire
+    # engine, bus pad-claim bracket and Machine::drive_gpio_input changed for SPIM/SPIS/
+    # TWIM/TWIS over gpio nets. No register map or reset value of this board changed.
+    # Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-11
   - id: esp32s3
     # 2026-09-16 (#jit-xtensa-browser): generic Xtensa BB emit core + browser adapter. `xtensa_lx7.rs` gains only `invalidate_for_data_write` — a public forwarder to the existing `maybe_invalidate_for_write` so JIT-committed stores run the same SMC invalidation the S8i/S32i interpreter arms run (no interpreter behavior change; the existing sub-word rules are reused). Hot-block dispatch and every interpreter arm are untouched; the new shapes are browser-only and refused when unsafe. Native interpreter-identity tests in `xtensa_jit/variable.rs`. No silicon capture pins the browser JIT.
