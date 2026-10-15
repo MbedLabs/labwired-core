@@ -7221,7 +7221,7 @@ boards:
     # the existing byte-level paths are unchanged. No register map or reset
     # value in the nine captured windows changed (I2C0 reset values untouched);
     # pinned by world_gpio_net_buses and the existing S3 I2C/SPI waveform and
-    # oracle tests. Pending maintainer approval. ACK, NOT A CAPTURE.
+    # oracle tests. Approved by the maintainer. ACK, NOT A CAPTURE.
     drift_ack_digest: b9d64e9080f3c0aa8afa3bd3bb798dbf26d592d96638863ad140daf0f74f315c
 
   - id: esp32s3-zero
