@@ -1059,6 +1059,8 @@ impl SystemBus {
         // the UART indices 14/17/198 are the classic part's alone.
         bus.wire_esp32_spi_pads();
         bus.wire_esp32_uart_pads();
+        // …and its LEDC outputs (signals 71..86).
+        bus.wire_esp32_ledc_pads();
         // RP2040: bind I²C wires to the pads IO_BANK0's FUNCSEL can route them to.
         bus.wire_rp2040_i2c_pads();
         // Same for the RP2040 UARTs' TX/RX, so serial output is a waveform on

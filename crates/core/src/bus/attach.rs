@@ -310,6 +310,52 @@ impl SystemBus {
         }
     }
 
+    /// Bind the classic-ESP32 LEDC controller's 16 channel outputs to the pads
+    /// the GPIO output matrix can route them to (signals 71..86,
+    /// `LEDC_HS_SIG_OUT0_IDX`..`LEDC_LS_SIG_OUT7_IDX`), so a pad attached with
+    /// `ledcAttachPin` carries the PWM waveform for `read_gpio_pad`, the logic
+    /// analyzer and `--watch-gpio` instead of the idle GPIO latch. No-op
+    /// unless both models are on the bus.
+    pub(crate) fn wire_esp32_ledc_pads(&mut self) {
+        use crate::peripherals::esp32::gpio::Esp32Gpio;
+        use crate::peripherals::esp32::ledc::Ledc;
+
+        // By NAME, as `wire_esp32_spi_pads` resolves `spi3`: both classic
+        // builders register these two as `gpio` and `ledc`
+        // (`ESP32_PERIPHERALS`, `configs/chips/esp32.yaml`).
+        let (Some(ledc_idx), Some(gpio_idx)) = (
+            self.find_peripheral_index_by_name("ledc"),
+            self.find_peripheral_index_by_name("gpio"),
+        ) else {
+            return;
+        };
+        // Resolve BOTH types before touching either: `pad_lines_arc` CREATES
+        // the wire cell, and a controller owning a cell no route reaches
+        // publishes edges nothing reads.
+        let gpio_is_classic = self.peripherals[gpio_idx]
+            .dev
+            .as_any_mut()
+            .is_some_and(|a| a.is::<Esp32Gpio>());
+        if !gpio_is_classic {
+            return;
+        }
+        let Some(lines) = self.peripherals[ledc_idx]
+            .dev
+            .as_any_mut()
+            .and_then(|a| a.downcast_mut::<Ledc>())
+            .map(Ledc::pad_lines_arc)
+        else {
+            return;
+        };
+        if let Some(gpio) = self.peripherals[gpio_idx]
+            .dev
+            .as_any_mut()
+            .and_then(|a| a.downcast_mut::<Esp32Gpio>())
+        {
+            gpio.bind_ledc_lines(&lines);
+        }
+    }
+
     /// Bind the RP2040 UARTs' TX/RX wires to the pads IO_BANK0 can route them
     /// to, so a probe on GP0 shows the serial waveform rather than the SIO
     /// output latch. No-op unless IO_BANK0, SIO and a UART are all on the bus.

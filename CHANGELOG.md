@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- Classic ESP32 LEDC drives its pads. Each of the 16 channels generates its
+  PWM waveform (TRM §14.2: REF_TICK / APB / RTC8M source, Q8 `DIV_NUM`,
+  `2^DUTY_RES` period, `HPOINT`/`DUTY`, duty latched at the next overflow,
+  `IDLE_LV` when `SIG_OUT_EN` is clear) on a 16-line pad wire, and the classic
+  GPIO matrix routes it on signals 71..86 (`LEDC_HS_SIG_OUT0..7`,
+  `LEDC_LS_SIG_OUT0..7`). A pad attached with `ledcAttachPin` now shows real
+  edges to `read_gpio_pad`, the logic analyzer and `--watch-gpio`; before, it
+  read 0 edges. `HSTIMERx_CONF.DIV_NUM` is decoded as the 18-bit field it is
+  (was 13 bits), and `channel_freq_hz` honours `TICK_SEL` (REF_TICK when 0).
 - ESP32-C3 debug trigger module: `tselect` / `tdata1` / `tdata2` / `tdata3` /
   `tinfo` / `tcontrol` (CSRs 0x7A0-0x7A5) with 8 `mcontrol` triggers, exact
   and NAPOT address match on load / store / execute, and action 0 (breakpoint
