@@ -12,7 +12,7 @@ The models column is a content digest over everything that board's `models` list
 | `nrf52840` | 🟢 silicon-verified | 2026-08-09 | `ad2b09313013b5e9` | ⚠ drift acked 2026-10-11, expires 2026-11-10 (re-capture pending) |
 | `seeed-xiao-nrf52840-sense` | 🟢 silicon-verified | 2026-08-09 | `ad2b09313013b5e9` | ⚠ drift acked 2026-10-11, expires 2026-11-10 (re-capture pending) |
 | `stm32h563` | 🟢 silicon-verified | 2026-08-10 | `308c79de86f855ff` | ⚠ drift acked 2026-10-11, expires 2026-11-10 (re-capture pending) |
-| `esp32c3` | 🟢 silicon-verified | 2026-08-09 | `1231939360c264bd` | ⚠ drift acked 2026-10-15, expires 2026-11-14 (re-capture pending) |
+| `esp32c3` | 🟢 silicon-verified | 2026-08-09 | `5ccbafc74ee63613` | ⚠ drift acked 2026-10-15, expires 2026-11-14 (re-capture pending) |
 | `nucleo-l476rg` | 🟢 silicon-verified | 2026-08-09 | `e04eb6c6d6ce65b5` | ⚠ drift acked 2026-10-11, expires 2026-11-10 (re-capture pending) |
 | `nucleo-l073rz` | 🟢 silicon-verified | 2026-08-09 | `aabef8b3856f8573` | ⚠ drift acked 2026-10-11, expires 2026-11-10 (re-capture pending) |
 | `stm32f103` | 🟢 silicon-verified | 2026-08-09 | `98c7d1001b024bcf` | ⚠ drift acked 2026-10-11, expires 2026-11-10 (re-capture pending) |
@@ -48,7 +48,7 @@ The models column is a content digest over everything that board's `models` list
 | `teensy-41` | 🟡 smoke-manual | — | `5c0bd4aab0a6757d` | no silicon capture |
 | `stm32f7-discovery` | 🟡 smoke-manual | — | `022b3872f97dbda5` | no silicon capture |
 | `nucleo-g071rb` | 🟡 smoke-manual | — | `fd095c4117a7f6dd` | no silicon capture |
-| `esp32c6-devkitc` | 🟡 smoke-manual | — | `e407b99704d2cb3b` | no silicon capture |
+| `esp32c6-devkitc` | 🟡 smoke-manual | — | `fc45b9157864442a` | no silicon capture |
 
 ## `nrf52840` — 🟢 silicon-verified
 

@@ -54,3 +54,16 @@ for fw in nrf_spim_master nrf_spis_slave nrf_twim_controller nrf_twis_target; do
     "$CC" "${NRF[@]}" "src/$fw.c" -o "firmware/${fw//_/-}.elf"
 done
 "$CC" "${NRF[@]}" -DSLOW=1 src/nrf_twis_target.c -o firmware/nrf-twis-target-slow.elf
+# ESP32-C3 and ESP32-C6 (GP-SPI2, I2C0) against the G071, register level, no
+# IDF: the same sources for both chips (-DCHIP_C6 picks the C6's bases and
+# GPIO-matrix numbers). The esp-hal 1.x masters live in esp32c3-esp-hal/
+# (README there); their ELFs are committed beside these.
+for chip in c3 c6; do
+    if [ "$chip" = c6 ]; then arch=rv32imac; defs=(-DCHIP_C6); else arch=rv32imc; defs=(); fi
+    ESP=(--target=riscv32-unknown-elf "-march=$arch" -mabi=ilp32 -Os -ffreestanding -fno-builtin -nostdlib
+         -Wall -Wextra -fuse-ld=lld -Xlinker --build-id=none -Xlinker --no-relax -T src/esp32c3.ld)
+    for fw in spi_master spi_slave i2c_controller i2c_target; do
+        "$CC" "${ESP[@]}" "${defs[@]}" "src/esp32c_$fw.c" -o "firmware/esp32${chip}-${fw//_/-}.elf"
+    done
+    "$CC" "${ESP[@]}" "${defs[@]}" -DSLOW=1 src/esp32c_i2c_target.c -o "firmware/esp32${chip}-i2c-target-slow.elf"
+done

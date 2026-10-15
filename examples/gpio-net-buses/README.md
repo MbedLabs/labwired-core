@@ -24,6 +24,10 @@ pull-up reading 1.
 | `env-spi-nrf52-slave.yaml` | G071 SPI1 master, mode 0 | nRF52840 SPIS0 slave (CSN P0.02), semaphore + EasyDMA | `cs`, `sck`, `miso`, `mosi` |
 | `env-i2c-nrf52.yaml` | nRF52840 TWIM0 controller (P0.27 SCL, P0.26 SDA), K250, shortcuts | G071 I2C1 target at 0x42 | `scl`, `sda` (pull-up) |
 | `env-i2c-nrf52-target.yaml` | G071 I2C1 controller | nRF52840 TWIS0 target at 0x42 (polled `WRITE`/`READ`, `PREPARERX`/`TX`) | `scl`, `sda` (pull-up) |
+| `env-spi-esp32c3.yaml` | ESP32-C3 GP-SPI2 master (GPIO4 SCK, GPIO5 MOSI, GPIO3 MISO, GPIO1 CS0 through the GPIO matrix), mode 0, 100 kHz | G071 SPI1 slave | `cs`, `sck`, `miso`, `mosi` |
+| `env-spi-esp32c3-slave.yaml` | ESP32-C3 GP-SPI2 slave (W buffer) | G071 SPI1 master | `cs`, `sck`, `miso`, `mosi` |
+| `env-i2c-esp32c3.yaml` | ESP32-C3 I2C0 controller (GPIO8 SDA, GPIO9 SCL), 100 kHz | G071 I2C1 target at 0x42 | `scl`, `sda` (pull-up) |
+| `env-i2c-esp32c3-target.yaml` | ESP32-C3 I2C0 target at 0x42, stretching SCL until its firmware answers | G071 I2C1 controller | `scl`, `sda` (pull-up) |
 
 SPI: the master sends `A5 3C 5A C3` and receives `81 82 83 84`, which the
 slave queues from its SPI interrupt (or preloads in its FIFO, on the RP2040).
@@ -44,7 +48,12 @@ tests also run the legacy pair the other way round (F401 master, F103 slave)
 and a G071 controller against the F103 slave, and swap in targets built with
 `-DSLOW=1` (`*-target-slow.elf`), whose firmware answers several SCL low
 periods late, so the controller is held by clock stretching. The RP2040 runs
-the same register-file exchange on its I2C0, as controller and as target.
+the same register-file exchange on its I2C0, as controller and as target. The ESP32-C3
+runs both exchanges as well (`src/esp32c_*.c`, register level), and so does
+the ESP32-C6 from the same sources (`-DCHIP_C6`, `firmware/esp32c6-*.elf`;
+the tests swap the system and firmware into the `esp32c3` environments).
+`esp32c3-esp-hal/` holds esp-hal 1.1 SPI and I2C master applications that run
+the same exchanges through esp-hal's own drivers.
 
 Results are left in SRAM at 0x20000100 (see the comment at the top of each
 source). The tests are
