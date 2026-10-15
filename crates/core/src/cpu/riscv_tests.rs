@@ -1555,6 +1555,98 @@ mod trigger_module {
         assert_eq!(cpu.read_csr(0x7A0), None);
     }
 
+    /// Arm the store watch, then hand the CPU state to a fresh machine
+    /// through `transfer` and run the watched store there.
+    fn resumed_store_traps(transfer: impl Fn(&RiscV, &mut RiscV)) -> Machine<RiscV> {
+        let (prog, body) = program(TCONTROL_MTE, STORE_WATCH, &[sw(6, 0x10, 5)]);
+        let mut armed = machine(&prog, &[jal(0, 0)]);
+        step_n(&mut armed, body as usize / 4);
+        assert!(armed.cpu.triggers.armed());
+        let mut resumed = machine(&prog, &[jal(0, 0)]);
+        transfer(&armed.cpu, &mut resumed.cpu);
+        assert_eq!(resumed.cpu.pc, body);
+        step_n(&mut resumed, 1);
+        resumed
+    }
+
+    fn assert_watch_fired(m: &Machine<RiscV>) {
+        assert_eq!(m.cpu.pc, HANDLER, "the restored watchpoint fired");
+        assert_eq!(m.cpu.mcause, 3);
+        assert_eq!(m.cpu.mtval, WATCHED);
+        assert_eq!(m.bus.read_u32(u64::from(WATCHED)).unwrap(), 0);
+    }
+
+    #[test]
+    fn runtime_snapshot_carries_the_trigger_module() {
+        let m = resumed_store_traps(|from, to| {
+            let (kind, bytes) = from.runtime_snapshot().unwrap();
+            to.apply_runtime_snapshot(kind, &bytes).unwrap();
+            assert_eq!(to.triggers, from.triggers, "round trip");
+        });
+        assert_watch_fired(&m);
+    }
+
+    #[test]
+    fn json_snapshot_carries_the_trigger_module() {
+        let m = resumed_store_traps(|from, to| {
+            let json = serde_json::to_string(&from.snapshot()).unwrap();
+            let back: crate::snapshot::CpuSnapshot = serde_json::from_str(&json).unwrap();
+            to.apply_snapshot(&back);
+            assert_eq!(to.triggers, from.triggers, "round trip");
+        });
+        assert_watch_fired(&m);
+    }
+
+    #[test]
+    fn pre_trigger_runtime_snapshot_still_loads_with_triggers_at_reset() {
+        // The layout written before the trigger module was captured: the bare
+        // `RiscVRuntimeSnapshot`, nothing after `reservation`.
+        let m = resumed_store_traps(|from, to| {
+            let old = crate::runtime_snapshot::RiscVRuntimeSnapshot {
+                x: from.x,
+                pc: from.pc,
+                mstatus: from.mstatus,
+                mie: from.mie,
+                mip: from.mip,
+                mtvec: from.mtvec,
+                mscratch: from.mscratch,
+                mepc: from.mepc,
+                mcause: from.mcause,
+                mtval: from.mtval,
+                mtime: from.mtime,
+                mtimecmp: from.mtimecmp,
+                reservation: from.reservation,
+            };
+            let bytes = bincode::serialize(&old).unwrap();
+            // A stale programmed trigger on the target must not survive.
+            to.triggers.write_csr(0x7A5, TCONTROL_MTE);
+            to.triggers.write_csr(0x7A1, STORE_WATCH);
+            to.apply_runtime_snapshot(crate::runtime_snapshot::CpuKind::RiscV, &bytes)
+                .unwrap();
+            assert_eq!(to.pc, from.pc, "the old layout decodes");
+            assert_eq!(to.x, from.x);
+            assert_eq!(to.triggers, trigger::TriggerModule::default());
+        });
+        assert_eq!(m.cpu.mcause, 0, "no trigger state, no trap");
+        assert_eq!(m.bus.read_u32(u64::from(WATCHED)).unwrap(), 0x55);
+    }
+
+    #[test]
+    fn pre_trigger_json_snapshot_still_loads_with_triggers_at_reset() {
+        let m = resumed_store_traps(|from, to| {
+            let mut json = serde_json::to_value(from.snapshot()).unwrap();
+            // What a snapshot written before the field existed looks like.
+            assert!(json.as_object_mut().unwrap().remove("triggers").is_some());
+            let back: crate::snapshot::CpuSnapshot = serde_json::from_value(json).unwrap();
+            to.triggers.write_csr(0x7A5, TCONTROL_MTE);
+            to.apply_snapshot(&back);
+            assert_eq!(to.pc, from.pc);
+            assert_eq!(to.triggers, trigger::TriggerModule::default());
+        });
+        assert_eq!(m.cpu.mcause, 0);
+        assert_eq!(m.bus.read_u32(u64::from(WATCHED)).unwrap(), 0x55);
+    }
+
     #[test]
     fn watched_store_raises_a_breakpoint_before_the_store() {
         let (prog, body) = program(TCONTROL_MTE, STORE_WATCH, &[sw(6, 0x10, 5)]);

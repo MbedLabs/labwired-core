@@ -1223,6 +1223,22 @@ pub trait Peripheral: std::fmt::Debug + Send {
         false
     }
 
+    /// Pin-select capability: `true` for a peripheral that names the pads it
+    /// drives in its own registers (nRF `PSEL.*`), so a register write can
+    /// move a pad between its GPIO latch and one of this peripheral's lines.
+    /// On a bus with a world `gpio_net` the bus brackets such writes so the
+    /// pin ports report what moved and hand the net's levels to newly routed
+    /// lines. Default: no.
+    fn claims_pads(&self) -> bool {
+        false
+    }
+
+    /// GPIO capability: `true` for a pin port whose pad routing follows the
+    /// pin selects of [`Self::claims_pads`] peripherals. Default: no.
+    fn reads_pad_claims(&self) -> bool {
+        false
+    }
+
     /// True when a READ of this peripheral can clear the status flag behind
     /// its level IRQ (STM32 input capture: reading CCRx clears CCxIF). The
     /// bus then reconciles the NVIC pend after the read, as it does after
