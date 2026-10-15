@@ -2185,7 +2185,7 @@ boards:
     # behaviour lives in exchange memory and the radio event path, which that
     # capture does not cover. This acknowledges model drift, NOT a recapture.
     drift_ack: 2026-09-28
-    drift_ack_digest: 42c9857e879e4e46edd9148870649c74ce31f26fc1d704c17b14ed832b6b4892
+    drift_ack_digest: 67bfb508255883424c7783035ca9e7cda2051f93b98f8a6193c2be9cbfeab365
     models:
       - crates/core/src/cpu/riscv.rs
       - crates/core/src/decoder/riscv.rs
@@ -2927,6 +2927,12 @@ boards:
     # reads 0 until the first update, matching the C3 cold-reset capture. Pinned by
     # esp32c3_trigger_systimer and chip_conformance. Approved by the maintainer.
     # ACK, NOT A CAPTURE.
+    drift_ack: 2026-10-11
+    # 2026-10-11 (#1368 ESP32-C3/C6 buses over nets): C3 GPIO/SPI/I2C hand lines to
+    # chip-neutral net engines when firmware routes them through the GPIO matrix to a
+    # pad on a net; off a net the byte-level behaviour is unchanged. No register map
+    # or reset value changed. Pinned by world_gpio_net_buses. Approved by the
+    # maintainer. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-11
 
   - id: nucleo-l476rg
