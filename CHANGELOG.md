@@ -35,6 +35,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `env-i2c-nrf52*.yaml`, clang-built firmware), including an address NACK,
   a slow G071 target stretching the TWIM's clock and a slow TWIS stretching
   the G071's, each re-run with the nodes swapped and with 37 ns rounds.
+- ESP32-C3 and ESP32-C6 GP-SPI2 and I2C0 on `gpio_net`s, bit by bit at the
+  pads (`docs/howto/gpio-nets.md`, "Buses over nets";
+  `examples/gpio-net-buses`, `tests/world_gpio_net_buses.rs`):
+  - The C3/C6 GPIO matrix hands net levels to peripheral inputs through
+    `FUNCn_IN_SEL_CFG` (new shared `esp_gpio_net::MatrixInputs`) and a pad
+    routed out through `FUNCn_OUT_SEL_CFG` drives what the peripheral's line
+    drives (released, input, open drain or push-pull). A line becomes a net
+    line when firmware routes it to a net pad. The C6 GPIO now uses its own
+    matrix numbers (`I2CEXT0_SCL/SDA` 45/46, `IN_SEL.SEL` at bit 7) instead
+    of the C3's.
+  - GP-SPI2 as a bit-level master (`SPI_CMD.USR` at the `SPI_CLOCK` rate,
+    CS0 with setup/hold, command/address/dummy phases, full and half duplex,
+    MISO sampled into `W0..`, `TRANS_DONE`) and CPU-controlled slave (answers
+    from `W0..W15` while CS0 is low, stores what it sampled and
+    `SLAVE1.DATA_BITLEN` when CS0 rises), in the new chip-neutral
+    `peripherals::esp_gpspi_net`.
+  - I2C0 as a bit-level command-list master (`RSTART`/`WRITE`/`READ`/`STOP`/
+    `END`, ACK checking with `NACK`, `command_done`, `SR.RESP_REC`) and slave
+    (7-bit `SLAVE_ADDR`, RX/TX FIFOs, SCL stretching with `SLAVE_STRETCH`
+    until `SLAVE_SCL_STRETCH_CLR`), on the shared `i2c_bitbus` wire engine,
+    in the new chip-neutral `peripherals::esp_i2c_net`.
+  - Tested against an STM32G071 both ways round on the C3 and the C6
+    (register-level firmware), including a NACK and slow targets that
+    stretch SCL on either side, and with esp-hal 1.1's blocking SPI and I2C
+    master drivers on the C3 (`examples/gpio-net-buses/esp32c3-esp-hal`).
 - ESP32-C3 debug trigger module: `tselect` / `tdata1` / `tdata2` / `tdata3` /
   `tinfo` / `tcontrol` (CSRs 0x7A0-0x7A5) with 8 `mcontrol` triggers, exact
   and NAPOT address match on load / store / execute, and action 0 (breakpoint
