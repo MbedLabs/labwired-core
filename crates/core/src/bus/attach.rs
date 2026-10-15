@@ -1003,6 +1003,7 @@ impl SystemBus {
         self.esp32c3_io_mux_idx.is_some()
             || self.rp2040_io_bank0_idx.is_some()
             || !self.pad_control_links.is_empty()
+            || !self.pad_claim_links.owners.is_empty()
     }
 
     /// Resolve every pin port's [`pad_control`](crate::pins::PinPort::pad_control)
@@ -1222,6 +1223,71 @@ impl SystemBus {
         }
     }
 
+    /// Resolve the [`PadClaimLinks`](super::PadClaimLinks): every peripheral
+    /// that names its own pads and every pin port that follows those names.
+    /// Called when a world `gpio_net` joins a pad; empty without one.
+    pub(crate) fn rebuild_pad_claim_links(&mut self) {
+        let mut links = super::PadClaimLinks::default();
+        if self.wire_inputs_live {
+            for (i, p) in self.peripherals.iter().enumerate() {
+                if p.dev.claims_pads() {
+                    links.owners.push(i);
+                }
+                if p.dev.reads_pad_claims() {
+                    links.ports.push(i);
+                }
+            }
+            if links.ports.is_empty() {
+                links.owners.clear();
+            }
+        }
+        self.pad_claim_links = links;
+    }
+
+    /// Bracket a write to a peripheral that names its own pads (nRF
+    /// `PSEL`, `ENABLE`): snapshot every claim-reading port. `true` when
+    /// `idx` is such a peripheral, for [`Self::finish_pad_claim_write`].
+    pub(crate) fn begin_pad_claim_write(&mut self, idx: usize) -> bool {
+        if !self.pad_claim_links.owners.contains(&idx) {
+            return false;
+        }
+        for k in 0..self.pad_claim_links.ports.len() {
+            let port = self.pad_claim_links.ports[k];
+            if let Some(pins) = self
+                .peripherals
+                .get_mut(port)
+                .and_then(|p| p.dev.pins_mut())
+            {
+                crate::pins::watch_begin(pins);
+            }
+        }
+        true
+    }
+
+    /// Complete a write started by [`Self::begin_pad_claim_write`]: report
+    /// the pads whose drive moved, re-register line taps for the new routing
+    /// and hand the net's levels to lines that just gained a pad.
+    pub(crate) fn finish_pad_claim_write(&mut self, begun: bool) {
+        if !begun {
+            return;
+        }
+        for k in 0..self.pad_claim_links.ports.len() {
+            let port = self.pad_claim_links.ports[k];
+            if let Some(pins) = self
+                .peripherals
+                .get_mut(port)
+                .and_then(|p| p.dev.pins_mut())
+            {
+                crate::pins::watch_end(pins);
+                pins.routes_changed();
+            }
+        }
+        for k in 0..self.pad_claim_links.ports.len() {
+            let port = self.pad_claim_links.ports[k];
+            self.deliver_wire_input_edges(port);
+        }
+    }
+
     /// Wire the STM32 SPI bit engines' live SCK/MOSI/MISO levels into the
     /// STM32 GPIO ports, so pads whose MODER/AFR (V2) or CRL/CRH CNF (F1)
     /// route an SPI alternate function read the real waveform through
@@ -1274,8 +1340,15 @@ impl SystemBus {
             ("spi3", 'c', 11, 6, Miso, "SPI3_MISO"),
             ("spi3", 'c', 12, 6, Mosi, "SPI3_MOSI"),
         ];
-        // V2 ports, F4 parts (DS8626 Table 9: SPI1-2).
+        // V2 ports, F4 parts (DS8626 Table 9: SPI1-2; the F401's DS9716
+        // Table 9 agrees on every row). NSS is routed as on the G0, so an F4
+        // pair on a world `gpio_net` can use the hardware slave select:
+        // SPI1_NSS on PA4/PA15, SPI2_NSS on PB9/PB12, all AF5.
         const F4: &[(&str, char, u8, u8, SpiSignal, &str)] = &[
+            ("spi1", 'a', 4, 5, Nss, "SPI1_NSS"),
+            ("spi1", 'a', 15, 5, Nss, "SPI1_NSS"),
+            ("spi2", 'b', 9, 5, Nss, "SPI2_NSS"),
+            ("spi2", 'b', 12, 5, Nss, "SPI2_NSS"),
             ("spi1", 'a', 5, 5, Sck, "SPI1_SCK"),
             ("spi1", 'a', 6, 5, Miso, "SPI1_MISO"),
             ("spi1", 'a', 7, 5, Mosi, "SPI1_MOSI"),
@@ -1363,11 +1436,13 @@ impl SystemBus {
         // SPI3_MOSI/AF6 row comes from the datasheet table).
         //
         // The NUCLEO-U575ZI-Q Arduino SPI header is SPI1 on PA4 (NSS) / PA5
-        // (SCK) / PA6 (MISO) / PA7 (MOSI), all AF5. PA4 is NOT routed: this
-        // mechanism carries SCK/MOSI/MISO only (`SpiSignal` has no Nss), the
-        // same honest gap every L4/F4/H5/WBA table has. The U575's AF map is a
-        // third pinout on the shared SPI-v3 register file, which is why it is
-        // a `SpiPadMap` variant and not a wider H5 table.
+        // (SCK) / PA6 (MISO) / PA7 (MOSI), all AF5. PA4 is NOT routed: the
+        // H5-class "SPI v3" model has no net slave to read an NSS pad (only
+        // the classic/FIFO engine does, which is why only the G0 and F4
+        // tables carry NSS rows) — the same gap the L4/H5/WBA tables have.
+        // The U575's AF map is a third pinout on the shared SPI-v3 register
+        // file, which is why it is a `SpiPadMap` variant and not a wider H5
+        // table.
         //
         // ⚠️ SPI3 on this part is NOT uniformly AF6: PD6/AF5 is SPI3_MOSI
         // (AF6 on PD6 is MDF1_SDI1), and PB3/PB4 carry SPI1 SCK/MISO at AF5
@@ -1424,11 +1499,11 @@ impl SystemBus {
         // ── STM32G0 parts ───────────────────────────────────────────────────
         //
         // STM32G071 (DS12232, "Port A/Port B alternate function mapping"
-        // tables, AF0 column). The classic register file behind a V2 port
-        // would otherwise pick the F4 table, whose AF5 is not SPI on a G0.
-        // Selected by the chip yaml's `pad_map: stm32g0`. NSS is routed here
-        // (and only here) because a G0 pair on a world `gpio_net` uses it as
-        // the hardware slave select.
+        // tables, AF0 column). The FIFO register file behind a V2 port would
+        // otherwise pick the L4 table, whose AF5 is not SPI on a G0.
+        // Selected by the chip yaml's `pad_map: stm32g0`. NSS is routed (as
+        // in the F4 table) because a pair on a world `gpio_net` uses it as the
+        // hardware slave select.
         const G0: &[(&str, char, u8, u8, SpiSignal, &str)] = &[
             ("spi1", 'a', 4, 0, Nss, "SPI1_NSS"),
             ("spi1", 'a', 5, 0, Sck, "SPI1_SCK"),
@@ -1495,6 +1570,7 @@ impl SystemBus {
                             (true, SpiPadMap::Stm32U5) => U5,
                             (true, _) => H5,
                             (false, SpiPadMap::Stm32G0) => G0,
+                            (false, SpiPadMap::Stm32F4) => F4,
                             (false, _) if fifo => L4,
                             (false, _) => F4,
                         };
@@ -2174,11 +2250,16 @@ impl SystemBus {
     ///   waveform. It is also what keeps a part with an nRF52 peripheral MODEL
     ///   at a different address — the nRF5340's UARTE0 — out of the table.
     ///
-    /// TX / SCL / SDA / SCK / MOSI ONLY. `PSEL.RXD`, `PSEL.MISO`, `PSEL.CTS`,
-    /// `PSEL.RTS` and `PSEL.CSN` are tracked registers that nothing in this
-    /// engine DRIVES, so a pad routed to one would report a confident constant
-    /// idle level straight through real traffic — worse than the GPIO-latch
-    /// fallback it replaced, because it looks authoritative. Same call as
+    /// TX / SCL / SDA / SCK / MOSI, plus the SPIM's `PSEL.MISO` and the
+    /// SPIS/TWIS slave personalities of the shared serial-instance window.
+    /// `PSEL.MISO` is routed as an INPUT line (it drives nothing; a pad on it
+    /// reads the outside level, and on a world `gpio_net` the bit engine
+    /// samples it), and the slave lines are driven only by their bit engines
+    /// on a net. `PSEL.RXD`, `PSEL.CTS`, `PSEL.RTS` and the SPIM's `PSEL.CSN`
+    /// are tracked registers that nothing in this engine DRIVES, so a pad
+    /// routed to one would report a confident constant idle level straight
+    /// through real traffic — worse than the GPIO-latch fallback it replaced,
+    /// because it looks authoritative. Same call as
     /// [`Self::wire_rp2040_uart_pads`].
     pub(crate) fn wire_nrf52_pads(&mut self) {
         use crate::peripherals::gpio::{GpioPort, GpioRegisterLayout};
@@ -2198,11 +2279,33 @@ impl SystemBus {
         /// SPIM instances by base address (PS v1.11 §6.25.6, p727). SPIM3
         /// (0x4002_F000) is listed for completeness of the address decode; no
         /// chip yaml in this checkout maps it.
-        const SPIM: &[(u64, &str, &str)] = &[
-            (0x4000_3000, "SPIM0_SCK", "SPIM0_MOSI"),
-            (0x4000_4000, "SPIM1_SCK", "SPIM1_MOSI"),
-            (0x4002_3000, "SPIM2_SCK", "SPIM2_MOSI"),
-            (0x4002_F000, "SPIM3_SCK", "SPIM3_MOSI"),
+        const SPIM: &[(u64, &str, &str, &str)] = &[
+            (0x4000_3000, "SPIM0_SCK", "SPIM0_MOSI", "SPIM0_MISO"),
+            (0x4000_4000, "SPIM1_SCK", "SPIM1_MOSI", "SPIM1_MISO"),
+            (0x4002_3000, "SPIM2_SCK", "SPIM2_MOSI", "SPIM2_MISO"),
+            (0x4002_F000, "SPIM3_SCK", "SPIM3_MOSI", "SPIM3_MISO"),
+        ];
+        /// SPIS instances by base address (PS v1.11 §6.26.7), signals in
+        /// SCK, MOSI, MISO, CSN order. Only the shared serial-instance window
+        /// carries this personality in the chip yamls.
+        const SPIS: &[(u64, [&str; 4])] = &[
+            (
+                0x4000_3000,
+                ["SPIS0_SCK", "SPIS0_MOSI", "SPIS0_MISO", "SPIS0_CSN"],
+            ),
+            (
+                0x4000_4000,
+                ["SPIS1_SCK", "SPIS1_MOSI", "SPIS1_MISO", "SPIS1_CSN"],
+            ),
+            (
+                0x4002_3000,
+                ["SPIS2_SCK", "SPIS2_MOSI", "SPIS2_MISO", "SPIS2_CSN"],
+            ),
+        ];
+        /// TWIS instances by base address (PS v1.11 §6.32.7).
+        const TWIS: &[(u64, &str, &str)] = &[
+            (0x4000_3000, "TWIS0_SCL", "TWIS0_SDA"),
+            (0x4000_4000, "TWIS1_SCL", "TWIS1_SDA"),
         ];
 
         /// PWM instances by base address, as the nRF52833/nRF52840 chip yamls map them.
@@ -2314,16 +2417,46 @@ impl SystemBus {
                         vec![(scl_token, LINE_SCL, scl), (sda_token, LINE_SDA, sda)],
                     ));
                 }
-                if let Some(&(_, sck, mosi)) = SPIM.iter().find(|&&(addr, ..)| addr == base) {
-                    let (sck_token, mosi_token) = (next_token, next_token + 1);
-                    next_token += 2;
+                if let Some(&(_, sck, mosi, miso)) = SPIM.iter().find(|&&(addr, ..)| addr == base) {
+                    let (sck_token, mosi_token, miso_token) =
+                        (next_token, next_token + 1, next_token + 2);
+                    next_token += 3;
                     let lines = mux.spim_pad_lines_arc();
-                    mux.install_spim_pin_claims(&claims, sck_token, mosi_token);
+                    mux.install_spim_pin_claims(&claims, sck_token, mosi_token, miso_token);
                     wired.push((
                         lines,
                         vec![
                             (sck_token, SpiSignal::Sck as usize, sck),
                             (mosi_token, SpiSignal::Mosi as usize, mosi),
+                            (miso_token, SpiSignal::Miso as usize, miso),
+                        ],
+                    ));
+                }
+                if let Some(&(_, funcs)) = SPIS.iter().find(|&&(addr, _)| addr == base) {
+                    let first = next_token;
+                    next_token += 4;
+                    let tokens = [first, first + 1, first + 2, first + 3];
+                    let lines = mux.spis_pad_lines_arc();
+                    mux.install_spis_pin_claims(&claims, tokens);
+                    wired.push((
+                        lines,
+                        funcs
+                            .iter()
+                            .enumerate()
+                            .map(|(line, &func)| (first + line as u32, line, func))
+                            .collect(),
+                    ));
+                }
+                if let Some(&(_, scl, sda)) = TWIS.iter().find(|&&(addr, ..)| addr == base) {
+                    let (scl_token, sda_token) = (next_token, next_token + 1);
+                    next_token += 2;
+                    let lines = mux.twis_pad_lines_arc();
+                    mux.install_twis_pin_claims(&claims, scl_token, sda_token);
+                    wired.push((
+                        lines,
+                        vec![
+                            (scl_token, crate::peripherals::nrf52::twis::LINE_SCL, scl),
+                            (sda_token, crate::peripherals::nrf52::twis::LINE_SDA, sda),
                         ],
                     ));
                 }
@@ -2400,18 +2533,21 @@ impl SystemBus {
                 if !spi.is_nrf_wire_layout() {
                     continue;
                 }
-                let Some(&(_, sck, mosi)) = SPIM.iter().find(|&&(addr, ..)| addr == base) else {
+                let Some(&(_, sck, mosi, miso)) = SPIM.iter().find(|&&(addr, ..)| addr == base)
+                else {
                     continue;
                 };
-                let (sck_token, mosi_token) = (next_token, next_token + 1);
-                next_token += 2;
+                let (sck_token, mosi_token, miso_token) =
+                    (next_token, next_token + 1, next_token + 2);
+                next_token += 3;
                 let lines = spi.line_levels_arc().pad_lines().clone();
-                spi.install_nrf_pin_claims(&claims, sck_token, mosi_token);
+                spi.install_nrf_pin_claims(&claims, sck_token, mosi_token, miso_token);
                 wired.push((
                     lines,
                     vec![
                         (sck_token, SpiSignal::Sck as usize, sck),
                         (mosi_token, SpiSignal::Mosi as usize, mosi),
+                        (miso_token, SpiSignal::Miso as usize, miso),
                     ],
                 ));
             }
