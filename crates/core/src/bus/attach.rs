@@ -1307,7 +1307,10 @@ impl SystemBus {
     /// Signal mapping comes from static per-family AF tables sourced from the
     /// datasheet alternate-function maps:
     /// * L4 (FIFO SPI + V2 GPIO): STM32L476 datasheet DS10198 Table 17 —
-    ///   SPI1/SPI2 on AF5, SPI3 on AF6.
+    ///   SPI1/SPI2 on AF5, SPI3 on AF6, NSS included.
+    /// * G4, WB and L0: their own tables (`pad_map: stm32g4` / `stm32wb` /
+    ///   `stm32l0`), read off ST's open pin data, NSS included — each
+    ///   disagrees with the L4 or F4 table on some pad.
     /// * F4 (classic SPI + V2 GPIO): STM32F407 datasheet DS8626 Table 9 —
     ///   SPI1/SPI2 on AF5.
     /// * F1 (classic SPI + F1 GPIO): RM0008 §9.3 default pinout, no AFIO
@@ -1348,6 +1351,132 @@ impl SystemBus {
             ("spi3", 'c', 10, 6, Sck, "SPI3_SCK"),
             ("spi3", 'c', 11, 6, Miso, "SPI3_MISO"),
             ("spi3", 'c', 12, 6, Mosi, "SPI3_MOSI"),
+            // NSS (hardware slave select), read off ST's open pin data for the
+            // L47x (`GPIO-STM32L47x_gpio_v1_0_Modes.xml`, which agrees with
+            // every SCK/MISO/MOSI row above). PA4 and PA15 carry SPI1_NSS at
+            // AF5 and SPI3_NSS at AF6: the AF nibble picks the controller.
+            ("spi1", 'a', 4, 5, Nss, "SPI1_NSS"),
+            ("spi1", 'a', 15, 5, Nss, "SPI1_NSS"),
+            ("spi1", 'e', 12, 5, Nss, "SPI1_NSS"),
+            ("spi2", 'b', 9, 5, Nss, "SPI2_NSS"),
+            ("spi2", 'b', 12, 5, Nss, "SPI2_NSS"),
+            ("spi2", 'd', 0, 5, Nss, "SPI2_NSS"),
+            ("spi3", 'a', 4, 6, Nss, "SPI3_NSS"),
+            ("spi3", 'a', 15, 6, Nss, "SPI3_NSS"),
+        ];
+        // ── STM32G4 parts ───────────────────────────────────────────────────
+        //
+        // STM32G47x (ST open pin data `GPIO-STM32G47x_gpio_v1_0_Modes.xml`,
+        // the CubeMX source of DS12288's alternate-function table). Its own
+        // table, not the L4 one, because the two disagree: PE12-PE15 at AF5
+        // are SPI4 on a G4 but SPI1 NSS/SCK/MISO/MOSI on an L4, PB10/AF5 is
+        // SPI2_SCK on an L4 and not SPI on a G4, and the G4 puts SPI2 on
+        // PA10/PA11 and PF0/PF1/PF9/PF10. SPI4 is not modelled. Selected by
+        // the chip yaml's `pad_map: stm32g4`.
+        const G4: &[(&str, char, u8, u8, SpiSignal, &str)] = &[
+            ("spi1", 'a', 4, 5, Nss, "SPI1_NSS"),
+            ("spi1", 'a', 5, 5, Sck, "SPI1_SCK"),
+            ("spi1", 'a', 6, 5, Miso, "SPI1_MISO"),
+            ("spi1", 'a', 7, 5, Mosi, "SPI1_MOSI"),
+            ("spi1", 'a', 15, 5, Nss, "SPI1_NSS"),
+            ("spi1", 'b', 3, 5, Sck, "SPI1_SCK"),
+            ("spi1", 'b', 4, 5, Miso, "SPI1_MISO"),
+            ("spi1", 'b', 5, 5, Mosi, "SPI1_MOSI"),
+            ("spi1", 'g', 2, 5, Sck, "SPI1_SCK"),
+            ("spi1", 'g', 3, 5, Miso, "SPI1_MISO"),
+            ("spi1", 'g', 4, 5, Mosi, "SPI1_MOSI"),
+            ("spi1", 'g', 5, 5, Nss, "SPI1_NSS"),
+            ("spi2", 'a', 10, 5, Miso, "SPI2_MISO"),
+            ("spi2", 'a', 11, 5, Mosi, "SPI2_MOSI"),
+            ("spi2", 'b', 12, 5, Nss, "SPI2_NSS"),
+            ("spi2", 'b', 13, 5, Sck, "SPI2_SCK"),
+            ("spi2", 'b', 14, 5, Miso, "SPI2_MISO"),
+            ("spi2", 'b', 15, 5, Mosi, "SPI2_MOSI"),
+            ("spi2", 'd', 15, 6, Nss, "SPI2_NSS"),
+            ("spi2", 'f', 0, 5, Nss, "SPI2_NSS"),
+            ("spi2", 'f', 1, 5, Sck, "SPI2_SCK"),
+            ("spi2", 'f', 9, 5, Sck, "SPI2_SCK"),
+            ("spi2", 'f', 10, 5, Sck, "SPI2_SCK"),
+            ("spi3", 'a', 4, 6, Nss, "SPI3_NSS"),
+            ("spi3", 'a', 15, 6, Nss, "SPI3_NSS"),
+            ("spi3", 'b', 3, 6, Sck, "SPI3_SCK"),
+            ("spi3", 'b', 4, 6, Miso, "SPI3_MISO"),
+            ("spi3", 'b', 5, 6, Mosi, "SPI3_MOSI"),
+            ("spi3", 'c', 10, 6, Sck, "SPI3_SCK"),
+            ("spi3", 'c', 11, 6, Miso, "SPI3_MISO"),
+            ("spi3", 'c', 12, 6, Mosi, "SPI3_MOSI"),
+            ("spi3", 'g', 9, 6, Sck, "SPI3_SCK"),
+        ];
+        // ── STM32WB parts ───────────────────────────────────────────────────
+        //
+        // STM32WB55 (ST open pin data `GPIO-STM32WB55x_gpio_v1_0_Modes.xml`,
+        // DS11929's alternate-function table). SPI1 and SPI2 on AF5 except
+        // PC1/AF3 (SPI2_MOSI) and PD3/AF3 (SPI2_SCK, where AF5 is
+        // SPI2_MISO). The WB has no SPI3 and no PE12-PE15, which is why it
+        // does not share the L4 table. Selected by `pad_map: stm32wb`.
+        const WB: &[(&str, char, u8, u8, SpiSignal, &str)] = &[
+            ("spi1", 'a', 1, 5, Sck, "SPI1_SCK"),
+            ("spi1", 'a', 4, 5, Nss, "SPI1_NSS"),
+            ("spi1", 'a', 5, 5, Sck, "SPI1_SCK"),
+            ("spi1", 'a', 6, 5, Miso, "SPI1_MISO"),
+            ("spi1", 'a', 7, 5, Mosi, "SPI1_MOSI"),
+            ("spi1", 'a', 11, 5, Miso, "SPI1_MISO"),
+            ("spi1", 'a', 12, 5, Mosi, "SPI1_MOSI"),
+            ("spi1", 'a', 15, 5, Nss, "SPI1_NSS"),
+            ("spi1", 'b', 2, 5, Nss, "SPI1_NSS"),
+            ("spi1", 'b', 3, 5, Sck, "SPI1_SCK"),
+            ("spi1", 'b', 4, 5, Miso, "SPI1_MISO"),
+            ("spi1", 'b', 5, 5, Mosi, "SPI1_MOSI"),
+            ("spi2", 'a', 9, 5, Sck, "SPI2_SCK"),
+            ("spi2", 'b', 9, 5, Nss, "SPI2_NSS"),
+            ("spi2", 'b', 10, 5, Sck, "SPI2_SCK"),
+            ("spi2", 'b', 12, 5, Nss, "SPI2_NSS"),
+            ("spi2", 'b', 13, 5, Sck, "SPI2_SCK"),
+            ("spi2", 'b', 14, 5, Miso, "SPI2_MISO"),
+            ("spi2", 'b', 15, 5, Mosi, "SPI2_MOSI"),
+            ("spi2", 'c', 1, 3, Mosi, "SPI2_MOSI"),
+            ("spi2", 'c', 2, 5, Miso, "SPI2_MISO"),
+            ("spi2", 'c', 3, 5, Mosi, "SPI2_MOSI"),
+            ("spi2", 'd', 0, 5, Nss, "SPI2_NSS"),
+            ("spi2", 'd', 1, 5, Sck, "SPI2_SCK"),
+            ("spi2", 'd', 3, 3, Sck, "SPI2_SCK"),
+            ("spi2", 'd', 3, 5, Miso, "SPI2_MISO"),
+            ("spi2", 'd', 4, 5, Mosi, "SPI2_MOSI"),
+        ];
+        // ── STM32L0 parts ───────────────────────────────────────────────────
+        //
+        // STM32L07x (ST open pin data `GPIO-STM32L071_gpio_v1_0_Modes.xml`,
+        // DS10685's alternate-function table). A classic-layout SPI on V2
+        // ports, so before this table the L073 fell through to the F4 one —
+        // AF5 rows on a part whose SPI1 sits on AF0. Selected by
+        // `pad_map: stm32l0`.
+        const L0: &[(&str, char, u8, u8, SpiSignal, &str)] = &[
+            ("spi1", 'a', 4, 0, Nss, "SPI1_NSS"),
+            ("spi1", 'a', 5, 0, Sck, "SPI1_SCK"),
+            ("spi1", 'a', 6, 0, Miso, "SPI1_MISO"),
+            ("spi1", 'a', 7, 0, Mosi, "SPI1_MOSI"),
+            ("spi1", 'a', 11, 0, Miso, "SPI1_MISO"),
+            ("spi1", 'a', 12, 0, Mosi, "SPI1_MOSI"),
+            ("spi1", 'a', 15, 0, Nss, "SPI1_NSS"),
+            ("spi1", 'b', 3, 0, Sck, "SPI1_SCK"),
+            ("spi1", 'b', 4, 0, Miso, "SPI1_MISO"),
+            ("spi1", 'b', 5, 0, Mosi, "SPI1_MOSI"),
+            ("spi1", 'e', 12, 2, Nss, "SPI1_NSS"),
+            ("spi1", 'e', 13, 2, Sck, "SPI1_SCK"),
+            ("spi1", 'e', 14, 2, Miso, "SPI1_MISO"),
+            ("spi1", 'e', 15, 2, Mosi, "SPI1_MOSI"),
+            ("spi2", 'b', 9, 5, Nss, "SPI2_NSS"),
+            ("spi2", 'b', 10, 5, Sck, "SPI2_SCK"),
+            ("spi2", 'b', 12, 0, Nss, "SPI2_NSS"),
+            ("spi2", 'b', 13, 0, Sck, "SPI2_SCK"),
+            ("spi2", 'b', 14, 0, Miso, "SPI2_MISO"),
+            ("spi2", 'b', 15, 0, Mosi, "SPI2_MOSI"),
+            ("spi2", 'c', 2, 2, Miso, "SPI2_MISO"),
+            ("spi2", 'c', 3, 2, Mosi, "SPI2_MOSI"),
+            ("spi2", 'd', 0, 1, Nss, "SPI2_NSS"),
+            ("spi2", 'd', 1, 1, Sck, "SPI2_SCK"),
+            ("spi2", 'd', 3, 2, Miso, "SPI2_MISO"),
+            ("spi2", 'd', 4, 1, Mosi, "SPI2_MOSI"),
         ];
         // V2 ports, F4 parts (DS8626 Table 9: SPI1-2; the F401's DS9716
         // Table 9 agrees on every row). NSS is routed as on the G0, so an F4
@@ -1447,8 +1576,8 @@ impl SystemBus {
         // The NUCLEO-U575ZI-Q Arduino SPI header is SPI1 on PA4 (NSS) / PA5
         // (SCK) / PA6 (MISO) / PA7 (MOSI), all AF5. PA4 is NOT routed: the
         // H5-class "SPI v3" model has no net slave to read an NSS pad (only
-        // the classic/FIFO engine does, which is why only the G0 and F4
-        // tables carry NSS rows) — the same gap the L4/H5/WBA tables have.
+        // the classic/FIFO engine does, which is why only the G0/F4/L4/G4/WB/
+        // L0 tables carry NSS rows) — the same gap the H5/WBA tables have.
         // The U575's AF map is a third pinout on the shared SPI-v3 register
         // file, which is why it is a `SpiPadMap` variant and not a wider H5
         // table.
@@ -1580,6 +1709,9 @@ impl SystemBus {
                             (true, _) => H5,
                             (false, SpiPadMap::Stm32G0) => G0,
                             (false, SpiPadMap::Stm32F4) => F4,
+                            (false, SpiPadMap::Stm32G4) => G4,
+                            (false, SpiPadMap::Stm32Wb) => WB,
+                            (false, SpiPadMap::Stm32L0) => L0,
                             (false, _) if fifo => L4,
                             (false, _) => F4,
                         };
@@ -2264,8 +2396,10 @@ impl SystemBus {
     /// `PSEL.MISO` is routed as an INPUT line (it drives nothing; a pad on it
     /// reads the outside level, and on a world `gpio_net` the bit engine
     /// samples it), and the slave lines are driven only by their bit engines
-    /// on a net. `PSEL.RXD`, `PSEL.CTS`, `PSEL.RTS` and the SPIM's `PSEL.CSN`
-    /// are tracked registers that nothing in this engine DRIVES, so a pad
+    /// on a net. SPIM3's `PSEL.CSN` and `PSELDCX` are routed too: its net
+    /// engine drives them (`spi_nrf_net`). `PSEL.RXD`, `PSEL.CTS`, `PSEL.RTS`
+    /// and SPIM0-2's `PSEL.CSN` are tracked registers that nothing in this
+    /// engine DRIVES, so a pad
     /// routed to one would report a confident constant idle level straight
     /// through real traffic — worse than the GPIO-latch fallback it replaced,
     /// because it looks authoritative. Same call as
@@ -2286,14 +2420,19 @@ impl SystemBus {
             (0x4000_4000, "TWIM1_SCL", "TWIM1_SDA"),
         ];
         /// SPIM instances by base address (PS v1.11 §6.25.6, p727). SPIM3
-        /// (0x4002_F000) is listed for completeness of the address decode; no
-        /// chip yaml in this checkout maps it.
+        /// (0x4002_F000, the nRF52833/nRF52840 `spi3`) also drives its own
+        /// chip select and D/CX: [`SPIM_HW_SELECT`].
         const SPIM: &[(u64, &str, &str, &str)] = &[
             (0x4000_3000, "SPIM0_SCK", "SPIM0_MOSI", "SPIM0_MISO"),
             (0x4000_4000, "SPIM1_SCK", "SPIM1_MOSI", "SPIM1_MISO"),
             (0x4002_3000, "SPIM2_SCK", "SPIM2_MOSI", "SPIM2_MISO"),
             (0x4002_F000, "SPIM3_SCK", "SPIM3_MOSI", "SPIM3_MISO"),
         ];
+        /// SPIM instances with a hardware chip select (`PSEL.CSN`, `CSNPOL`,
+        /// `IFTIMING.CSNDUR`) and D/CX (`PSELDCX`, `DCXCNT`): SPIM3 only
+        /// (nRF52840 PS v1.x §6.25). Both lines are driven by the net engine
+        /// (`spi_nrf_net`), so on a world `gpio_net` they are real wires.
+        const SPIM_HW_SELECT: &[(u64, &str, &str)] = &[(0x4002_F000, "SPIM3_CSN", "SPIM3_DCX")];
         /// SPIS instances by base address (PS v1.11 §6.26.7), signals in
         /// SCK, MOSI, MISO, CSN order. Only the shared serial-instance window
         /// carries this personality in the chip yamls.
@@ -2551,14 +2690,21 @@ impl SystemBus {
                 next_token += 3;
                 let lines = spi.line_levels_arc().pad_lines().clone();
                 spi.install_nrf_pin_claims(&claims, sck_token, mosi_token, miso_token);
-                wired.push((
-                    lines,
-                    vec![
-                        (sck_token, SpiSignal::Sck as usize, sck),
-                        (mosi_token, SpiSignal::Mosi as usize, mosi),
-                        (miso_token, SpiSignal::Miso as usize, miso),
-                    ],
-                ));
+                let mut bindings = vec![
+                    (sck_token, SpiSignal::Sck as usize, sck),
+                    (mosi_token, SpiSignal::Mosi as usize, mosi),
+                    (miso_token, SpiSignal::Miso as usize, miso),
+                ];
+                if let Some(&(_, csn, dcx)) =
+                    SPIM_HW_SELECT.iter().find(|&&(addr, ..)| addr == base)
+                {
+                    let (csn_token, dcx_token) = (next_token, next_token + 1);
+                    next_token += 2;
+                    spi.install_nrf_hw_select_claims(&claims, csn_token, dcx_token);
+                    bindings.push((csn_token, SpiSignal::Nss as usize, csn));
+                    bindings.push((dcx_token, crate::peripherals::spi::NRF_SPIM_LINE_DCX, dcx));
+                }
+                wired.push((lines, bindings));
             }
         }
 

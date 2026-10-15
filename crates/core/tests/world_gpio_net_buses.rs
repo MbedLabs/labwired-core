@@ -1820,6 +1820,300 @@ mod esp32c3 {
     }
 }
 
+/// Wire history of `pin` of `node` as the net delivered it there: (world
+/// time in ps, level), in time order.
+fn deliveries(world: &World, node: &str, pin: u8) -> Vec<(u64, bool)> {
+    let mut out: Vec<_> = world
+        .gpio_net_applied()
+        .iter()
+        .filter(|d| d.node == node && d.pin == pin)
+        .map(|d| (d.due_ps, d.level))
+        .collect();
+    out.sort();
+    out
+}
+
+/// Hardware NSS on the FIFO SPI of the STM32L476 and STM32G474
+/// (`env-spi-l4-nss.yaml`, the G474 swapped in through `system-g474.yaml`):
+/// the master's SPI drives PA4 = SPI1_NSS (AF5, CR2.SSOE=1) and the slave
+/// (SSM=0) is selected by the level its own PA4 = SPI1_NSS pad reads off the
+/// net. `l4-spi-nss-master-nssp.elf` adds CR2.NSSP, NSS pulse mode.
+mod l4_g4_spi_nss {
+    use super::*;
+
+    const MASTER_TX: [u8; 4] = [0xA5, 0x3C, 0x5A, 0xC3];
+    const SLAVE_TX: [u8; 4] = [0x81, 0x82, 0x83, 0x84];
+
+    fn g474(s: String) -> String {
+        s.replace("system-l476.yaml", "system-g474.yaml")
+    }
+
+    fn nssp(s: String) -> String {
+        s.replace("l4-spi-nss-master.elf", "l4-spi-nss-master-nssp.elf")
+    }
+
+    /// The register-file results both pairs leave, whatever the NSS mode.
+    fn check_exchange(world: &World, part: &str) {
+        let a = result(world, "a", 8);
+        assert_eq!(a[7], 1, "{part}: master finished: {a:x?}");
+        assert_eq!(&a[..4], SLAVE_TX.map(u32::from).as_slice(), "{part}");
+        // SR after SPE=0: TXE only, both FIFOs empty, no OVR/MODF.
+        assert_eq!(a[4], 0x0002, "{part}: master SR");
+        let b = result(world, "b", 8);
+        assert_eq!(&b[..4], MASTER_TX.map(u32::from).as_slice(), "{part}");
+        assert_eq!((b[4], b[5]), (4, 0), "{part}: one RXNE per frame, no OVR");
+    }
+
+    fn ssoe_drives_nss(rewrite: fn(String) -> String, part: &str) {
+        let mut world = build("env-spi-l4-nss.yaml", rewrite);
+        run_us(&mut world, 400);
+        check_exchange(&world, part);
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        // NSS: driven low by SPE=1 with SSOE, released at SPE=0 (pull-up).
+        assert_eq!(net(&reports, "nss").edges, 2, "{part}");
+        assert!(net(&reports, "nss").level, "{part}: released at the end");
+        assert_eq!(net(&reports, "sck").edges, 64, "{part}");
+        // MOSI: the bytes, then the pull-down once SPE=0 stops the master
+        // driving it (0xC3 left it high).
+        let mut mosi = bits_of(&MASTER_TX, false);
+        mosi.push(false);
+        assert_eq!(
+            net(&reports, "mosi").edges,
+            edges_of(&mosi, false),
+            "{part}"
+        );
+        // MISO: the answers, the MSB (1) of the next one (0x85, queued from
+        // the RXNE interrupt) at the last trailing edge, then the pull-down
+        // once NSS rises and the slave lets go.
+        let mut miso = bits_of(&SLAVE_TX, false);
+        miso.push(true);
+        miso.push(false);
+        assert_eq!(
+            net(&reports, "miso").edges,
+            edges_of(&miso, false),
+            "{part}"
+        );
+        assert!(!net(&reports, "miso").level, "{part}");
+    }
+
+    #[test]
+    fn an_l476_masters_ssoe_drives_nss_and_the_slave_follows_its_nss_pad() {
+        ssoe_drives_nss(|s| s, "L476");
+    }
+
+    #[test]
+    fn a_g474_masters_ssoe_drives_nss_and_the_slave_follows_its_nss_pad() {
+        ssoe_drives_nss(g474, "G474");
+    }
+
+    fn pulse_mode(rewrite: fn(String) -> String, part: &str) {
+        let mut world = build("env-spi-l4-nss.yaml", rewrite);
+        run_us(&mut world, 400);
+        check_exchange(&world, part);
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        // NSSP with a master that polls RXNE between frames: NSS falls at
+        // SPE=1, rises after each frame and falls again as the next starts:
+        // 1 + 4 + 3 edges, high at the end (and SPE=0 leaves it to the
+        // pull-up).
+        assert_eq!(net(&reports, "nss").edges, 8, "{part}");
+        assert!(net(&reports, "nss").level, "{part}");
+        assert_eq!(net(&reports, "sck").edges, 64, "{part}");
+        // Every NSS low period holds exactly one frame: 16 SCK edges
+        // delivered to the slave between each fall and the next rise.
+        let nss = deliveries(&world, "b", 4);
+        let sck = deliveries(&world, "b", 5);
+        assert_eq!(nss.len(), 8, "{part}: {nss:?}");
+        for pair in nss.chunks(2) {
+            let (fall, rise) = (pair[0], pair[1]);
+            assert!(!fall.1 && rise.1, "{part}: {nss:?}");
+            let inside = sck
+                .iter()
+                .filter(|&&(t, _)| t > fall.0 && t <= rise.0)
+                .count();
+            assert_eq!(inside, 16, "{part}: SCK edges in one NSS low period");
+        }
+    }
+
+    #[test]
+    fn an_l476_master_in_nss_pulse_mode_frames_every_byte() {
+        pulse_mode(nssp, "L476");
+    }
+
+    #[test]
+    fn a_g474_master_in_nss_pulse_mode_frames_every_byte() {
+        pulse_mode(|s| g474(nssp(s)), "G474");
+    }
+
+    /// Drop the `nss` net: the slave's NSS pad reads no level.
+    fn without_nss(s: String) -> String {
+        let start = s.find("  - type: gpio_net").unwrap();
+        let end = start + 1 + s[start + 1..].find("  - type: gpio_net").unwrap();
+        format!("{}{}", &s[..start], &s[end..])
+    }
+
+    #[test]
+    fn with_nss_unwired_the_hardware_select_slave_is_never_selected() {
+        for (rewrite, part) in [
+            (without_nss as fn(String) -> String, "L476"),
+            (|s| g474(without_nss(s)), "G474"),
+        ] {
+            let mut world = build("env-spi-l4-nss.yaml", rewrite);
+            run_us(&mut world, 400);
+            let a = result(&world, "a", 8);
+            assert_eq!(a[7], 1, "{part}: master finished: {a:x?}");
+            assert_eq!(&a[..4], &[0, 0, 0, 0], "{part}: MISO is the pull-down");
+            let b = result(&world, "b", 8);
+            assert_eq!(b[4], 0, "{part}: the slave was never selected");
+            let reports = world.gpio_net_reports();
+            no_contention(&reports);
+            assert_eq!(net(&reports, "miso").edges, 0, "{part}");
+        }
+    }
+
+    #[test]
+    fn hardware_nss_frames_do_not_depend_on_node_order_or_round_size() {
+        for rewrite in [(|s| s) as fn(String) -> String, g474, nssp, |s| {
+            g474(nssp(s))
+        }] {
+            assert_order_and_round_independent("env-spi-l4-nss.yaml", rewrite, ["a", "b"], 400, 8);
+        }
+    }
+}
+
+/// The nRF52840's SPIM3 with its hardware chip select and D/CX against the
+/// STM32G071's SPI1 on hardware NSS (`env-spi-nrf52-spim3.yaml`): CSN on
+/// P0.02 (`CSNPOL`, `IFTIMING.CSNDUR` = 64 cycles), D/CX on P0.06 with
+/// `DCXCNT` = 1.
+mod nrf52_spim3 {
+    use super::*;
+
+    const MASTER_TX: [u8; 4] = [0xA5, 0x3C, 0x5A, 0xC3];
+    const SLAVE_TX: [u8; 4] = [0x81, 0x82, 0x83, 0x84];
+    /// One cycle of the nRF52840's 64 MHz clock, in ps.
+    const CYCLE_PS: u64 = 15_625;
+    /// `IFTIMING.CSNDUR` as the firmware sets it.
+    const CSNDUR: u64 = 64;
+    /// Half an SCK period at K125: 512 cycles a bit.
+    const HALF: u64 = 256;
+
+    fn csnpol_high(s: String) -> String {
+        s.replace("nrf-spim3-master.elf", "nrf-spim3-master-csnpol.elf")
+    }
+
+    /// CSN against SCK and D/CX against the bytes, as the G071 sees them.
+    /// `active` is CSN's asserted level.
+    fn check_timing(world: &World, active: bool) {
+        let cs = deliveries(world, "b", 4);
+        let sck = deliveries(world, "b", 5);
+        let dcx = deliveries(world, "b", 8);
+        let asserted = cs
+            .iter()
+            .find(|&&(_, l)| l == active)
+            .expect("CSN asserted")
+            .0;
+        let released = cs
+            .iter()
+            .rev()
+            .find(|&&(_, l)| l != active)
+            .expect("CSN released")
+            .0;
+        assert_eq!(sck.len(), 64, "{sck:?}");
+        // CSNDUR, then half an SCK period with the first bit on MOSI, then
+        // the first edge; and CSNDUR from the last edge to the release.
+        assert_eq!(sck[0].0 - asserted, (CSNDUR + HALF) * CYCLE_PS);
+        assert_eq!(released - sck[63].0, CSNDUR * CYCLE_PS);
+        // D/CX: low with CSN for the one command byte, high again at that
+        // byte's last SCK edge, and nothing more.
+        assert_eq!(dcx, vec![(asserted, false), (sck[15].0, true)]);
+    }
+
+    #[test]
+    fn spim3_drives_its_own_csn_and_dcx_around_the_exchange() {
+        let mut world = build("env-spi-nrf52-spim3.yaml", |s| s);
+        run_us(&mut world, 600);
+        let nrf = result(&world, "nrf", 8);
+        assert_eq!(nrf[7], 1, "master finished: {nrf:x?}");
+        assert_eq!(&nrf[..4], SLAVE_TX.map(u32::from).as_slice(), "RX buffer");
+        assert_eq!((nrf[4], nrf[5]), (4, 4), "TXD.AMOUNT, RXD.AMOUNT");
+        assert_eq!(nrf[6], 1, "one END interrupt");
+        let b = result(&world, "b", 8);
+        assert_eq!(&b[..4], MASTER_TX.map(u32::from).as_slice());
+        assert_eq!((b[4], b[5]), (4, 0), "one RXNE per frame, no OVR");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        // CSNPOL = 0: idle high from ENABLE (the pull-up's level, no edge),
+        // low for the transfer.
+        assert_eq!(net(&reports, "cs").edges, 2);
+        assert!(net(&reports, "cs").level);
+        assert_eq!(net(&reports, "sck").edges, 64);
+        assert_eq!(net(&reports, "mosi").edges, data_edges(&MASTER_TX, false));
+        // MISO: the answers; at the last trailing edge the next word's MSB
+        // (1: the G071's 0x85); the pull-down once CSN rises.
+        let mut miso = bits_of(&SLAVE_TX, false);
+        miso.push(true);
+        miso.push(false);
+        assert_eq!(net(&reports, "miso").edges, edges_of(&miso, false));
+        assert_eq!(net(&reports, "dcx").edges, 2);
+        assert!(net(&reports, "dcx").level);
+        check_timing(&world, false);
+    }
+
+    #[test]
+    fn an_active_high_csn_selects_the_active_low_slave_only_while_idle() {
+        let mut world = build("env-spi-nrf52-spim3.yaml", csnpol_high);
+        run_us(&mut world, 600);
+        let nrf = result(&world, "nrf", 8);
+        assert_eq!(nrf[7], 1, "master finished: {nrf:x?}");
+        // The G071 is deselected exactly while the SPIM clocks: MISO is the
+        // pull-down and the slave takes no frame.
+        assert_eq!(&nrf[..4], &[0, 0, 0, 0]);
+        assert_eq!((nrf[4], nrf[5]), (4, 4));
+        assert_eq!(result(&world, "b", 8)[4], 0);
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        // The GPIO latch takes the pad low first (inactive for CSNPOL = 1),
+        // ENABLE keeps it there, the transfer raises and drops it.
+        assert_eq!(net(&reports, "cs").edges, 3);
+        assert!(!net(&reports, "cs").level);
+        assert_eq!(net(&reports, "sck").edges, 64);
+        assert_eq!(net(&reports, "dcx").edges, 2);
+        check_timing(&world, true);
+    }
+
+    #[test]
+    fn with_csn_unwired_the_g071_is_never_selected() {
+        // Without the `cs` net the G071's NSS pad reads no level.
+        let mut world = build("env-spi-nrf52-spim3.yaml", |s| {
+            let start = s.find("  - type: gpio_net").unwrap();
+            let end = start + 1 + s[start + 1..].find("  - type: gpio_net").unwrap();
+            format!("{}{}", &s[..start], &s[end..])
+        });
+        run_us(&mut world, 600);
+        let nrf = result(&world, "nrf", 8);
+        assert_eq!(nrf[7], 1, "master finished: {nrf:x?}");
+        assert_eq!(&nrf[..4], &[0, 0, 0, 0], "MISO is the pull-down");
+        assert_eq!(result(&world, "b", 8)[4], 0, "never selected");
+    }
+
+    #[test]
+    fn spim3_exchanges_do_not_depend_on_node_order_or_round_size() {
+        assert_order_and_round_independent("env-spi-nrf52-spim3.yaml", |s| s, ["nrf", "b"], 600, 8);
+        assert_order_and_round_independent(
+            "env-spi-nrf52-spim3.yaml",
+            csnpol_high,
+            ["nrf", "b"],
+            600,
+            8,
+        );
+    }
+}
+
 /// The ESP32-S3 GP-SPI2 and I2C0, and the classic ESP32 VSPI (master), HSPI
 /// (slave) and I2C0, against the STM32G071, both ways round, routed through
 /// each part's GPIO matrix (`env-spi-esp32s3*.yaml`, `env-spi-esp32*.yaml`,

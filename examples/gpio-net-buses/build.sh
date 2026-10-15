@@ -54,6 +54,17 @@ for fw in nrf_spim_master nrf_spis_slave nrf_twim_controller nrf_twis_target; do
     "$CC" "${NRF[@]}" "src/$fw.c" -o "firmware/${fw//_/-}.elf"
 done
 "$CC" "${NRF[@]}" -DSLOW=1 src/nrf_twis_target.c -o firmware/nrf-twis-target-slow.elf
+# nRF52840 SPIM3 with its hardware chip select and D/CX, CSN active low and
+# (-DCSNPOL=1) active high.
+"$CC" "${NRF[@]}" src/nrf_spim3_master.c -o firmware/nrf-spim3-master.elf
+"$CC" "${NRF[@]}" -DCSNPOL=1 src/nrf_spim3_master.c -o firmware/nrf-spim3-master-csnpol.elf
+# STM32L476 and STM32G474 (Cortex-M4, FIFO SPI, same SPI1/GPIOA/RCC
+# addresses): SPI1 hardware NSS, the master's SSOE driving it (-DNSSP=1:
+# pulse mode), the slave (SSM=0) reading it. One image runs on both parts.
+L4=(--target=thumbv7em-none-eabi -mcpu=cortex-m4 "${COMMON[@]}" -T src/g0.ld)
+"$CC" "${L4[@]}" src/l4_spi_nss_master.c -o firmware/l4-spi-nss-master.elf
+"$CC" "${L4[@]}" -DNSSP=1 src/l4_spi_nss_master.c -o firmware/l4-spi-nss-master-nssp.elf
+"$CC" "${L4[@]}" src/l4_spi_nss_slave.c -o firmware/l4-spi-nss-slave.elf
 # ESP32-C3 and ESP32-C6 (GP-SPI2, I2C0) against the G071, register level, no
 # IDF: the same sources for both chips (-DCHIP_C6 picks the C6's bases and
 # GPIO-matrix numbers). The esp-hal 1.x masters live in esp32c3-esp-hal/

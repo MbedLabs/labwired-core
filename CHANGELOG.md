@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- Hardware chip select on `gpio_net`s for more parts. The STM32L476 SPI pad
+  table routes NSS (SPI1 PA4/PA15/PE12 and SPI2 PB9/PB12/PD0 on AF5, SPI3
+  PA4/PA15 on AF6), and the STM32G474, STM32WB55 and STM32L073 get their own
+  SPI tables with NSS (`pad_map: stm32g4` / `stm32wb` / `stm32l0`, read off
+  ST's open pin data): until now the G4 and WB used the L4 table (whose
+  PE12-PE15/AF5 rows are SPI4 on a G4) and the L073 the F4 AF5 one (its SPI1
+  is on AF0). A FIFO master with `CR2.SSOE=1` drives NSS (with `NSSP`
+  pulses) and a slave with `SSM=0` takes it from its pad. The nRF52840 gains
+  SPIM3 at 0x4002F000 (`spi3`; the inert ACL stub that sat there moves to the
+  reserved 0x4002E000), and SPIM3 on a net drives its own chip select and
+  D/CX: `PSEL.CSN`, `CSNPOL`, `IFTIMING.CSNDUR` (CSN-to-SCK, SCK-to-CSN and
+  CSN-high times) and `PSELDCX`/`DCXCNT`. The nRF52 SPIM register map now
+  decodes `IFTIMING.RXDELAY`/`CSNDUR`, `CSNPOL`, `PSELDCX` and `DCXCNT`
+  (0x560-0x570), and `PSEL.CSN`/`PSELDCX` reset disconnected, as the SVD
+  says. Tested in `examples/gpio-net-buses` (`env-spi-l4-nss.yaml` on an L476
+  and a G474 pair, `env-spi-nrf52-spim3.yaml` against a G071 on hardware
+  NSS), each re-run with the nodes swapped and with 37 ns rounds.
 - ESP32-S3 and classic ESP32 SPI and I²C on `gpio_net`s, bit by bit at the
   pads (`docs/howto/gpio-nets.md`, "Buses over nets";
   `examples/gpio-net-buses`, `tests/world_gpio_net_buses.rs`):
