@@ -184,7 +184,9 @@ impl PeripheralTickResult {
 /// Every CPU core MUST emit, for each retired instruction, in this order:
 ///
 ///   1. `on_step_start(pc, opcode)` — before execution, `pc` is the address
-///      being executed and `opcode` its raw little-endian encoding.
+///      being executed and `opcode` its raw little-endian encoding. Native
+///      Cortex-A delivers this notification after execution, in the same event
+///      order, because zero-retirement exception entry must emit no event.
 ///   2. `TraceEvent::InstructionRetired { pc, opcode }` via [`emit_trace_event`].
 ///   3. `on_step_end(cycles, registers)` — after execution.
 ///
@@ -430,6 +432,17 @@ pub trait Cpu: Send {
         observers: &[Arc<dyn SimulationObserver>],
         config: &SimulationConfig,
     ) -> SimResult<()>;
+    /// Retire one instruction, or report zero while architecturally waiting.
+    /// Existing MCU cores retain their one-instruction step contract.
+    fn step_retired(
+        &mut self,
+        bus: &mut dyn Bus,
+        observers: &[Arc<dyn SimulationObserver>],
+        config: &SimulationConfig,
+    ) -> SimResult<u32> {
+        self.step(bus, observers, config)?;
+        Ok(1)
+    }
     fn step_batch(
         &mut self,
         bus: &mut dyn Bus,
@@ -458,6 +471,19 @@ pub trait Cpu: Send {
     fn invalidate_code_caches(&mut self) {}
     fn snapshot(&self) -> snapshot::CpuSnapshot;
     fn apply_snapshot(&mut self, snapshot: &snapshot::CpuSnapshot);
+
+    /// Application cores start a loaded ELF at e_entry, without the Cortex-M
+    /// vector-table interpretation used by the legacy load path.
+    fn uses_elf_entry_point(&self) -> bool {
+        false
+    }
+
+    /// Fallible restore entry point for machines. Cores with diagnostic-only
+    /// snapshots must override this rather than report a successful resume.
+    fn try_apply_snapshot(&mut self, snapshot: &snapshot::CpuSnapshot) -> SimResult<()> {
+        self.apply_snapshot(snapshot);
+        Ok(())
+    }
 
     /// Full mid-flight CPU state for binary runtime snapshots: the arch tag
     /// plus an opaque blob the matching CPU type knows how to parse, or
@@ -676,6 +702,14 @@ impl Cpu for Box<dyn Cpu> {
     ) -> SimResult<()> {
         (**self).step(bus, observers, config)
     }
+    fn step_retired(
+        &mut self,
+        bus: &mut dyn Bus,
+        observers: &[Arc<dyn SimulationObserver>],
+        config: &SimulationConfig,
+    ) -> SimResult<u32> {
+        (**self).step_retired(bus, observers, config)
+    }
     fn step_batch(
         &mut self,
         bus: &mut dyn Bus,
@@ -725,6 +759,12 @@ impl Cpu for Box<dyn Cpu> {
     }
     fn apply_snapshot(&mut self, s: &snapshot::CpuSnapshot) {
         (**self).apply_snapshot(s)
+    }
+    fn uses_elf_entry_point(&self) -> bool {
+        (**self).uses_elf_entry_point()
+    }
+    fn try_apply_snapshot(&mut self, s: &snapshot::CpuSnapshot) -> SimResult<()> {
+        (**self).try_apply_snapshot(s)
     }
     fn runtime_snapshot(&self) -> Option<(runtime_snapshot::CpuKind, Vec<u8>)> {
         (**self).runtime_snapshot()
@@ -1508,6 +1548,12 @@ pub trait Peripheral: std::fmt::Debug + Send {
         None
     }
 
+    /// Optional fixed-pin I2C attachment capability. Other controllers retain
+    /// their existing routing-aware factory dispatch.
+    fn i2c_slave_host(&mut self) -> Option<&mut dyn peripherals::device::I2cSlaveHost> {
+        None
+    }
+
     /// True if this controller hosts I²C slaves whose data-ready clocks the
     /// machine's central time drive should advance (see
     /// [`Self::advance_attached_i2c_us`]). Default `false`.
@@ -2125,6 +2171,40 @@ pub enum FetchPermission {
 }
 
 pub trait Bus {
+    /// ARM application-core interrupt levels, including deassertion.
+    fn arm_irq_fiq_levels(&self) -> Option<(bool, bool)> {
+        None
+    }
+    /// Stable allocation-unique physical code identity. Native ARM execution
+    /// refuses buses that cannot supply one.
+    fn arm_code_identity(&self) -> Option<u64> {
+        None
+    }
+    fn arm_cp15_read(&self, register_key: u32, wide: bool) -> SimResult<u64> {
+        Err(SimulationError::NotImplemented(format!(
+            "ARM CP15 read {register_key:#x} (wide={wide})"
+        )))
+    }
+    fn arm_cp15_write(&mut self, register_key: u32, wide: bool, _value: u64) -> SimResult<()> {
+        Err(SimulationError::NotImplemented(format!(
+            "ARM CP15 write {register_key:#x} (wide={wide})"
+        )))
+    }
+    fn next_cpu_interrupt_deadline_cycle(&self) -> Option<u64> {
+        None
+    }
+    /// An eight-byte transaction must remain one transaction. In particular,
+    /// splitting an MMIO access can duplicate or consume register side effects.
+    fn read_u64(&self, addr: u64) -> SimResult<u64> {
+        Err(SimulationError::NotImplemented(format!(
+            "eight-byte bus read at {addr:#x}"
+        )))
+    }
+    fn write_u64(&mut self, addr: u64, _value: u64) -> SimResult<()> {
+        Err(SimulationError::NotImplemented(format!(
+            "eight-byte bus write at {addr:#x}"
+        )))
+    }
     fn read_u8(&self, addr: u64) -> SimResult<u8>;
     fn write_u8(&mut self, addr: u64, value: u8) -> SimResult<()>;
     fn tick_peripherals(&mut self) -> Vec<u32>; // Returns list of pending exception numbers
@@ -3437,9 +3517,9 @@ impl<C: Cpu> Machine<C> {
         }
     }
 
-    /// Advance every centrally-driven off-chip device's clock — I²C slave or
-    /// SPI device — to the chip's simulated-µs "now". Called once per scheduler
-    /// slice from [`Self::commit_advance_boundary`].
+    /// Advance every centrally-driven off-chip device's clock — I²C, SPI or
+    /// UART peer — to the chip's simulated-µs "now". Called after each committed
+    /// CPU boundary and each committed architectural idle fast-forward boundary.
     ///
     /// **Two sources, in strict preference order.**
     ///
@@ -3447,7 +3527,7 @@ impl<C: Cpu> Machine<C> {
     ///    ([`Peripheral::sim_time_us`] — the ESP32 SYSTIMER). An absolute
     ///    counter beats anything derived: it already accounts for its own
     ///    clock tree, so the ESP32 path is byte-identical to before.
-    /// 2. Otherwise, DERIVED from the executed cycle count and the system's
+    /// 2. Otherwise, DERIVED from the committed cycle count (including idle) and the system's
     ///    declared core clock: `cycles * 1_000_000 / cpu_hz`, integer, monotonic
     ///    (`total_cycles` only grows, `cpu_hz` is fixed for the life of the
     ///    bus). This is what makes a declarative `data_ready` / `delay_us`
@@ -3653,6 +3733,9 @@ impl<C: Cpu> Machine<C> {
                 return 0;
             }
             budget = budget.min(remaining);
+            if let Some(deadline) = self.bus.next_cpu_interrupt_deadline_cycle() {
+                budget = budget.min(deadline.saturating_sub(self.total_cycles));
+            }
             if let Some(deadline) = self.bus.next_motor_service_deadline_cycle() {
                 budget = budget.min(deadline.saturating_sub(self.total_cycles).max(1));
             }
@@ -3717,6 +3800,10 @@ impl<C: Cpu> Machine<C> {
             if idle_poll {
                 self.bus.run_idle_poll_bus_tick();
             }
+            // Architectural idle still advances off-chip time. Without this
+            // shared clock boundary a sleeping guest starves paced UART peers
+            // and RX timeouts until unrelated CPU work resumes.
+            self.advance_central_i2c_time();
             u64::from(skipped)
         }
     }
@@ -3804,6 +3891,19 @@ impl<C: Cpu> Machine<C> {
                         "apply_runtime_snapshot: peripheral '{name}' not on bus"
                     ))
                 })?;
+            // Older ROM-boot captures could contain an empty declarative
+            // placeholder followed by the behavioral device under the same
+            // name. After that bus entry is replaced in place, only the real
+            // state belongs to it. Keep singleton-empty and malformed state
+            // validation, and still require even a placeholder's device above.
+            if blob.is_empty()
+                && snap
+                    .peripherals
+                    .iter()
+                    .any(|(other_name, other_blob)| other_name == name && !other_blob.is_empty())
+            {
+                continue;
+            }
             entry.dev.restore_runtime_snapshot(blob)?;
         }
         // Restore flat linear windows (RISC-V SRAM/IRAM; empty for other
@@ -3869,6 +3969,9 @@ impl<C: Cpu> Machine<C> {
                 }
             }
             if !all_written {
+                if self.cpu.uses_elf_entry_point() {
+                    return Err(SimulationError::MemoryViolation(segment.start_addr));
+                }
                 tracing::warn!(
                     "Failed to load segment at {:#x} - outside of memory map",
                     segment.start_addr
@@ -3880,6 +3983,13 @@ impl<C: Cpu> Machine<C> {
             observer.on_simulation_start();
         }
         self.reset()?;
+
+        if self.cpu.uses_elf_entry_point() {
+            let entry = u32::try_from(image.entry_point)
+                .map_err(|_| SimulationError::MemoryViolation(image.entry_point))?;
+            self.cpu.set_pc(entry);
+            return Ok(());
+        }
 
         // Resolve the reset vector.
         //
@@ -4495,7 +4605,7 @@ impl<C: Cpu> Machine<C> {
                 got: snapshot.schema_version,
             });
         }
-        self.cpu.apply_snapshot(&snapshot.cpu);
+        self.cpu.try_apply_snapshot(&snapshot.cpu)?;
         for p in &mut self.bus.peripherals {
             if let Some(state) = snapshot.peripherals.get(&p.name) {
                 p.dev.restore(state.clone())?;

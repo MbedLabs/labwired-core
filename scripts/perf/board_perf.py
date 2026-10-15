@@ -318,10 +318,20 @@ FIXTURES = {
 # precisely so it cannot be dropped from here and start reading as coverage —
 # which is what happened when the Xtensa parts were moved out of this dict into
 # FIXTURES and WAIVED was emptied.
-# Empty on purpose. Chips that share a Cortex-M or RISC-V link map run that
-# map's spin ELF on their own chip config and get their own baseline. A waiver
-# is only for a map no fixture can be linked for.
-WAIVED: dict[str, str] = {}
+# Chips that share a Cortex-M or RISC-V link map run that map's spin ELF on
+# their own chip config and get their own baseline. A generic CPU-only smoke
+# fixture must not stand in for an unimplemented board platform.
+WAIVED: dict[str, str] = {
+    "rv1103": (
+        "The old Cortex-A7 CPU subset fixture is not representative perf evidence. "
+        "Optional native reduced Linux direct boot and joint I2C3/UART4 basket "
+        "acceptance now pass through Machine/SystemBus/CosimSession at fixed "
+        "functional 24MHz with a persistent reduced plant. The actual run took "
+        "644 wall seconds for 89 functional-clock seconds; no 1x or physical "
+        "RV1103 platform throughput claim. Vendor BSP/SD/ROM boot remains "
+        "unimplemented and no representative perf fixture qualifies this board."
+    ),
+}
 
 # Descriptors that are CI plumbing rather than a modelled part.
 CHIP_EXCLUDE_PREFIX = "ci-fixture-"

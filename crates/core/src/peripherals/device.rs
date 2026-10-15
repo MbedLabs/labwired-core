@@ -51,7 +51,17 @@ use std::any::Any;
 use std::sync::mpsc::{Receiver, Sender};
 
 // ── I²C ─────────────────────────────────────────────────────────────────────
+/// Controller capability for attaching a slave to a fixed-pin I2C host.
+/// Routing-aware controller families retain their existing attachment path.
+pub trait I2cSlaveHost {
+    fn attach_slave(&mut self, device: Box<dyn I2cDevice>);
+}
+
 pub trait I2cDevice: Send {
+    /// Optional transaction epoch. A change invalidates a controller selection.
+    fn transaction_generation(&self) -> Option<u64> {
+        None
+    }
     fn address(&self) -> u8;
     fn read(&mut self) -> u8;
     fn write(&mut self, data: u8);
@@ -136,11 +146,19 @@ pub trait I2cDevice: Send {
             None => false,
         }
     }
-    fn as_any(&self) -> Option<&dyn std::any::Any> {
+    /// Readback through a transparent decorator. Wire operations, mutable
+    /// inputs and power gating still belong to the decorator itself.
+    fn wrapped_device(&self) -> Option<&dyn I2cDevice> {
         None
     }
-    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+    fn wrapped_device_mut(&mut self) -> Option<&mut dyn I2cDevice> {
         None
+    }
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        self.wrapped_device()?.as_any()
+    }
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        self.wrapped_device_mut()?.as_any_mut()
     }
     /// Runtime-drivable view of this device, if it accepts simulated input.
     /// Overridden by input devices (accelerometers, …) so the generic
@@ -357,7 +375,46 @@ pub trait SpiDevice: Send {
 /// "is not a UART" and two C3s could not be wired together at all. A new UART
 /// model now joins by implementing this trait, not by editing the seam.
 pub trait UartStreamHost {
-    /// Bind a peer to this UART's RX/TX paths.
+    /// Optional console capture capability. False keeps existing family-specific
+    /// attachment behavior; models may accept a bounded functional capture.
+    fn attach_console_sink(
+        &mut self,
+        _sink: Option<std::sync::Arc<std::sync::Mutex<Vec<u8>>>>,
+        _echo: bool,
+    ) -> bool {
+        false
+    }
+
+    /// Whether an ordinary peer can be attached without violating exclusivity.
+    fn accepts_stream_attachment(&self) -> bool {
+        true
+    }
+
+    /// Attach one epoch-aware protocol peer to an otherwise empty host.
+    /// Default rejects: clearing a shared RX FIFO is unsafe without exclusivity.
+    fn attach_exclusive_stream_device(
+        &mut self,
+        _dev: Box<dyn UartStreamDevice>,
+    ) -> Result<(), String> {
+        Err("UART does not support an exclusive generation-aware peer".into())
+    }
+
+    /// Fallible ordinary attachment, validating before any host side effects.
+    /// Generation-aware peers must use the explicit exclusive capability so
+    /// hosts cannot silently invalidate a shared legacy RX FIFO.
+    fn try_attach_stream_device(&mut self, dev: Box<dyn UartStreamDevice>) -> Result<(), String> {
+        if !self.accepts_stream_attachment() {
+            return Err("UART already hosts an exclusive generation-aware peer".into());
+        }
+        if dev.stream_generation().is_some() {
+            return Err("generation-aware peer requires explicit exclusive attachment".into());
+        }
+        self.attach_stream_device(dev);
+        Ok(())
+    }
+
+    /// Low-level binding for a validated ordinary peer. Fallible attachment
+    /// seams should use `try_attach_stream_device` instead.
     fn attach_stream_device(&mut self, dev: Box<dyn UartStreamDevice>);
 
     /// Stop mirroring TX to the console/capture sink. A cross-linked UART
@@ -411,6 +468,17 @@ pub fn inject_remote_into(
 
 /// A device that emits bytes through the UART's RX path (e.g. a GPS module).
 pub trait UartStreamDevice: Send {
+    /// Epoch for a dedicated stream; a change invalidates delivered host RX.
+    fn stream_generation(&self) -> Option<u64> {
+        None
+    }
+    fn artifacts(
+        &self,
+        _id: &str,
+        _opts: &crate::inspect::InspectOpts,
+    ) -> Vec<crate::inspect::Artifact> {
+        Vec::new()
+    }
     /// Called periodically by the bus tick. Returns the next byte to push into UART RX,
     /// or None if no byte is pending. Implementations should respect `elapsed_us` to
     /// pace output (e.g. 9600 baud → ~1 ms/byte → emit one byte per ~1000 us tick).

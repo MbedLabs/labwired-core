@@ -220,8 +220,11 @@ pub struct PeripheralDescriptor {
     pub peripheral: String,
     pub version: String,
     pub registers: Vec<RegisterDescriptor>,
+    /// Keys iterate in lexical String order. Duplicate input names retain the
+    /// existing last-inserted value. This concrete ordered map type replaces
+    /// HashMap; explicit downstream HashMap assignments must migrate.
     #[serde(default)]
-    pub interrupts: Option<std::collections::HashMap<String, u32>>,
+    pub interrupts: Option<std::collections::BTreeMap<String, u32>>,
     #[serde(default)]
     pub timing: Option<Vec<TimingDescriptor>>,
 }
@@ -2043,6 +2046,12 @@ pub struct I2cCommand {
     /// word plus CRC on the wire). Accepted and ignored.
     #[serde(default)]
     pub params_words: u8,
+    /// Continuous-measurement command: once dispatched, every later read phase
+    /// re-samples the response from the current inputs (BH1750 `0x10`, where
+    /// the master writes the mode once and then only reads). Default false:
+    /// the response is latched at dispatch, as for a one-shot measurement.
+    #[serde(default)]
+    pub continuous: bool,
 }
 
 /// One word of a command response — either a live measurement (`source`) or a
@@ -3188,6 +3197,14 @@ pub struct AnalogSpec {
     /// or hold the last point's voltage (`hold_last`).
     #[serde(default)]
     pub above_last: AnalogAboveLast,
+    /// A RATIOMETRIC part (a potentiometer, a divider across the supply)
+    /// outputs a fraction of whatever rail its ends sit on. The curve is then
+    /// written at this reference supply in mV, and a placed part's
+    /// `config.supply_mv` rescales it: a pot on a 5 V Uno reaches 5000 mV,
+    /// not the curve's 3300. Absent: the curve is absolute and `supply_mv`
+    /// is refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ratiometric_ref_mv: Option<f32>,
 }
 
 /// How an `analog_source`'s real millivolt value becomes the integer count the
@@ -4330,7 +4347,7 @@ impl PeripheralDescriptor {
 
 impl From<labwired_ir::IrPeripheral> for PeripheralDescriptor {
     fn from(ir: labwired_ir::IrPeripheral) -> Self {
-        let mut interrupts = std::collections::HashMap::new();
+        let mut interrupts = std::collections::BTreeMap::new();
         for int in ir.interrupts {
             interrupts.insert(int.name, int.value);
         }

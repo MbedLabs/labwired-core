@@ -81,8 +81,8 @@ impl SystemBus {
     fn load_debug_schemas(
         chip: &ChipDescriptor,
         manifest: &SystemManifest,
-    ) -> std::collections::HashMap<String, Vec<crate::inspect::RegisterSchema>> {
-        let mut out = std::collections::HashMap::new();
+    ) -> std::collections::BTreeMap<String, Vec<crate::inspect::RegisterSchema>> {
+        let mut out = std::collections::BTreeMap::new();
 
         for p_cfg in &chip.peripherals {
             let Some(path) = p_cfg.config.get("debug_schema").and_then(|v| v.as_str()) else {
@@ -361,6 +361,7 @@ impl SystemBus {
             io_voltage_v: None,
             gpio_input_thresholds: None,
             supply: crate::power::SupplySupervisor::default(),
+            supply_domains: Default::default(),
         };
         bus.record_external_devices(manifest);
 

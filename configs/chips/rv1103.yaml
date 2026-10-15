@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: MIT
+# This generic YAML descriptor declares CPU/memory geometry only.
+# The separate optional native rv1103-linux CLI passed reduced direct zImage
+# boot using MMU/exceptions, GIC400, architectural timer and DW UART2:
+# examples/luckfox-pico-mini-a-linux/VALIDATION.md. These devices are not
+# instantiated by this descriptor or the older qemu-arm ELF adapter.
+# Mini A uses RV1103G1 with 512 Mbit (64 MiB) SIP DDR2:
+# docs/assets/luckfox-pico-mini-a/rv1103-datasheet.pdf, section 1.2.2.
+# DDR physical base: Luckfox SDK sysdrv/source/uboot/u-boot/include/configs/
+# rv1106_common.h CONFIG_SYS_SDRAM_BASE=0. SDK revision:
+# 824b817f889c2cbff1d48fcdb18ab494a68f69d1. The shared RV1106/RV1103 DTS
+# declares SRAM at 0xff6c0000. See docs/boards/luckfox-pico-mini-a.md.
+name: rv1103
+arch: arm
+core: cortex-a7
+registers_count: 17
+# Vendor advertised maximum; native adapter uses one scheduling tick per
+# instruction, not measured Cortex-A7 cycle timings or DVFS.
+cpu_hz: 1_200_000_000
+# The carrier catalog records the Mini A's 3.3 V pad domain separately.
+# No silicon GPIO thresholds are transcribed here; neither pad-electrical
+# key is declared until the GPIO model and cited thresholds are onboarded.
+# No embedded flash is invented: Mini A boots from external MicroSD.
+# Boot ROM, storage, DDR initialization, CRU, pinmux, GPIO, DMA, I2C and
+# external modules remain absent. This descriptor establishes no board L0/L1.
+flash: { base: 0, size: 0 }
+ram: { base: 0, size: "64MiB" }
+memory_regions:
+  - { name: sram, base: 0xff6c0000, size: "256KiB" }
+peripherals: []
+# Explicit native basket opt-in only; generic peripherals above remain empty.
+# Register windows / SPI IDs match the reviewed reduced basket DT.
+native_basket_peripherals:
+  - { id: i2c3, type: rk3x_i2c, base_address: 0xff460000, size: 4KiB, irq: 53 }
+  - { id: uart4, type: dw_uart, base_address: 0xff4e0000, size: 256B, irq: 61 }

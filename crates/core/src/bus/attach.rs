@@ -46,6 +46,10 @@ impl SystemBus {
         let idx = self
             .find_peripheral_index_by_name(controller)
             .ok_or_else(|| anyhow::anyhow!("attach_i2c_slave: no peripheral '{controller}'"))?;
+        if let Some(host) = self.peripherals[idx].dev.i2c_slave_host() {
+            host.attach_slave(wrapped);
+            return Ok(());
+        }
         let any = self.peripherals[idx].dev.as_any_mut().ok_or_else(|| {
             anyhow::anyhow!("attach_i2c_slave: '{controller}' is not downcastable")
         })?;

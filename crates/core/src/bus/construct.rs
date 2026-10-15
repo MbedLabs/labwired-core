@@ -52,7 +52,7 @@ impl SystemBus {
                     clock_gate: None,
                 },
             ],
-            debug_schemas: std::collections::HashMap::new(),
+            debug_schemas: std::collections::BTreeMap::new(),
             nvic: None,
             observers: Vec::new(),
             config: crate::SimulationConfig::default(),
@@ -128,6 +128,7 @@ impl SystemBus {
             io_voltage_v: None,
             gpio_input_thresholds: None,
             supply: crate::power::SupplySupervisor::default(),
+            supply_domains: Default::default(),
             external_device_decls: Vec::new(),
             semihost: SemihostState::new(),
         };
@@ -147,7 +148,7 @@ impl SystemBus {
             ram: LinearMemory::new(0, 0),
             extra_mem: Vec::new(),
             peripherals: Vec::new(),
-            debug_schemas: std::collections::HashMap::new(),
+            debug_schemas: std::collections::BTreeMap::new(),
             nvic: None,
             observers: Vec::new(),
             config: crate::SimulationConfig::default(),
@@ -223,6 +224,7 @@ impl SystemBus {
             io_voltage_v: None,
             gpio_input_thresholds: None,
             supply: crate::power::SupplySupervisor::default(),
+            supply_domains: Default::default(),
             external_device_decls: Vec::new(),
             semihost: SemihostState::new(),
         };
@@ -239,6 +241,9 @@ impl SystemBus {
     pub fn set_current_cycle(&mut self, cycle: u64) {
         self.current_cycle = cycle;
         self.cycle_clock.publish(cycle);
+        if let Some(fabric) = self.irq_fabric.armv7.as_mut() {
+            fabric.synchronize(cycle, self.cpu_hz);
+        }
     }
 
     /// Append a peripheral to the bus at runtime. Useful for tests and
@@ -415,14 +420,13 @@ impl SystemBus {
     /// [`crate::Machine::inspect`] can name the live models it finds.
     ///
     /// The ONE home for this. Every path that attaches manifest-declared
-    /// external devices must call it, and there are exactly two:
-    /// [`Self::from_config`] (every MCU family that loads peripherals from a
-    /// chip descriptor) and
-    /// [`crate::system::xtensa::attach_esp32_external_devices`] (classic ESP32,
-    /// whose peripheral bank is built in Rust and bypasses `from_config`'s
-    /// peripheral loop). `record_external_devices_has_one_home` in
-    /// `crates/core/tests/inspect_external_devices.rs` fails if a third path
-    /// appears.
+    /// external devices must call it, and there are exactly three:
+    /// [`Self::from_config`] (descriptor-built MCU platforms),
+    /// [`crate::system::xtensa::attach_esp32_external_devices`] (the classic
+    /// ESP32 programmatic peripheral bank), and
+    /// [`Self::attach_manifest_external_devices`] (other programmatic platforms).
+    /// `record_external_devices_has_one_home` in
+    /// `crates/core/tests/inspect_external_devices.rs` guards these callers.
     ///
     /// Idempotent: recording replaces, so a bus built through both paths does
     /// not list a device twice.
@@ -455,6 +459,12 @@ impl SystemBus {
             if p.dev
                 .as_uart_stream_host()
                 .is_some_and(|u| u.hosts_protocol_peer())
+            {
+                continue;
+            }
+            if p.dev
+                .as_uart_stream_host()
+                .is_some_and(|u| u.attach_console_sink(Some(sink.clone()), echo_stdout))
             {
                 continue;
             }
@@ -886,6 +896,12 @@ impl SystemBus {
         echo_stdout: bool,
     ) -> bool {
         for p in &mut self.peripherals {
+            if p.dev
+                .as_uart_stream_host()
+                .is_some_and(|u| u.attach_console_sink(None, false))
+            {
+                continue;
+            }
             let Some(any) = p.dev.as_any_mut() else {
                 continue;
             };
@@ -915,6 +931,11 @@ impl SystemBus {
                 .and_then(|[programmatic, _]| self.find_peripheral_index_by_name(programmatic))
         });
         if let Some(p) = index.map(|i| &mut self.peripherals[i]) {
+            if p.dev.as_uart_stream_host().is_some_and(|u| {
+                !u.hosts_protocol_peer() && u.attach_console_sink(Some(sink.clone()), echo_stdout)
+            }) {
+                return true;
+            }
             let Some(any) = p.dev.as_any_mut() else {
                 return false;
             };
@@ -957,6 +978,10 @@ impl SystemBus {
     pub fn attach_uart_rx_source(&self) -> Vec<Arc<Mutex<VecDeque<u8>>>> {
         let mut sources = Vec::new();
         for p in &self.peripherals {
+            if let Some(rx) = p.dev.uart_rx_source() {
+                sources.push(rx);
+                continue;
+            }
             let Some(any) = p.dev.as_any() else {
                 continue;
             };

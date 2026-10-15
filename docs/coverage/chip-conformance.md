@@ -48,3 +48,11 @@ Reg match = verifiable cold-reset registers reproduced. "Excluded" = registers a
 | imxrt1064 | **L1** | ✓ | 6 | — | — | firmware_survival::test_imxrt1064_teensy41_smoke_survival |
 | stm32f746 | **L1** | ✓ | 17 | — | — | firmware_survival::test_stm32f746_discovery_smoke_survival |
 | stm32g071 | **L1** | ✓ | 40 | — | — | firmware_survival::test_nucleo_g071rb_smoke_survival |
+
+## Declared platforms without a model
+
+These descriptors carry declarations only. They receive no estate checkmark, conformance level or measured ratchet record.
+
+| Chip | State | Evidence boundary |
+|------|-------|-------------------|
+| rv1103 | Declared only | Normal descriptor is CPU/memory only. Optional native reduced Linux direct boot and joint I2C3/UART4 basket acceptance pass separately with functional timing and a persistent reduced plant; this does not establish full board L0/L1, vendor BSP/SD/ROM boot or physical qualification. The older generic Cortex-A7 CPU subset is separate. |
