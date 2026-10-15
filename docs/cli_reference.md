@@ -59,11 +59,7 @@ labwired test --script <YAML> [OVERRIDES]
 
 ### `coverage merge`
 
-Merge firmware-coverage LCOV files (from `test --coverage`, gcov, llvm-cov) into one report and list every branch the tests never took.
-
-```bash
-labwired coverage merge out/ -o merged.info --cobertura coverage.xml --fail-under-branches 90
-```
+Merge firmware-coverage LCOV files (from `test --coverage`, gcov, llvm-cov) into one report and list every branch the tests never took. Worked example and CI setup: [Firmware coverage](howto/firmware-coverage.md).
 
 **Options:**
 - `<INPUT>...`: LCOV files, or directories searched recursively for `*.info` (earlier merge results are skipped).
