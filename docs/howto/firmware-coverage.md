@@ -98,8 +98,9 @@ LCOV format specifies.
 
 `labwired coverage merge` accepts files and directories (searched for
 `*.info`). It follows `lcov -a`: counts add up; a branch stays "never
-evaluated" only if no input evaluated it. Its result matches `lcov -a`
-record for record.
+evaluated" only if no input evaluated it. Its counts equal `lcov -a`'s once
+lcov's per-test records are added up (lcov keeps one record per test name;
+the merge keeps one per file and remembers which tests ran each line).
 
 Merging works on **any** LCOV file, so you can combine simulator runs with
 the `gcov`/`gcovr`/`llvm-cov` coverage of your host-side unit tests:
@@ -159,10 +160,15 @@ from the repository root, or pass `--source-root` so GitLab can find them.
    "fall-through" is the count of steps to the next instruction. DWARF maps
    each address to a file and line.
 
-The branch list was checked against `llvm-objdump` on all 81 committed
+The branch decoder was checked against `llvm-objdump` on all 81 committed
 firmware ELFs with line info (bare-metal C, Rust, Arduino cores, Zephyr,
 ESP-IDF): it found all 18,195 two-outcome conditional branches, with no
 extras and no wrong targets.
+
+Source paths come from the line table with their directory. The build
+directory most of the line table comes from is the root: its files stay
+relative (`src/brake_ecu.c`); files of other units (a Cargo registry crate,
+a vendor SDK) keep their absolute path, so two `src/lib.rs` never merge.
 
 ---
 
@@ -180,6 +186,12 @@ extras and no wrong targets.
   report's `branch_isa` is `null` and no branch numbers are printed, rather
   than wrong ones.
 - **Line hits** are the highest execution count among a line's addresses.
+- **ARM ELFs stripped of mapping symbols** (`$t`/`$d`): literal pools inside
+  functions can no longer be told from code, and a pool word can decode as
+  a branch. GCC and clang emit them; run coverage on the unstripped ELF.
+- **Rewinding:** `Session::restore` gives exactly a straight run's counts.
+  The browser playground keeps accumulating across a rewind on purpose, so
+  you see everything you explored.
 - **Not a qualified tool.** LabWired has no ISO 26262 / DO-178C tool
   qualification kit. Use it to find the tests you are missing, early and in
   every CI run.

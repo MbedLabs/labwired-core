@@ -27,6 +27,46 @@ use std::fmt::Write as _;
 /// test), and a directory scan uses it to skip earlier merge results.
 pub const MERGED_TEST_NAME: &str = "labwired-merged";
 
+/// One branch outcome's key in a file: `BRDA:<line>,[e]<block>,<branch>,…`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct BranchKey {
+    pub line: u32,
+    /// The block is an exception path (`e` prefix, LCOV 2.x).
+    pub exception: bool,
+    pub block: u32,
+    pub branch: BranchId,
+}
+
+/// A branch id: a number, or (LCOV 2.x) the source expression it stands for.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum BranchId {
+    Num(u32),
+    Expr(String),
+}
+
+impl BranchKey {
+    /// A plain numbered branch (what LabWired writes).
+    pub fn new(line: u32, block: u32, branch: u32) -> Self {
+        BranchKey {
+            line,
+            exception: false,
+            block,
+            branch: BranchId::Num(branch),
+        }
+    }
+}
+
+impl std::fmt::Display for BranchKey {
+    /// `<line>,[e]<block>,<branch>`, as it appears in `BRDA:`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let e = if self.exception { "e" } else { "" };
+        match &self.branch {
+            BranchId::Num(n) => write!(f, "{},{e}{},{n}", self.line, self.block),
+            BranchId::Expr(x) => write!(f, "{},{e}{},{x}", self.line, self.block),
+        }
+    }
+}
+
 /// Coverage of one source file.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SourceFile {
@@ -34,8 +74,8 @@ pub struct SourceFile {
     pub functions: BTreeMap<String, (u32, u64)>,
     /// Line -> execution count.
     pub lines: BTreeMap<u32, u64>,
-    /// (line, block, branch) -> taken count, `None` when never evaluated.
-    pub branches: BTreeMap<(u32, u32, u32), Option<u64>>,
+    /// Branch outcome -> taken count, `None` when never evaluated.
+    pub branches: BTreeMap<BranchKey, Option<u64>>,
     /// Line -> names of the tests (`TN:`) that executed it.
     pub line_tests: BTreeMap<u32, BTreeSet<String>>,
 }
@@ -103,7 +143,7 @@ impl SourceFile {
             *e = e.saturating_add(*n);
         }
         for (key, n) in &other.branches {
-            let e = self.branches.entry(*key).or_insert(None);
+            let e = self.branches.entry(key.clone()).or_insert(None);
             *e = match (*e, *n) {
                 (None, None) => None,
                 (a, b) => Some(a.unwrap_or(0).saturating_add(b.unwrap_or(0))),
@@ -168,11 +208,25 @@ impl Tracefile {
             };
             match tag {
                 "FN" => {
-                    // FN:<line>[,<end line>],<name>
-                    let mut parts: Vec<&str> = value.splitn(3, ',').collect();
-                    let name = parts.pop().unwrap_or("").to_string();
-                    let start: u32 = num(parts.first().copied().unwrap_or(""), "FN line", lineno)?;
-                    file.functions.entry(name).or_insert((start, 0)).0 = start;
+                    // FN:<line>[,<end line>],<name>. The name may itself hold
+                    // commas (`foo(int, char)`), so only an all-digit second
+                    // field is taken as the end line.
+                    let (first, rest) = value
+                        .split_once(',')
+                        .with_context(|| format!("line {lineno}: bad FN '{value}'"))?;
+                    let start: u32 = num(first, "FN line", lineno)?;
+                    let name = match rest.split_once(',') {
+                        Some((end, name))
+                            if !end.is_empty() && end.bytes().all(|b| b.is_ascii_digit()) =>
+                        {
+                            name
+                        }
+                        _ => rest,
+                    };
+                    file.functions
+                        .entry(name.to_string())
+                        .or_insert((start, 0))
+                        .0 = start;
                 }
                 "FNDA" => {
                     let (n, name) = value
@@ -214,24 +268,33 @@ impl Tracefile {
                     }
                 }
                 "BRDA" => {
-                    // BRDA:<line>,[e]<block>,<branch>,<taken>
+                    // BRDA:<line>,[e]<block>,<branch>,<taken>. LCOV 2.x lets
+                    // the branch id be an expression, which may hold commas:
+                    // it is everything between the block and the last field.
                     let p: Vec<&str> = value.split(',').collect();
                     if p.len() < 4 {
                         bail!("line {lineno}: bad BRDA '{value}'");
                     }
                     let l: u32 = num(p[0], "BRDA line", lineno)?;
-                    let block: u32 = num(p[1].trim_start_matches('e'), "BRDA block", lineno)?;
-                    // LCOV 2.x allows an expression string as the branch id;
-                    // hash anything non-numeric to a stable small number.
-                    let branch: u32 = p[2].trim().parse().unwrap_or_else(|_| {
-                        p[2].bytes()
-                            .fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b)))
-                    });
-                    let taken = match p[3].trim() {
+                    let blk = p[1].trim();
+                    let exception = blk.starts_with('e');
+                    let block: u32 = num(blk.trim_start_matches('e'), "BRDA block", lineno)?;
+                    let id = p[2..p.len() - 1].join(",");
+                    let branch = match id.trim().parse::<u32>() {
+                        Ok(n) => BranchId::Num(n),
+                        Err(_) => BranchId::Expr(id),
+                    };
+                    let taken = match p[p.len() - 1].trim() {
                         "-" => None,
                         t => Some(num::<u64>(t, "BRDA taken", lineno)?),
                     };
-                    let e = file.branches.entry((l, block, branch)).or_insert(None);
+                    let key = BranchKey {
+                        line: l,
+                        exception,
+                        block,
+                        branch,
+                    };
+                    let e = file.branches.entry(key).or_insert(None);
                     *e = match (*e, taken) {
                         (None, None) => None,
                         (a, b) => Some(a.unwrap_or(0).saturating_add(b.unwrap_or(0))),
@@ -287,13 +350,13 @@ impl Tracefile {
                 let _ = writeln!(out, "FNF:{}", s.functions_found);
                 let _ = writeln!(out, "FNH:{}", s.functions_hit);
             }
-            for ((line, block, branch), taken) in &f.branches {
+            for (key, taken) in &f.branches {
                 match taken {
                     Some(n) => {
-                        let _ = writeln!(out, "BRDA:{line},{block},{branch},{n}");
+                        let _ = writeln!(out, "BRDA:{key},{n}");
                     }
                     None => {
-                        let _ = writeln!(out, "BRDA:{line},{block},{branch},-");
+                        let _ = writeln!(out, "BRDA:{key},-");
                     }
                 }
             }
@@ -392,8 +455,8 @@ impl Tracefile {
                 );
                 // Branch outcomes grouped by line.
                 let mut by_line: BTreeMap<u32, (usize, usize)> = BTreeMap::new();
-                for ((line, _, _), n) in &f.branches {
-                    let e = by_line.entry(*line).or_default();
+                for (key, n) in &f.branches {
+                    let e = by_line.entry(key.line).or_default();
                     e.1 += 1;
                     if matches!(n, Some(v) if *v > 0) {
                         e.0 += 1;
@@ -472,8 +535,8 @@ BRDA:4,0,0,0\nBRDA:4,0,1,1\nBRDA:10,0,0,2\nBRDA:10,0,1,-\nDA:3,1\nDA:4,1\nDA:10,
         let f = &t.files["src/main.c"];
         assert_eq!(f.lines[&4], 3);
         assert_eq!(f.functions["handle"], (9, 0));
-        assert_eq!(f.branches[&(10, 0, 0)], None);
-        assert_eq!(f.branches[&(4, 0, 0)], Some(2));
+        assert_eq!(f.branches[&BranchKey::new(10, 0, 0)], None);
+        assert_eq!(f.branches[&BranchKey::new(4, 0, 0)], Some(2));
         let s = t.summary();
         assert_eq!((s.lines_hit, s.lines_found), (2, 3));
         assert_eq!((s.branches_hit, s.branches_found), (1, 4));
@@ -489,10 +552,10 @@ BRDA:4,0,0,0\nBRDA:4,0,1,1\nBRDA:10,0,0,2\nBRDA:10,0,1,-\nDA:3,1\nDA:4,1\nDA:10,
         assert_eq!(f.lines[&4], 4);
         assert_eq!(f.lines[&10], 2);
         assert_eq!(f.functions["handle"], (9, 2));
-        assert_eq!(f.branches[&(4, 0, 0)], Some(2));
-        assert_eq!(f.branches[&(4, 0, 1)], Some(1));
-        assert_eq!(f.branches[&(10, 0, 0)], Some(2), "- + 2 = 2");
-        assert_eq!(f.branches[&(10, 0, 1)], None, "- + - stays -");
+        assert_eq!(f.branches[&BranchKey::new(4, 0, 0)], Some(2));
+        assert_eq!(f.branches[&BranchKey::new(4, 0, 1)], Some(1));
+        assert_eq!(f.branches[&BranchKey::new(10, 0, 0)], Some(2), "- + 2 = 2");
+        assert_eq!(f.branches[&BranchKey::new(10, 0, 1)], None, "- + - stays -");
         let s = t.summary();
         assert_eq!((s.lines_hit, s.lines_found), (3, 3));
         assert_eq!((s.branches_hit, s.branches_found), (3, 4));
@@ -574,5 +637,35 @@ BRDA:4,0,0,0\nBRDA:4,0,1,1\nBRDA:10,0,0,2\nBRDA:10,0,1,-\nDA:3,1\nDA:4,1\nDA:10,
         assert!(x.contains("name=\"op&lt;&gt;\""));
         assert!(x.contains("version=\"v&quot;1\""));
         assert!(!x.contains("a&b"));
+    }
+
+    /// C++ names hold commas; the end-line field is only taken when numeric.
+    #[test]
+    fn function_names_with_commas_round_trip() {
+        let text = "SF:a.cc\nFN:3,foo(int, char)\nFN:9,12,bar(int, int)\n\
+FNDA:2,foo(int, char)\nFNDA:0,bar(int, int)\nDA:3,2\nend_of_record\n";
+        let t = Tracefile::parse(text).unwrap();
+        let f = &t.files["a.cc"];
+        assert_eq!(f.functions.len(), 2, "{:?}", f.functions);
+        assert_eq!(f.functions["foo(int, char)"], (3, 2));
+        assert_eq!(f.functions["bar(int, int)"], (9, 0));
+        let back = Tracefile::parse(&t.to_lcov("")).unwrap();
+        assert_eq!(back.files["a.cc"].functions, f.functions);
+        assert_eq!(back.summary().functions_found, 2);
+    }
+
+    /// Exception blocks and expression branch ids stay distinct and survive
+    /// a round trip.
+    #[test]
+    fn lcov2_branch_ids_round_trip() {
+        let text = "SF:a.c\nBRDA:5,0,0,1\nBRDA:5,e0,0,0\nBRDA:5,1,(x > 0) && y,3\n\
+BRDA:5,1,(x, y),-\nDA:5,1\nend_of_record\n";
+        let t = Tracefile::parse(text).unwrap();
+        assert_eq!(t.files["a.c"].branches.len(), 4);
+        let out = t.to_lcov("");
+        assert!(out.contains("BRDA:5,e0,0,0\n"), "{out}");
+        assert!(out.contains("BRDA:5,1,(x > 0) && y,3\n"), "{out}");
+        assert!(out.contains("BRDA:5,1,(x, y),-\n"), "{out}");
+        assert_eq!(Tracefile::parse(&out).unwrap(), t);
     }
 }

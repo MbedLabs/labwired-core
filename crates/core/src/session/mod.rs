@@ -743,14 +743,15 @@ impl Session {
         }
         let mut built = build_machine(self.build.request())
             .map_err(|e| SessionError::Other(format!("restore: rebuilding the machine: {e:#}")))?;
+        self.cosim = bind_cosim(&*built.machine, &self.build.system, &self.opts)
+            .map_err(|e| SessionError::Other(format!("restore: rebinding the models: {e:#}")))?;
         if let Some(obs) = &self.coverage {
-            // The replay below re-runs everything from boot, so start the
-            // counts from zero: afterwards they are exactly a straight run's.
+            // Nothing below can fail before the replay. The replay re-runs
+            // everything from boot, so the counts start from zero: afterwards
+            // they are exactly a straight run's.
             obs.reset();
             built.machine.add_observer(obs.clone());
         }
-        self.cosim = bind_cosim(&*built.machine, &self.build.system, &self.opts)
-            .map_err(|e| SessionError::Other(format!("restore: rebinding the models: {e:#}")))?;
         self.machine = built.machine;
         self.uart = uart::UartStream::new(built.uart);
         self.board_io = built.board_io;

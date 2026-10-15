@@ -340,8 +340,10 @@ impl CoverageReport {
             } else {
                 (None, None)
             };
-            sf.branches.insert((b.line, *n, 0), taken);
-            sf.branches.insert((b.line, *n, 1), not_taken);
+            sf.branches
+                .insert(crate::lcov::BranchKey::new(b.line, *n, 0), taken);
+            sf.branches
+                .insert(crate::lcov::BranchKey::new(b.line, *n, 1), not_taken);
             *n += 1;
         }
         t

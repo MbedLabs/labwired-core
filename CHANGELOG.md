@@ -13,18 +13,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (Thumb `B<cond>`/`CBZ`/`CBNZ`, RISC-V `B*`/`C.BEQZ`/`C.BNEZ`; function
   symbols, `$t`/`$x`/`$d` mapping symbols and DWARF line sequences, so
   assembly with line info is included), so branches no test reached count
-  against coverage (`BRDA:…,-`) instead of disappearing. Checked against
-  llvm-objdump on all 81 committed ELFs with line info: 18,195 of 18,195
-  two-outcome branches, no extras, no wrong targets
+  against coverage (`BRDA:…,-`) instead of disappearing. The decoder was
+  checked against llvm-objdump on all 81 committed ELFs with line info:
+  18,195 of 18,195 two-outcome branches, no extras, no wrong targets
   (`crates/loader/tests/branch_sites_fixtures.rs`). Lines and functions now
   carry hit and call counts.
 - `labwired coverage merge`: merge LCOV files from many runs (and from
   gcov/llvm-cov host tests), list every branch the tests never took with the
   tests that ran its line, write LCOV / Cobertura / JSON, and fail CI with
-  `--fail-under-lines` / `--fail-under-branches`. Matches `lcov -a` record
-  for record. `labwired test --coverage` also writes
+  `--fail-under-lines` / `--fail-under-branches`. Same counts as `lcov -a`
+  once its per-test records are summed. `labwired test --coverage` also writes
   `coverage.cobertura.xml` (valid against `coverage-04.dtd`) and names each
   run's `TN:` after its script.
+
+### Changed
+- Firmware coverage paths: LCOV `SF:`, Cobertura `filename` and the JSON's
+  new `path` field carry the source's directory (`src/main.c`, not
+  `main.c`), relative to the build directory most of the line table comes
+  from; files of other compilation units (a registry crate, a vendor SDK)
+  keep their absolute path. Update `genhtml --prefix` / editor path
+  mappings that relied on bare names. The JSON's `file` keeps the bare name.
+- The coverage JSON's `branches` lists every conditional branch in the ELF
+  (unreached ones with `reached: false`), so UIs see more entries and a
+  lower, honest branch percentage.
+- `Session::restore` gives a coverage report equal to a straight run to the
+  snapshot; the browser playground keeps accumulating across a rewind, as
+  before.
 
 ### Fixed
 - Firmware coverage branch numbers were wrong on every ISA but Thumb: the
@@ -39,8 +53,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directory (a clang build of `src/brake_ecu.c` produced LCOV with no `BRDA`
   at all).
 - `Session::restore` replayed the run into the coverage observer on top of
-  the counts it already had; the counts now equal a straight run's. The
-  playground's restore no longer records the rewind as a jump.
+  the counts it already had. The playground's restore no longer records the
+  rewind as a jump, and on dual-core chips the two cores' instructions no
+  longer chain into made-up jumps (new `SimulationObserver::on_core_switch`).
+- Line-table sequences of functions the linker discarded (relocated to
+  address 0) no longer count as statements or claim the live code that sits
+  at low addresses; a sequence starting where another ends is found.
 - Plain C function names were passed through the C++ demangler (`f` became
   `float`, `d` became `double`).
 - Classic ESP32 LEDC drives its pads. Each of the 16 channels generates its

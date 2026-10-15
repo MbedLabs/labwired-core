@@ -106,12 +106,8 @@ pub fn decode_with_code_ranges(elf: &[u8], code_ranges: &[(u64, u64)]) -> Branch
         let (Ok(name), Some(sec)) = (sym.name(), sym.section_index()) else {
             continue;
         };
-        let marker = match name.split('.').next().unwrap_or("") {
-            "$d" => Marker::Data,
-            "$t" => Marker::Thumb,
-            "$a" => Marker::Arm,
-            "$x" => Marker::RiscV,
-            _ => continue,
+        let Some(marker) = marker_of(name) else {
+            continue;
         };
         maps.entry(sec).or_default().push((sym.address(), marker));
     }
@@ -144,10 +140,10 @@ pub fn decode_with_code_ranges(elf: &[u8], code_ranges: &[(u64, u64)]) -> Branch
             continue;
         };
         let code_marker = match isa {
-            BranchIsa::Thumb => "$t",
-            BranchIsa::RiscV => "$x",
+            BranchIsa::Thumb => Marker::Thumb,
+            BranchIsa::RiscV => Marker::RiscV,
         };
-        if name.split('.').next() != Some(code_marker) {
+        if marker_of(name) != Some(code_marker) {
             continue;
         }
         let Ok(section) = file.section_by_index(sec) else {
@@ -265,6 +261,24 @@ enum Marker {
     Thumb,
     Arm,
     RiscV,
+}
+
+/// What a mapping-symbol name marks. ARM: `$a`, `$t`, `$d`, optionally
+/// `.N`-suffixed. RISC-V: `$d`, and `$x` optionally followed by `.N` or by
+/// the ISA string newer toolchains append (`$xrv32i2p1_m2p0`).
+fn marker_of(name: &str) -> Option<Marker> {
+    let plain = |tag: &str| name == tag || name.starts_with(&format!("{tag}."));
+    if plain("$d") {
+        Some(Marker::Data)
+    } else if plain("$t") {
+        Some(Marker::Thumb)
+    } else if plain("$a") {
+        Some(Marker::Arm)
+    } else if name.starts_with("$x") {
+        Some(Marker::RiscV)
+    } else {
+        None
+    }
 }
 
 /// The mapping symbol in force at `addr` (the last one at or before it).
@@ -436,5 +450,18 @@ mod tests {
         assert_eq!(data_until(&map, 0x50), None, "before any marker is code");
         assert_eq!(marker_at(&map, 0x12A), Some(Thumb));
         assert_eq!(marker_at(&map, 0x50), None);
+    }
+
+    #[test]
+    fn mapping_symbol_names() {
+        assert_eq!(marker_of("$d"), Some(Marker::Data));
+        assert_eq!(marker_of("$d.17"), Some(Marker::Data));
+        assert_eq!(marker_of("$t.3"), Some(Marker::Thumb));
+        assert_eq!(marker_of("$a"), Some(Marker::Arm));
+        assert_eq!(marker_of("$x"), Some(Marker::RiscV));
+        assert_eq!(marker_of("$xrv32i2p1_m2p0_c2p0"), Some(Marker::RiscV));
+        assert_eq!(marker_of("$data_start"), None);
+        assert_eq!(marker_of("$dummy"), None);
+        assert_eq!(marker_of("main"), None);
     }
 }

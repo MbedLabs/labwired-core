@@ -262,3 +262,25 @@ fn merge_rejects_bad_input() {
     assert!(err.contains("no .info files"), "{err}");
     let _ = std::fs::remove_dir_all(&out);
 }
+
+/// `labwired coverage` without a subcommand is still the register-model
+/// coverage matrix, flags and all.
+#[test]
+fn coverage_without_subcommand_is_the_register_matrix() {
+    let out = tmp("register");
+    let json = out.join("matrix.json");
+    let (code, stdout, err) = labwired(
+        &root(),
+        &[
+            "coverage",
+            "--svd",
+            "tests/fixtures/svd/esp32s3.svd",
+            "--json-out",
+            json.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    assert!(stdout.contains("TOTAL"), "{stdout}");
+    assert!(json.is_file());
+    let _ = std::fs::remove_dir_all(&out);
+}

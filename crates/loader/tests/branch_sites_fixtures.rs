@@ -79,3 +79,54 @@ fn riscv_arduino_core_with_rtos_assembly() {
         "c.beqz / c.bnez are decoded"
     );
 }
+
+/// A linker that garbage-collects functions leaves their line-table
+/// sequences behind at address 0. In this Rust/Cortex-M0+ build the
+/// discarded `compiler-builtins` sequences overlap real code from 0x0 to
+/// 0x77e; none of them may claim a branch of the code that is there.
+#[test]
+fn discarded_functions_do_not_claim_live_branches() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/kw41z-lcd-activity.elf");
+    let bytes = std::fs::read(&path).unwrap();
+    let symbols = SymbolProvider::new(&path).unwrap();
+    let s = decode_with_code_ranges(&bytes, symbols.line_sequences());
+    assert_eq!(s.sites.len(), 440);
+
+    let mut in_functions = 0;
+    for b in &s.sites {
+        let Some((_, _, name)) = symbols
+            .functions()
+            .iter()
+            .find(|(a, n, _)| b.addr >= *a && b.addr < a + n)
+        else {
+            continue;
+        };
+        let Some(row) = symbols.line_at(b.addr) else {
+            continue;
+        };
+        in_functions += 1;
+        // compiler-builtins also exports C-ABI names (`__aeabi_memclr4`).
+        let builtins = name.contains("compiler_builtins") || name.starts_with("__");
+        if !builtins {
+            assert!(
+                !row.path.contains("compiler-builtins"),
+                "{:#x} in {name} attributed to {}:{}",
+                b.addr,
+                row.path,
+                row.line
+            );
+        }
+    }
+    assert_eq!(
+        in_functions, 436,
+        "every branch inside a function has a line"
+    );
+
+    // `core::fmt::num` at 0xfc..0x204 keeps its own lines.
+    let row = symbols.line_at(0x10c).unwrap();
+    assert!(row.path.ends_with("core/src/fmt/num.rs"), "{}", row.path);
+    // `Reset` (assembly, no line info) is only covered by discarded
+    // sequences, so it has no line rather than a wrong one.
+    assert!(symbols.line_at(0xcc).is_none());
+}

@@ -72,19 +72,24 @@ struct Gap<'a> {
     tests: Vec<&'a str>,
 }
 
+/// One branch's place in a file: (line, exception path, block).
+type BlockKey = (u32, bool, u32);
+/// One outcome of that branch: its id and taken count (`None` = never ran).
+type Outcome<'a> = (&'a labwired_loader::lcov::BranchId, Option<u64>);
+
 fn gaps(t: &Tracefile) -> Vec<Gap<'_>> {
     let mut out = Vec::new();
     for (path, f) in &t.files {
         // Group the outcomes of one branch (same line and block).
-        let mut by_branch: std::collections::BTreeMap<(u32, u32), Vec<(u32, Option<u64>)>> =
+        let mut by_branch: std::collections::BTreeMap<BlockKey, Vec<Outcome<'_>>> =
             std::collections::BTreeMap::new();
-        for ((line, block, branch), n) in &f.branches {
+        for (key, n) in &f.branches {
             by_branch
-                .entry((*line, *block))
+                .entry((key.line, key.exception, key.block))
                 .or_default()
-                .push((*branch, *n));
+                .push((&key.branch, *n));
         }
-        for ((line, _), outcomes) in by_branch {
+        for ((line, _, _), outcomes) in by_branch {
             let tests: Vec<&str> = f
                 .line_tests
                 .get(&line)
@@ -101,10 +106,12 @@ fn gaps(t: &Tracefile) -> Vec<Gap<'_>> {
             }
             for (branch, n) in outcomes {
                 if n.unwrap_or(0) == 0 {
+                    use labwired_loader::lcov::BranchId;
                     let kind = match branch {
-                        0 => "jump-never-taken".to_string(),
-                        1 => "fall-through-never-taken".to_string(),
-                        b => format!("outcome-{b}-never-taken"),
+                        BranchId::Num(0) => "jump-never-taken".to_string(),
+                        BranchId::Num(1) => "fall-through-never-taken".to_string(),
+                        BranchId::Num(b) => format!("outcome-{b}-never-taken"),
+                        BranchId::Expr(x) => format!("outcome-{x}-never-taken"),
                     };
                     out.push(Gap {
                         file: path,
