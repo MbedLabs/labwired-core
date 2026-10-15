@@ -29,7 +29,8 @@ pub use crate::peripherals::device::{SpiDevice, SpiSampling};
 pub enum SpiRegisterLayout {
     #[default]
     Stm32,
-    /// STM32 families with a TX/RX FIFO + CR2.DS data-size field (L4/F7/G4/…).
+    /// STM32 families with a TX/RX FIFO + CR2.DS data-size field
+    /// (G0/L4/F7/G4/WB — RM0444 §35, RM0351 §40, RM0410 §35, RM0440 §39).
     /// Identical register layout to `Stm32`, but a **16-bit DR write at
     /// DS≤8 packs two frames** (RM0351 §40.4.9 data packing) — modelled so
     /// firmware that wrongly uses a 16-bit DR access at 8-bit data size
@@ -68,7 +69,7 @@ impl FromStr for SpiRegisterLayout {
         let v = value.trim().to_ascii_lowercase();
         match v.as_str() {
             "stm32" | "stm32f1" | "stm32f4" | "stm32v2" => Ok(Self::Stm32),
-            "stm32_fifo" | "stm32l4" | "stm32f7" | "stm32g4" => Ok(Self::Stm32Fifo),
+            "stm32_fifo" | "stm32l4" | "stm32f7" | "stm32g4" | "stm32g0" => Ok(Self::Stm32Fifo),
             // H5 carries the H7-lineage "SPI v3" IP, not the L4/F7 FIFO map.
             "stm32h5" => Ok(Self::Stm32H5),
             "nrf52" | "nrf52_spim" | "nrf_spim" | "nordic" => Ok(Self::Nrf52Spim),
@@ -143,8 +144,8 @@ pub enum SpiSignal {
     Sck,
     Mosi,
     Miso,
-    /// Hardware slave select. Only a part whose AF table routes it (the G0)
-    /// puts it on a pad, and only a controller on a world `gpio_net` drives
+    /// Hardware slave select. Only a part whose AF table routes it (the G0
+    /// and F4 tables) puts it on a pad, and only a controller on a world `gpio_net` drives
     /// or reads it (see `spi_net`).
     Nss,
 }
@@ -280,6 +281,12 @@ struct ActiveFrame {
     second_half: bool,
     /// Peripheral-clock cycles left in the current half-period.
     ticks_left: u32,
+    /// Not a frame: the NSS-high pulse a FIFO-type master inserts between two
+    /// back-to-back frames with CR2.NSSP=1 (RM0444 §35.5.5 "NSS pulse mode":
+    /// NSS is pulsed high for one SCK period between continuous frames). SCK
+    /// rests at CPOL and the data lines hold; `ticks_left` counts the whole
+    /// pulse, after which the queued frame starts.
+    nss_pulse: bool,
 }
 
 // ── Edge-accurate slave sampling (shared by every controller with a clock mode)
@@ -451,6 +458,66 @@ impl Stm32SpiRegs {
             }
         }
     }
+}
+
+/// Capacity of the FIFO-type STM32 SPI's RX and TX FIFOs, in bytes: "two
+/// 32-bit embedded Rx and Tx FIFOs" (RM0444 §35.5.9, RM0351 §40.4.9).
+const FIFO_BYTES: u8 = 4;
+
+// FIFO-type SPI_CR2 / SPI_SR bits (RM0444 §35.7.2, §35.7.3; same positions
+// in RM0351/RM0440/RM0410 and the G071/L476/G474/WB55 SVDs).
+/// CR2.NSSP — NSS pulse between frames (master, CPHA=0).
+const FIFO_CR2_NSSP: u16 = 1 << 3;
+/// CR2.FRXTH — RXNE threshold: 0 = 16 bit (2 bytes), 1 = 8 bit (1 byte).
+const FIFO_CR2_FRXTH: u16 = 1 << 12;
+/// SR.FRLVL[1:0] (bits 10:9) and SR.FTLVL[1:0] (bits 12:11).
+const FIFO_SR_FRLVL_SHIFT: u16 = 9;
+const FIFO_SR_FTLVL_SHIFT: u16 = 11;
+const FIFO_SR_LEVELS: u16 = (0b11 << FIFO_SR_FRLVL_SHIFT) | (0b11 << FIFO_SR_FTLVL_SHIFT);
+
+/// The FIFO-type SPI's 32-bit RX FIFO, as bytes. A frame of up to 8 bits
+/// takes one byte, a 9..16-bit frame two (low byte first), which is what
+/// makes the 8-bit / 16-bit DR read sizes pop one or two bytes (RM0444
+/// §35.5.9 "Data packing").
+///
+/// `Copy` so it can live in a `Cell`: `Peripheral::read` is `&self`, and a
+/// DR read pops.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+struct RxFifo {
+    buf: [u8; FIFO_BYTES as usize],
+    len: u8,
+}
+
+impl RxFifo {
+    /// Push one frame (`bytes` = 1 or 2). `false`, and nothing stored, when
+    /// it does not fit — the overrun case.
+    fn push_frame(&mut self, word: u16, bytes: u8) -> bool {
+        if self.len + bytes > FIFO_BYTES {
+            return false;
+        }
+        for i in 0..bytes {
+            self.buf[usize::from(self.len)] = (word >> (8 * i)) as u8;
+            self.len += 1;
+        }
+        true
+    }
+
+    fn pop(&mut self) -> Option<u8> {
+        if self.len == 0 {
+            return None;
+        }
+        let b = self.buf[0];
+        self.buf.copy_within(1.., 0);
+        self.len -= 1;
+        Some(b)
+    }
+}
+
+/// SR.FRLVL / SR.FTLVL encoding of a byte level: 00 empty, 01 1/4, 10 1/2,
+/// 11 full (RM0444 §35.7.3). Three bytes reads as full, as the field has no
+/// 3/4 code.
+fn fifo_level_code(bytes: u8) -> u16 {
+    u16::from(bytes.min(3))
 }
 
 /// STM32H5/H7 "SPI v3" register file (RM0481 §41) — H5-only state.
@@ -832,6 +899,8 @@ impl Nrf52SpiRegs {
             0x110 => self.events_endrx,
             0x118 => self.events_end,
             0x120 => self.events_endtx,
+            // EVENTS_STARTED: set by the net engine (`spi_nrf_net`) only.
+            0x14C => self.events_started,
             // INTEN / INTENSET / INTENCLR all mirror the inten value
             0x300 | 0x304 | 0x308 => self.inten,
             // Config
@@ -881,6 +950,7 @@ impl Nrf52SpiRegs {
             0x110 if value == 0 => self.events_endrx = 0,
             0x118 if value == 0 => self.events_end = 0,
             0x120 if value == 0 => self.events_endtx = 0,
+            0x14C if value == 0 => self.events_started = 0,
 
             // INTEN (direct write)
             0x300 => self.inten = value,
@@ -1134,9 +1204,13 @@ pub enum SpiPadMap {
     /// STM32G0 map — STM32G071 (DS12232, port A/B alternate-function tables,
     /// AF0 column): SPI1 on PA4 NSS / PA5 SCK / PA6 MISO / PA7 MOSI, PA15
     /// NSS, PB3 SCK / PB4 MISO / PB5 MOSI; SPI2 on PB12 NSS / PB13 SCK /
-    /// PB14 MISO / PB15 MOSI. The G0 is the only map that routes NSS: on a
-    /// world `gpio_net` the hardware slave select is a real wire.
+    /// PB14 MISO / PB15 MOSI, NSS included: on a world `gpio_net` the
+    /// hardware slave select is a real wire.
     Stm32G0,
+    /// The F4 AF5 table, declared explicitly. A classic-layout part gets it
+    /// by default; a FIFO-layout part would otherwise get the L4 table, so an
+    /// F7 (FIFO SPI, F4 pinout) names this one.
+    Stm32F4,
 }
 
 impl FromStr for SpiPadMap {
@@ -1148,9 +1222,10 @@ impl FromStr for SpiPadMap {
             "stm32wba" | "wba" => Ok(Self::Stm32Wba),
             "stm32u5" | "u5" => Ok(Self::Stm32U5),
             "stm32g0" | "g0" => Ok(Self::Stm32G0),
+            "stm32f4" | "f4" => Ok(Self::Stm32F4),
             "none" => Ok(Self::None),
             other => Err(anyhow::anyhow!(
-                "unsupported SPI pad_map '{other}'; supported: stm32h5, stm32wba, stm32u5, stm32g0, none"
+                "unsupported SPI pad_map '{other}'; supported: stm32h5, stm32wba, stm32u5, stm32g0, stm32f4, none"
             )),
         }
     }
@@ -1366,8 +1441,14 @@ pub struct Spi {
     /// 0x0002 after a transmit with no slave wired. The classic F1/F4 port has
     /// no FIFO and sets RXNE on every completed frame.
     rx_fifo: bool,
-    /// Bytes sitting in the modelled RX FIFO (FIFO layout only).
-    rx_fifo_level: u8,
+    /// The modelled 32-bit RX FIFO (FIFO layout only). In a `Cell` because a
+    /// DR read (`&self`) pops it.
+    fifo_rx: Cell<RxFifo>,
+    /// FIFO layout SR.OVR, and whether DR has been read since it was set:
+    /// OVR clears on "a read of SPI_DR followed by a read of SPI_SR" (RM0444
+    /// §35.5.10), both `&self` accesses, hence the cells.
+    fifo_ovr: Cell<bool>,
+    fifo_ovr_dr_read: Cell<bool>,
 
     /// MOSI bytes this EFR32 USART has shifted but not yet narrated, and the
     /// cycle an earlier flush of this same wire already ran to.
@@ -1439,6 +1520,14 @@ pub struct Spi {
     nrf52_claim_sck: crate::peripherals::nrf52::pin_select::NrfPinClaim,
     #[serde(skip)]
     nrf52_claim_mosi: crate::peripherals::nrf52::pin_select::NrfPinClaim,
+    /// `PSEL.MISO`'s claim: an input to the SPIM, routed so that a pad on a
+    /// world `gpio_net` hands the net's level to the bit engine
+    /// (`spi_nrf_net`).
+    #[serde(skip)]
+    nrf52_claim_miso: crate::peripherals::nrf52::pin_select::NrfPinClaim,
+    /// The nRF52 SPIM's bit engine on a world `gpio_net` (`spi_nrf_net`).
+    #[serde(skip)]
+    nrf_net: nrf_net::SpimNet,
 
     /// Classic-SPI CR2 writable mask — a per-part delta on the shared classic
     /// layout. F1 implements 0xE7; F4 adds bit 4 (FRF, TI-mode) → 0xF7,
@@ -1552,6 +1641,10 @@ pub struct Spi {
     /// Frames a net-mode slave has received.
     #[serde(skip)]
     net_frames: u64,
+    /// Master, NSS pulse mode: NSS is high (after a frame, or in the pulse
+    /// between two).
+    #[serde(skip)]
+    net_nss_high: bool,
 }
 
 impl core::fmt::Debug for Spi {
@@ -1623,7 +1716,6 @@ impl Spi {
         let mut spi = Self {
             regs,
             rx_fifo,
-            rx_fifo_level: 0,
             cr2_mask,
             ..Default::default()
         };
@@ -1678,12 +1770,19 @@ impl Spi {
         claims: &std::sync::Arc<crate::peripherals::nrf52::pin_select::NrfPinClaims>,
         sck_token: u32,
         mosi_token: u32,
+        miso_token: u32,
     ) {
         if !self.is_nrf() {
             return;
         }
         self.nrf52_claim_sck.install(claims.clone(), sck_token);
         self.nrf52_claim_mosi.install(claims.clone(), mosi_token);
+        self.nrf52_claim_miso.install(claims.clone(), miso_token);
+        // MISO is an input to the SPIM: a pad routed to it drives nothing.
+        self.line_levels_arc().pad_lines().set_mode(
+            SpiSignal::Miso as usize,
+            crate::peripherals::pad_lines::LineDrive::Input,
+        );
         self.sync_nrf_pin_claims();
     }
 
@@ -1695,13 +1794,14 @@ impl Spi {
     /// (nRF52840 PS v1.11 §6.25.6.17, p733 — Enabled = 7). With `ENABLE = 6`
     /// the TWIM half is driving, and this half must not claim its pads.
     fn sync_nrf_pin_claims(&mut self) {
-        let (enable, psel_sck, psel_mosi) = match &self.regs {
-            SpiRegs::Nrf52(r) => (r.enable & 0xF, r.psel_sck, r.psel_mosi),
+        let (enable, psel_sck, psel_mosi, psel_miso) = match &self.regs {
+            SpiRegs::Nrf52(r) => (r.enable & 0xF, r.psel_sck, r.psel_mosi, r.psel_miso),
             _ => return,
         };
         let live = enable == NRF52_ENABLE_SPIM;
         self.nrf52_claim_sck.update(psel_sck, live);
         self.nrf52_claim_mosi.update(psel_mosi, live);
+        self.nrf52_claim_miso.update(psel_miso, live);
     }
 
     /// One SCK period in engine cycles, from `FREQUENCY`.
@@ -2222,6 +2322,8 @@ impl Spi {
                 if let SpiRegs::Stm32(r) = &mut self.regs {
                     if r.fifo {
                         let ds = (value >> 8) & 0xF;
+                        // Bit 15 is reserved and reads 0 (RM0444 §35.7.2).
+                        let value = value & 0x7FFF;
                         r.cr2 = if ds < 0b0011 {
                             (value & !0x0F00) | (0b0111 << 8)
                         } else {
@@ -2231,11 +2333,24 @@ impl Spi {
                         r.cr2 = value & cr2_mask;
                     }
                 }
+                if self.rx_fifo {
+                    // A new FRXTH moves the RXNE threshold at once.
+                    self.fifo_sync_rxne();
+                }
                 self.net_apply_drive();
             }
             0x08 => {
                 // SR is mostly read-only; allow clearing OVR if modelled.
                 if let SpiRegs::Stm32(r) = &mut self.regs {
+                    if r.fifo {
+                        // FIFO port: RXNE/TXE/FRLVL/FTLVL are functions of the
+                        // FIFOs, not storage; only CRCERR (rc_w0) is
+                        // software-clearable here.
+                        if value & 0x0010 == 0 {
+                            r.sr &= !0x0010;
+                        }
+                        return;
+                    }
                     r.sr = value & 0xFFBF;
                     // Keep clear-on-read RXNE cell in sync with any software clear.
                     self.stm32_rxne.set(r.sr & 0x0001 != 0);
@@ -2272,10 +2387,10 @@ impl Spi {
                         // overwrites the waiting byte (RM0008 — the shifting
                         // frame is unaffected).
                         *self.tx_queue.back_mut().unwrap() = value;
-                    } else if fifo && self.tx_queue.len() >= 4 {
-                        // FIFO parts: the 32-bit TX FIFO is full — the write
-                        // is lost (RM0351 §40.4.9). Conservative frame-count
-                        // bound (4 × 8-bit frames).
+                    } else if fifo && !self.fifo_tx_has_room() {
+                        // FIFO parts: the 32-bit TX FIFO is full (four 8-bit
+                        // or two 16-bit frames) — the write is lost (RM0444
+                        // §35.5.9; firmware must wait for TXE).
                     } else {
                         self.tx_queue.push_back(value);
                     }
@@ -2841,7 +2956,7 @@ impl Spi {
         self.pad_map = pad_map;
     }
 
-    /// `true` for the FIFO (L4/F7/G4) flavour of the STM32 layout.
+    /// `true` for the FIFO (G0/L4/F7/G4/WB) flavour of the STM32 layout.
     pub(crate) fn is_fifo_layout(&self) -> bool {
         matches!(&self.regs, SpiRegs::Stm32(r) if r.fifo)
     }
@@ -2892,6 +3007,129 @@ impl Spi {
             self.lines = Some(Arc::new(levels));
         }
         self.lines.as_ref().unwrap().clone()
+    }
+
+    // ── FIFO-type STM32 SPI (G0/L4/G4/WB/F7) ────────────────────────────────
+    //
+    // RM0444 §35.5.9: two 32-bit FIFOs. A frame of up to 8 bits occupies one
+    // byte of a FIFO, a wider one two. TXE is set while the TX FIFO is at or
+    // below half full; RXNE while the RX FIFO holds at least the CR2.FRXTH
+    // threshold (one byte with FRXTH=1, two with FRXTH=0); FTLVL/FRLVL report
+    // both levels in SR; a frame arriving into a full RX FIFO is lost and sets
+    // OVR. DR reads pop the RX FIFO by access size: an 8-bit read one byte, a
+    // 16-bit read two (two packed frames at DS≤8, one frame above).
+
+    /// Bytes one frame of the current CR2.DS occupies in a FIFO.
+    fn fifo_frame_bytes(&self) -> u8 {
+        match &self.regs {
+            SpiRegs::Stm32(r) if (r.cr2 >> 8) & 0xF >= 0b1000 => 2,
+            _ => 1,
+        }
+    }
+
+    /// FTLVL in bytes: the frames waiting in the TX FIFO.
+    fn fifo_tx_bytes(&self) -> u8 {
+        let frames = u8::try_from(self.tx_queue.len()).unwrap_or(u8::MAX);
+        frames
+            .saturating_mul(self.fifo_frame_bytes())
+            .min(FIFO_BYTES)
+    }
+
+    /// Room in the TX FIFO for one more frame of the current size.
+    fn fifo_tx_has_room(&self) -> bool {
+        self.fifo_tx_bytes() + self.fifo_frame_bytes() <= FIFO_BYTES
+    }
+
+    /// TXE on a FIFO port: the TX FIFO is at or below half full.
+    fn fifo_txe(&self) -> bool {
+        self.fifo_tx_bytes() <= FIFO_BYTES / 2
+    }
+
+    /// TXE as firmware reads it, on either STM32 flavour.
+    pub(super) fn stm32_txe(&self) -> bool {
+        match &self.regs {
+            SpiRegs::Stm32(r) if r.fifo => self.fifo_txe(),
+            SpiRegs::Stm32(r) => r.sr & 0x0002 != 0,
+            _ => false,
+        }
+    }
+
+    /// Re-derive RXNE from the RX FIFO level and CR2.FRXTH.
+    fn fifo_sync_rxne(&self) {
+        let frxth = matches!(&self.regs, SpiRegs::Stm32(r) if r.cr2 & FIFO_CR2_FRXTH != 0);
+        let threshold = if frxth { 1 } else { 2 };
+        self.stm32_rxne.set(self.fifo_rx.get().len >= threshold);
+    }
+
+    /// A received frame enters the RX FIFO. `false` when the FIFO had no room:
+    /// the frame is lost and OVR is set, as on silicon.
+    pub(super) fn fifo_rx_push(&mut self, word: u16) -> bool {
+        let bytes = self.fifo_frame_bytes();
+        let mut fifo = self.fifo_rx.get();
+        let stored = fifo.push_frame(word, bytes);
+        self.fifo_rx.set(fifo);
+        if stored {
+            if let SpiRegs::Stm32(r) = &mut self.regs {
+                r.dr = word;
+            }
+        } else {
+            self.fifo_ovr.set(true);
+            self.fifo_ovr_dr_read.set(false);
+        }
+        self.fifo_sync_rxne();
+        stored
+    }
+
+    /// Pop `bytes` (1 or 2) from the RX FIFO for a DR read of that size,
+    /// little-endian. An empty FIFO reads 0.
+    fn fifo_rx_pop(&self, bytes: u8) -> u16 {
+        let mut fifo = self.fifo_rx.get();
+        let mut v = 0u16;
+        for i in 0..bytes {
+            match fifo.pop() {
+                Some(b) => v |= u16::from(b) << (8 * i),
+                None => break,
+            }
+        }
+        self.fifo_rx.set(fifo);
+        self.fifo_sync_rxne();
+        if self.fifo_ovr.get() {
+            self.fifo_ovr_dr_read.set(true);
+        }
+        v
+    }
+
+    /// SR as firmware reads it on a FIFO port: TXE, RXNE, FTLVL and FRLVL are
+    /// live functions of the two FIFOs.
+    fn fifo_sr(&self, sr: u16) -> u16 {
+        let mut v = sr & !(FIFO_SR_LEVELS | 0x0043);
+        if self.fifo_ovr.get() {
+            v |= 0x0040;
+        }
+        if self.stm32_rxne.get() {
+            v |= 0x0001;
+        }
+        if self.fifo_txe() {
+            v |= 0x0002;
+        }
+        v |= fifo_level_code(self.fifo_rx.get().len) << FIFO_SR_FRLVL_SHIFT;
+        v |= fifo_level_code(self.fifo_tx_bytes()) << FIFO_SR_FTLVL_SHIFT;
+        v
+    }
+
+    /// FIFO-type master in NSS pulse mode: SSOE=1 with hardware NSS (SSM=0),
+    /// NSSP=1 and CPHA=0 (NSSP "has no meaning" at CPHA=1, RM0444 §35.7.2).
+    pub(super) fn nssp_active(&self) -> bool {
+        match &self.regs {
+            SpiRegs::Stm32(r) if r.fifo => {
+                r.cr1 & (1 << 2) != 0
+                    && r.cr1 & (1 << 9) == 0
+                    && r.cr1 & 1 == 0
+                    && r.cr2 & (1 << 2) != 0
+                    && r.cr2 & FIFO_CR2_NSSP != 0
+            }
+            _ => false,
+        }
     }
 
     /// Derive the wire timing from the live registers. Reset values (the
@@ -2958,6 +3196,11 @@ impl Spi {
         let (Some(f), Some(lines)) = (&self.frame, &self.lines) else {
             return;
         };
+        if f.nss_pulse {
+            // Between frames: SCK rests at CPOL, the data lines hold.
+            lines.set(f.t.cpol, lines.mosi(), lines.miso());
+            return;
+        }
         let (sck, mosi, miso) = Self::stm32_frame_levels(f);
         lines.set(sck, mosi, miso);
     }
@@ -3030,7 +3273,12 @@ impl Spi {
             bit_idx: 0,
             second_half: false,
             ticks_left: t.half_ticks,
+            nss_pulse: false,
         });
+        if self.nssp_active() {
+            // NSS pulse mode: NSS goes (back) low as the frame starts.
+            self.net_master_nss(false);
+        }
         self.stm32_drive_levels();
     }
 
@@ -3080,6 +3328,15 @@ impl Spi {
         let Some(mut f) = self.frame.take() else {
             return;
         };
+        if f.nss_pulse {
+            // The NSS-high pulse between two frames is over: the queued frame
+            // starts.
+            self.stm32_start_next_frame();
+            if self.frame.is_none() {
+                self.stm32_idle(f.t.cpol, irq);
+            }
+            return;
+        }
         if !f.second_half {
             f.second_half = true;
             f.ticks_left = f.t.half_ticks;
@@ -3114,46 +3371,63 @@ impl Spi {
         // a peer slave's answer, a pull, or nothing at all.
         let net_rx = (self.net_mode() && self.attached_devices.is_empty() && !self.loopback)
             .then_some(self.net_rx);
-        if net_rx.is_some() && self.net_master_rx_irq() {
-            *irq = true;
-        }
         let driven = self.loopback || !self.attached_devices.is_empty() || net_rx.is_some();
-        let level = &mut self.rx_fifo_level;
-        if let SpiRegs::Stm32(r) = &mut self.regs {
-            r.dr = net_rx.unwrap_or(f.miso);
-            if !rx_fifo {
+        let word = net_rx.unwrap_or(f.miso);
+        if !rx_fifo {
+            if let SpiRegs::Stm32(r) = &mut self.regs {
+                r.dr = word;
                 // Classic F1/F4 port: no FIFO, RXNE on every frame.
                 r.sr |= 0x0001;
                 self.stm32_rxne.set(true);
-            } else {
-                // FIFO port: RXNE follows CR2.FRXTH (bit 12). FRXTH=1 → the
-                // threshold is 8 bit, so one frame asserts it; FRXTH=0 (reset)
-                // → 16 bit, so a single 8-bit frame must NOT assert it. This is
-                // what a real NUCLEO-L476RG reports (SR=0x0002 after TX), and
-                // is why STM32duino sets FRXTH before 8-bit transfers.
-                // A slave (or loopback) must actually drive MISO for the FIFO
-                // to fill: a real NUCLEO-L476RG with nothing wired reports
-                // SR=0x0002 after a transmit even with FRXTH=1, which is the
-                // value pinned by test_nucleo_l476rg_spi_survival. Only once
-                // data is genuinely present does the CR2.FRXTH threshold decide
-                // whether one 8-bit frame is enough to raise RXNE (FRXTH=1) or
-                // whether 16 bits are required (FRXTH=0, the reset default).
-                if driven {
-                    *level = level.saturating_add(1);
-                    let frxth = r.cr2 & (1 << 12) != 0;
-                    if frxth || *level >= 2 {
-                        r.sr |= 0x0001;
-                        self.stm32_rxne.set(true);
-                    }
+            }
+            if net_rx.is_some() && self.net_master_rx_irq() {
+                *irq = true;
+            }
+        } else {
+            // FIFO port: the frame enters the RX FIFO and RXNE follows the
+            // CR2.FRXTH threshold. FRXTH=1 → 8 bit, so one 8-bit frame
+            // asserts it; FRXTH=0 (reset) → 16 bit, so a single 8-bit frame
+            // must NOT. This is what a real NUCLEO-L476RG reports (SR=0x0002
+            // after TX), and is why STM32duino sets FRXTH before 8-bit
+            // transfers.
+            // A slave (or loopback) must actually drive MISO for the FIFO to
+            // fill: a real NUCLEO-L476RG with nothing wired reports SR=0x0002
+            // after a transmit even with FRXTH=1, which is the value pinned by
+            // test_nucleo_l476rg_spi_survival.
+            if let SpiRegs::Stm32(r) = &mut self.regs {
+                r.dr = word;
+            }
+            if driven {
+                self.fifo_rx_push(word);
+                if net_rx.is_some() && self.net_master_rx_irq() && self.stm32_rxne.get() {
+                    *irq = true;
                 }
             }
         }
         if !self.tx_queue.is_empty() {
+            if self.nssp_active() {
+                // NSS pulse mode: NSS rises for one SCK period before the
+                // next frame (RM0444 §35.5.5). BSY stays set across the pulse.
+                self.net_master_nss(true);
+                self.frame = Some(ActiveFrame {
+                    nss_pulse: true,
+                    ticks_left: 2 * f.t.half_ticks,
+                    ..f
+                });
+                self.stm32_drive_levels();
+                return;
+            }
             // Back-to-back: the next queued frame starts on the very next
             // cycle (BSY stays set, TXE stays clear).
             self.stm32_start_next_frame();
             return;
         }
+        self.stm32_idle(f.t.cpol, irq);
+    }
+
+    /// The last frame is out and nothing is queued: BSY drops, TXE rises,
+    /// the wire idles.
+    fn stm32_idle(&mut self, cpol: bool, irq: &mut bool) {
         self.frame = None;
         if let SpiRegs::Stm32(r) = &mut self.regs {
             r.sr &= !0x0080; // Clear BSY
@@ -3162,10 +3436,14 @@ impl Spi {
                 *irq = true; // TXEIE
             }
         }
+        if self.nssp_active() {
+            // NSS pulse mode, single transfer: NSS is forced high after it.
+            self.net_master_nss(true);
+        }
         // Wire idles: SCK returns to CPOL (the trailing edge of the last
         // bit); MOSI/MISO hold their last driven level, like real pads.
         if let Some(lines) = &self.lines {
-            lines.set(f.t.cpol, lines.mosi(), lines.miso());
+            lines.set(cpol, lines.mosi(), lines.miso());
         }
     }
 
@@ -3237,6 +3515,11 @@ impl crate::Peripheral for Spi {
         self.lines.as_ref().map(|levels| &**levels.pad_lines())
     }
 
+    /// The nRF52 SPIM names its pads in `PSEL` (see `wire_nrf52_pads`).
+    fn claims_pads(&self) -> bool {
+        self.is_nrf()
+    }
+
     fn wire_input_edge(&mut self, line: usize, level: bool, cycle: u64) -> bool {
         self.stm32_set_stamp(Some(cycle));
         let wake = self.net_slave_edge(line, level);
@@ -3255,6 +3538,22 @@ impl crate::Peripheral for Spi {
             // Widen u16→u32 before the shift: byte accesses at offsets 2/3 read
             // the upper byte of the next halfword; `(u16 as u32) >> 16` is 0
             // without an overflow panic under the CI release profile.
+            SpiRegs::Stm32(r) if r.fifo => match reg_offset {
+                // DR, 8-bit access: pops one byte of the RX FIFO. The upper
+                // byte lane alone pops nothing.
+                0x0C if byte_offset == 0 => return Ok(self.fifo_rx_pop(1) as u8),
+                0x0C => return Ok(0),
+                0x08 => {
+                    let v = self.fifo_sr(r.sr);
+                    if byte_offset == 0 && self.fifo_ovr_dr_read.get() {
+                        // DR then SR: OVR clears (after this read shows it).
+                        self.fifo_ovr.set(false);
+                        self.fifo_ovr_dr_read.set(false);
+                    }
+                    u32::from(v)
+                }
+                _ => u32::from(r.read_reg(reg_offset)),
+            },
             SpiRegs::Stm32(r) => {
                 // DR read: clear-on-read RXNE (silicon). Must happen on every
                 // access size that drains RX, including the byte path HAL uses.
@@ -3304,14 +3603,12 @@ impl crate::Peripheral for Spi {
             } else {
                 false
             };
-            if start_triggered {
-                self.nrf52_pending_start = true;
-            }
             // ENABLE (0x500) and PSEL.SCK/MOSI (0x508/0x50C) all move which pad
             // this controller's wire reaches. Republishing on every nRF write
             // rather than only on those three offsets keeps the ONE call site:
             // `update` is two comparisons when nothing moved.
             self.sync_nrf_pin_claims();
+            self.nrf_after_write(reg_offset, new, start_triggered);
             return Ok(());
         }
 
@@ -3397,11 +3694,9 @@ impl crate::Peripheral for Spi {
             } else {
                 false
             };
-            if start_triggered {
-                self.nrf52_pending_start = true;
-            }
             // See the byte-write path: one call site for every pad-moving write.
             self.sync_nrf_pin_claims();
+            self.nrf_after_write(reg_offset, value, start_triggered);
             return Ok(());
         }
         // STM32H5: 32-bit registers must be written atomically — a word write
@@ -3436,6 +3731,31 @@ impl crate::Peripheral for Spi {
         self.write(offset + 2, ((value >> 16) & 0xFF) as u8)?;
         self.write(offset + 3, ((value >> 24) & 0xFF) as u8)?;
         Ok(())
+    }
+
+    /// FIFO-type STM32 DR: a halfword read is ONE access popping two bytes
+    /// of the RX FIFO (two packed frames at DS≤8, one frame above). The
+    /// byte-wise default would pop the low byte and read 0 for the high one.
+    fn read_u16(&self, offset: u64) -> SimResult<u16> {
+        if offset == 0x0C && self.is_fifo_layout() {
+            return Ok(self.fifo_rx_pop(2));
+        }
+        let b0 = self.read(offset)? as u16;
+        let b1 = self.read(offset + 1)? as u16;
+        Ok(b0 | (b1 << 8))
+    }
+
+    /// As [`Self::read_u16`]: DR is a 16-bit register, a word read of it is
+    /// one halfword-sized pop (bits 31:16 read 0).
+    fn read_u32(&self, offset: u64) -> SimResult<u32> {
+        if offset == 0x0C && self.is_fifo_layout() {
+            return Ok(u32::from(self.fifo_rx_pop(2)));
+        }
+        let b0 = self.read(offset)? as u32;
+        let b1 = self.read(offset + 1)? as u32;
+        let b2 = self.read(offset + 2)? as u32;
+        let b3 = self.read(offset + 3)? as u32;
+        Ok(b0 | (b1 << 8) | (b2 << 16) | (b3 << 24))
     }
 
     fn write_u16(&mut self, offset: u64, value: u16) -> SimResult<()> {
@@ -3511,6 +3831,10 @@ impl crate::Peripheral for Spi {
     /// deadline by up to one tick interval) and re-arms via `reschedule_delay`
     /// until the frame (and any queued frames) complete.
     fn take_scheduled_events(&mut self) -> Vec<(u64, u32)> {
+        // nRF52 SPIM on a world `gpio_net`: the bit engine's own chain.
+        if self.nrf_net_mode() || self.nrf_net_needs_bus() {
+            return self.nrf_net_take_events();
+        }
         // nRF52 SPIM EasyDMA: delay-0 completion (next cycle after TASKS_START).
         if self.nrf52_pending_start {
             return vec![(0, SPI_NRF52_EASYDMA_TOKEN)];
@@ -3560,6 +3884,9 @@ impl crate::Peripheral for Spi {
         sched: &mut crate::sched::EventScheduler,
         bus: &mut dyn crate::Bus,
     ) -> crate::sched::EventResult {
+        if event_token == nrf_net::NRF_NET_TOKEN {
+            return self.nrf_net_on_event(sched.now(), bus);
+        }
         if event_token == SPI_NRF52_EASYDMA_TOKEN {
             if self.nrf52_pending_start {
                 self.do_nrf52_easydma(bus);
@@ -3644,6 +3971,7 @@ impl crate::Peripheral for Spi {
     /// nRF52 SPIM EasyDMA needs bus access to read/write RAM buffers.
     fn needs_bus_tick(&self) -> bool {
         self.nrf52_pending_start
+            || self.nrf_net_needs_bus()
             || self.has_external_bus_device()
             || self.selected_devices.iter().any(|selected| *selected)
     }
@@ -3654,6 +3982,9 @@ impl crate::Peripheral for Spi {
         self.poll_external_bus_devices();
         if self.nrf52_pending_start {
             self.do_nrf52_easydma(bus);
+        }
+        if self.nrf_net_needs_bus() {
+            self.nrf_net_dma(bus);
         }
     }
 
@@ -3670,6 +4001,10 @@ impl crate::Peripheral for Spi {
         let mut irq = false;
         let mut fired: Vec<u32> = Vec::new();
 
+        // ── nRF52 SPIM on a world `gpio_net`: the bit engine's due steps ─────
+        if self.is_nrf() {
+            self.nrf_net_tick();
+        }
         // ── nRF52 SPIM: raise IRQ for any enabled+pending EVENTS ─────────────
         if let SpiRegs::Nrf52(r) = &self.regs {
             if r.map == NrfSpimMap::Nrf54l {
@@ -3718,6 +4053,10 @@ impl crate::Peripheral for Spi {
             if r.events_endtx != 0 && r.inten & INTEN_ENDTX != 0 {
                 irq = true;
                 fired.push(0x120);
+            }
+            if r.events_started != 0 && r.inten & nrf_net::INTEN_STARTED != 0 {
+                irq = true;
+                fired.push(0x14C);
             }
             return crate::PeripheralTickResult {
                 irq,
@@ -3807,6 +4146,28 @@ impl crate::Peripheral for Spi {
 }
 
 impl Spi {
+    /// After an nRF register write: hand `TASKS_START` / `TASKS_STOP` to the
+    /// net engine when the SPIM is on a world `gpio_net`, and re-state its
+    /// line drives.
+    fn nrf_after_write(&mut self, reg_offset: u64, value: u32, start_triggered: bool) {
+        let net = self.nrf_net_mode();
+        if start_triggered {
+            if net {
+                self.nrf_net_start();
+            } else {
+                self.nrf52_pending_start = true;
+            }
+        }
+        if net {
+            if reg_offset == 0x014 && value != 0 {
+                self.nrf_net_stop();
+            }
+            self.nrf_net_apply_drive();
+        } else if self.nrf_net_needs_bus() || self.nrf_net_busy() {
+            self.nrf_net_disable();
+        }
+    }
+
     fn sync_nrf52_gpio_cs(&mut self, bus: &dyn Bus) {
         if !matches!(self.regs, SpiRegs::Nrf52(_)) {
             return;
@@ -4009,6 +4370,9 @@ impl Spi {
 
 #[path = "spi_net.rs"]
 mod net;
+
+#[path = "spi_nrf_net.rs"]
+mod nrf_net;
 
 #[cfg(test)]
 #[path = "spi_tests.rs"]

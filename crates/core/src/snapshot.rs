@@ -46,9 +46,18 @@ pub struct MachineSnapshot {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CpuSnapshot {
     Arm(ArmCpuSnapshot),
+    /// Diagnostic visible state only; native Cortex-A restore is unsupported.
+    CortexA(CortexACpuSnapshot),
     RiscV(RiscVCpuSnapshot),
     XtensaLx7(XtensaLx7CpuSnapshot),
     Avr(AvrCpuSnapshot),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CortexACpuSnapshot {
+    pub registers: Vec<u32>,
+    pub pc: u32,
+    pub cpsr: u32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -93,6 +102,12 @@ pub struct RiscVCpuSnapshot {
 
     pub mtime: u64,
     pub mtimecmp: u64,
+
+    /// Debug trigger module (hardware breakpoints / watchpoints). Absent in
+    /// snapshots written before it was captured; those still load, with the
+    /// trigger module at reset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub triggers: Option<crate::cpu::riscv::trigger::TriggerSnapshot>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

@@ -289,6 +289,9 @@ impl SystemBus {
             {
                 self.collect_scheduled_events(owner);
             }
+            // The edge may have given the owner EasyDMA work (an nRF slave
+            // ending a transaction): keep the bus-tick set in step.
+            self.refresh_bus_tick_index(owner);
         }
         if let Some(port) = self.peripherals[gpio_idx].dev.pins_mut() {
             crate::pins::watch_end(port);

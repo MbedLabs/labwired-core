@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- nRF52 SPI and I²C over `gpio_net`s (`docs/howto/gpio-nets.md`, "Buses
+  over nets"): the nRF52840 SPIM, SPIS, TWIM and TWIS talk to other chips
+  bit by bit at the pads their `PSEL` registers name, with EasyDMA buffers
+  (`TXD`/`RXD` `PTR`/`MAXCNT`/`AMOUNT`) and their events and interrupts
+  (`STARTED`/`END`/`ENDRX`/`ENDTX`/`STOPPED`; SPIS semaphore `ACQUIRED`,
+  `SEMSTAT`, `DEF`/`ORC`, `OVERREAD`/`OVERFLOW`; TWIM `LASTTX`/`LASTRX`
+  shortcuts, `SUSPEND`/`RESUME`, `ERROR` with `ANACK`/`DNACK`; TWIS
+  `WRITE`/`READ`, `PREPARERX`/`PREPARETX` with clock stretching until
+  firmware prepares, `MATCH`). The serial instance at 0x40003000 gains its
+  SPIS (`ENABLE = 2`) and TWIS (`ENABLE = 9`) personalities, and the window
+  is one register file: what firmware programs before `ENABLE` reaches every
+  personality (a SPIM whose `TXD.MAXCNT` was written while disabled used to
+  clock nothing). A new chip-neutral SPI wire engine
+  (`peripherals::spi_bitbus`) serves the SPIM and SPIS; the TWIM and TWIS use
+  `peripherals::i2c_bitbus`. Tested against an STM32G071 both ways round on
+  each bus (`examples/gpio-net-buses`, `env-spi-nrf52*.yaml`,
+  `env-i2c-nrf52*.yaml`, clang-built firmware), including an address NACK,
+  a slow G071 target stretching the TWIM's clock and a slow TWIS stretching
+  the G071's, each re-run with the nodes swapped and with 37 ns rounds.
 - ESP32-C3 and ESP32-C6 GP-SPI2 and I2C0 on `gpio_net`s, bit by bit at the
   pads (`docs/howto/gpio-nets.md`, "Buses over nets";
   `examples/gpio-net-buses`, `tests/world_gpio_net_buses.rs`):
@@ -75,6 +94,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     with the nodes swapped and with 37 ns rounds.
 
 ### Fixed
+- A peripheral answering a `gpio_net` edge on a timed core (the nRF52's
+  Cortex-M4) stamped its answer with the bus cycle, which lags the core
+  between peripheral ticks: the answer's time then depended on the world's
+  round size. The world brings the bus up to the core's cycle before it
+  applies an edge.
+- STM32G071 and STM32F767 SPI are the FIFO-type IP (RM0444 §35, RM0410
+  §35: `CR2.DS` 4-16 bits, `FRXTH`, 32-bit RX/TX FIFOs, `FRLVL`/`FTLVL`,
+  `NSSP`, `LDMA_TX`/`LDMA_RX`), not the classic F1/F4 one: both now load the
+  `stm32_fifo` profile (`CR2` resets to 0x0700). The FIFO profile itself
+  (G0/L4/G4/WB/F7) now models the FIFOs instead of one data register: frames
+  queue in a 4-byte RX FIFO (one byte up to 8 bits, two above) and pop by
+  `DR` access size (an 8-bit read one byte, a 16-bit read two — two packed
+  frames at `DS` ≤ 8); RXNE follows the `FRXTH` byte threshold; TXE means the
+  TX FIFO is at most half full and a write to a full one is lost (byte
+  accounting: four 8-bit or two 16-bit frames); `SR.FRLVL`/`FTLVL` read the
+  levels; a frame into a full RX FIFO sets OVR, cleared by a `DR` read then
+  an `SR` read; a master with `NSSP=1`, `SSOE=1`, `CPHA=0` pulses NSS high
+  for one SCK period between back-to-back frames (and the next frame waits
+  for it). The classic F1/F4/L0 profile is unchanged. The F767 keeps its F4
+  AF5 pinout through the new `pad_map: stm32f4`. On a `gpio_net` the FIFO
+  slave queues its answers in the TX FIFO and its received frames in the RX
+  FIFO. `examples/gpio-net-buses` G071 firmware now sets `FRXTH` (it relied
+  on the classic RXNE-per-frame behaviour a real G0 does not have) and has
+  4-, 12- and 16-bit `CR2.DS` variants and a no-`FRXTH` master that stalls,
+  as on silicon; `spi_byte_level_golden`'s FIFO case was re-recorded for its
+  `DR` reads only (a 16-bit read at `DS` = 8 now returns both packed frames;
+  the wire is byte-identical).
+- STM32F4 SPI hardware NSS on a `gpio_net`: the F4 AF5 table routes
+  SPI1_NSS (PA4, PA15) and SPI2_NSS (PB9, PB12), so a slave with `SSM=0` is
+  selected by its NSS pad and a master with `SSOE=1` drives it, as on the
+  G071 (`examples/gpio-net-buses/env-spi16-nss.yaml`, tested on an F401
+  pair).
+- ESP32-C3 CPU snapshots carry the debug trigger module (`tselect`, each
+  trigger's `tdata1`/`tdata2` including its `hit` bit, `tcontrol`), so a
+  resumed machine keeps its breakpoints and watchpoints — both the JSON
+  `RiscVCpuSnapshot` (optional `triggers` field) and the bincode runtime
+  snapshot (`RiscVRuntimeSnapshotV2`, read newest-layout first). Snapshots
+  written before still load, with the trigger module at reset.
 - STM32 SPI slave on a net: a frame that starts with nothing written to
   `DR` shifts out the shift register (the previous frame received) instead
   of zeros, and is counted (`Spi::net_slave_underruns`) and logged once;

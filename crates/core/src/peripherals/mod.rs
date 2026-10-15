@@ -6,6 +6,7 @@
 
 pub mod adc;
 pub mod afio;
+pub mod armv7;
 pub mod avr_adc;
 pub mod avr_gpio;
 pub mod ble_air;
@@ -92,6 +93,7 @@ pub mod sdmmc;
 pub mod segger_rtt;
 pub mod simctl;
 pub mod spi;
+pub(crate) mod spi_bitbus;
 pub mod spi_waveform;
 pub mod stm32f4_dma;
 pub mod stub;

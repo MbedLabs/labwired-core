@@ -613,6 +613,235 @@ mod spi16 {
     }
 }
 
+/// The F401 pair of `spi16` on its hardware slave select
+/// (`env-spi16-nss.yaml`): the master's SPI drives PA4 = SPI1_NSS
+/// (CR2.SSOE=1) and the slave (SSM=0) is selected by the level its own PA4
+/// = SPI1_NSS pad reads off the net.
+mod spi16_nss {
+    use super::*;
+
+    const MASTER_TX: [u16; 3] = [0xA55A, 0x0FF0, 0x8001];
+    const SLAVE_TX: [u16; 3] = [0x1234, 0xBEEF, 0x00FF];
+
+    #[test]
+    fn the_masters_ssoe_drives_nss_and_the_slave_follows_its_nss_pad() {
+        let mut world = build("env-spi16-nss.yaml", |s| s);
+        run_us(&mut world, 400);
+        let a = result(&world, "a", 8);
+        assert_eq!(a[7], 1, "master finished: {a:x?}");
+        assert_eq!(&a[..3], SLAVE_TX.map(u32::from).as_slice());
+        assert_eq!(a[4] & (1 << 6), 0, "master: no overrun");
+        let b = result(&world, "b", 8);
+        assert_eq!(&b[..3], MASTER_TX.map(u32::from).as_slice());
+        assert_eq!(b[4], 3, "one RXNE interrupt per 16-bit frame");
+        assert_eq!(b[5], 0, "no OVR");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        // NSS: driven low by SPE=1 with SSOE, released at SPE=0 (pull-up).
+        assert_eq!(net(&reports, "nss").edges, 2);
+        assert!(net(&reports, "nss").level, "released at the end");
+        assert_eq!(net(&reports, "sck").edges, 3 * 16 * 2);
+        // MOSI: the words, then the pull-down once SPE=0 stops the master
+        // driving it (0x8001 left it high).
+        let mut mosi = bits_n(&MASTER_TX, 16);
+        mosi.push(false);
+        assert_eq!(net(&reports, "mosi").edges, edges_of(&mosi, false));
+        // Selected by the NSS fall: MISO carries the three answers, the MSB
+        // (0) of the next word (0x7E7E) at the last trailing edge, then the
+        // pull-down once NSS rises and the slave lets go.
+        let mut miso = bits_n(&SLAVE_TX, 16);
+        miso.push(false);
+        miso.push(false);
+        assert_eq!(net(&reports, "miso").edges, edges_of(&miso, false));
+        assert!(!net(&reports, "miso").level);
+    }
+
+    #[test]
+    fn with_nss_unwired_the_hardware_select_slave_never_answers() {
+        // Without the NSS net the slave's pad reads no level: it is never
+        // selected, takes no frame and leaves MISO to the pull-down.
+        let mut world = build("env-spi16-nss.yaml", |s| {
+            let start = s.find("  - type: gpio_net").unwrap();
+            let end = start + 1 + s[start + 1..].find("  - type: gpio_net").unwrap();
+            format!("{}{}", &s[..start], &s[end..])
+        });
+        run_us(&mut world, 400);
+        let a = result(&world, "a", 8);
+        assert_eq!(a[7], 1, "master finished: {a:x?}");
+        assert_eq!(&a[..3], &[0, 0, 0], "MISO is the pull-down");
+        let b = result(&world, "b", 8);
+        assert_eq!(b[4], 0, "the slave was never selected");
+    }
+
+    #[test]
+    fn hardware_nss_frames_do_not_depend_on_node_order_or_round_size() {
+        assert_order_and_round_independent("env-spi16-nss.yaml", |s| s, ["a", "b"], 400, 8);
+    }
+}
+
+/// The bits of `words`, `n` bits each, MSB first.
+fn bits_n(words: &[u16], n: u8) -> Vec<bool> {
+    words
+        .iter()
+        .flat_map(|w| (0..n).rev().map(move |i| (w >> i) & 1 != 0))
+        .collect()
+}
+
+/// The STM32G071's FIFO-type SPI (RM0444 §35) on the `env-spi.yaml` pair at
+/// other CR2.DS frame sizes, each way round: `spi-*-ds16/12/4` (build.sh).
+/// The 8-bit size is `spi` / `spi_shapes` above.
+mod spi_frame_sizes {
+    use super::*;
+
+    fn mask(ds: u8) -> u16 {
+        ((1u32 << ds) - 1) as u16
+    }
+
+    /// What `src/spi_master.c` sends at `ds` bits.
+    fn master_tx(ds: u8) -> [u16; 4] {
+        let words = if ds <= 8 {
+            [0xA5, 0x3C, 0x5A, 0xC3]
+        } else {
+            [0xA55A, 0x3CC3, 0x5AA5, 0xC33C]
+        };
+        words.map(|w| w & mask(ds))
+    }
+
+    /// `ANSWER(n)` of `src/spi_slave.c`: 0x81+n in both bytes, masked.
+    fn answer(ds: u8, n: u16) -> u16 {
+        (((0x81 + n) * 0x0101) as u32 & u32::from(mask(ds))) as u16
+    }
+
+    /// Node `a` runs the master and `b` the slave, or the other way round
+    /// (`swapped`); the wiring is symmetric, PA4 being the master's GPIO chip
+    /// select and the slave's hardware NSS on either chip.
+    fn env(ds: u8, swapped: bool) -> impl Fn(String) -> String {
+        move |s: String| {
+            let (master, slave) = (
+                format!("\"firmware/spi-master-ds{ds}.elf\""),
+                format!("\"firmware/spi-slave-ds{ds}.elf\""),
+            );
+            let (on_a, on_b) = if swapped {
+                (slave, master)
+            } else {
+                (master, slave)
+            };
+            s.replace("\"firmware/spi-master.elf\"", "MASTER")
+                .replace("\"firmware/spi-slave.elf\"", "SLAVE")
+                .replace("MASTER", &on_a)
+                .replace("SLAVE", &on_b)
+        }
+    }
+
+    fn exchange(ds: u8, swapped: bool) {
+        let mut world = build("env-spi.yaml", env(ds, swapped));
+        run_us(&mut world, 600);
+        let (m, sl) = if swapped { ("b", "a") } else { ("a", "b") };
+        let answers = [0, 1, 2, 3].map(|n| answer(ds, n));
+        let tx = master_tx(ds);
+
+        let mr = result(&world, m, 8);
+        assert_eq!(mr[7], 1, "DS={ds}: master finished: {mr:x?}");
+        assert_eq!(
+            &mr[..4],
+            answers.map(u32::from).as_slice(),
+            "DS={ds}: the master's RX FIFO holds what the slave put on MISO"
+        );
+        assert_eq!(mr[4] & (1 << 6), 0, "master: no overrun");
+        // SR at the end: TXE only — both FIFOs empty (FRLVL = FTLVL = 0).
+        assert_eq!(mr[4], 0x0002, "DS={ds}: master SR");
+        let sr = result(&world, sl, 8);
+        assert_eq!(
+            &sr[..4],
+            tx.map(u32::from).as_slice(),
+            "DS={ds}: the slave's RX FIFO holds what the master put on MOSI"
+        );
+        assert_eq!(sr[4], 4, "DS={ds}: one RXNE interrupt per frame");
+        assert_eq!(sr[5], 0, "no OVR");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        let bits = u64::from(ds);
+        assert_eq!(net(&reports, "sck").edges, 4 * bits * 2, "DS={ds}: SCK");
+        assert_eq!(net(&reports, "cs").edges, 2);
+        assert_eq!(
+            net(&reports, "mosi").edges,
+            edges_of(&bits_n(&tx, ds), false),
+            "DS={ds}: MOSI"
+        );
+        // MISO: the answers, the MSB of the next one (queued from the RXNE
+        // interrupt) at the last trailing edge, the pull-down once CS rises.
+        let mut miso = bits_n(&answers, ds);
+        miso.push((answer(ds, 4) >> (ds - 1)) & 1 != 0);
+        miso.push(false);
+        assert_eq!(
+            net(&reports, "miso").edges,
+            edges_of(&miso, false),
+            "DS={ds}: MISO"
+        );
+    }
+
+    #[test]
+    fn sixteen_bit_frames_cross_whole_both_ways() {
+        exchange(16, false);
+        exchange(16, true);
+    }
+
+    #[test]
+    fn twelve_bit_frames_cross_whole_both_ways() {
+        exchange(12, false);
+        exchange(12, true);
+    }
+
+    #[test]
+    fn four_bit_frames_cross_whole_both_ways() {
+        exchange(4, false);
+        exchange(4, true);
+    }
+
+    #[test]
+    fn eight_bit_frames_cross_both_ways() {
+        // The default firmware is the DS=8 build; swap its roles too.
+        let mut world = build("env-spi.yaml", |s| {
+            s.replace("\"firmware/spi-master.elf\"", "MASTER")
+                .replace("\"firmware/spi-slave.elf\"", "\"firmware/spi-master.elf\"")
+                .replace("MASTER", "\"firmware/spi-slave.elf\"")
+        });
+        run_us(&mut world, 400);
+        let m = result(&world, "b", 8);
+        assert_eq!(m[7], 1, "master on b finished: {m:x?}");
+        assert_eq!(&m[..4], &[0x81, 0x82, 0x83, 0x84]);
+        let s = result(&world, "a", 8);
+        assert_eq!(&s[..4], &[0xA5, 0x3C, 0x5A, 0xC3]);
+        assert_eq!(s[4], 4);
+    }
+
+    #[test]
+    fn an_8_bit_master_without_frxth_waits_for_16_bits_and_stalls() {
+        // CR2.FRXTH left at its reset 0: RXNE needs two bytes in the RX
+        // FIFO, so after one 8-bit frame the master polls RXNE forever —
+        // what an F4-style driver does on a real G0.
+        let mut world = build("env-spi.yaml", |s| {
+            s.replace("firmware/spi-master.elf", "firmware/spi-master-nofrxth.elf")
+        });
+        run_us(&mut world, 400);
+        let a = result(&world, "a", 8);
+        assert_eq!(a[7], 0, "the master never finishes: {a:x?}");
+        assert_eq!(a[0], 0, "and never reads DR");
+        let reports = world.gpio_net_reports();
+        assert_eq!(net(&reports, "sck").edges, 16, "one frame only");
+        assert_eq!(result(&world, "b", 8)[4], 1, "the slave got that frame");
+    }
+
+    #[test]
+    fn frame_sizes_do_not_depend_on_node_order_or_round_size() {
+        for ds in [16, 4] {
+            assert_order_and_round_independent("env-spi.yaml", env(ds, false), ["a", "b"], 600, 8);
+        }
+    }
+}
+
 mod i2c {
     use super::*;
 
@@ -1078,6 +1307,190 @@ mod rp2040_i2c {
             "env-i2c-rp2040-target.yaml",
             |s| s,
             ["a", "rp"],
+            1500,
+            8,
+        );
+    }
+}
+
+/// The nRF52840's SPIM0 / SPIS0 (EasyDMA) against the STM32G071's SPI1, both
+/// ways round (`env-spi-nrf52.yaml`, `env-spi-nrf52-slave.yaml`).
+mod nrf52_spi {
+    use super::*;
+
+    const MASTER_TX: [u8; 4] = [0xA5, 0x3C, 0x5A, 0xC3];
+    const SLAVE_TX: [u8; 4] = [0x81, 0x82, 0x83, 0x84];
+
+    /// MISO in mode 0: the answers; at the last trailing edge the next
+    /// word's MSB (1: the G071's 0x85, the SPIS's ORC 0xFF); the pull-down
+    /// once CS rises and the slave lets go.
+    fn miso_edges() -> u64 {
+        let mut miso = bits_of(&SLAVE_TX, false);
+        miso.push(true);
+        miso.push(false);
+        edges_of(&miso, false)
+    }
+
+    #[test]
+    fn an_nrf52_spim_master_exchanges_its_easydma_buffers_with_a_g071_slave() {
+        let mut world = build("env-spi-nrf52.yaml", |s| s);
+        run_us(&mut world, 600);
+        let nrf = result(&world, "nrf", 8);
+        assert_eq!(nrf[7], 1, "master finished: {nrf:x?}");
+        assert_eq!(&nrf[..4], SLAVE_TX.map(u32::from).as_slice(), "RX buffer");
+        assert_eq!((nrf[4], nrf[5]), (4, 4), "TXD.AMOUNT, RXD.AMOUNT");
+        assert_eq!(nrf[6], 1, "one END interrupt");
+        let b = result(&world, "b", 8);
+        assert_eq!(&b[..4], MASTER_TX.map(u32::from).as_slice());
+        assert_eq!((b[4], b[5]), (4, 0), "one RXNE per frame, no OVR");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        assert_eq!(net(&reports, "sck").edges, 64);
+        assert_eq!(net(&reports, "cs").edges, 2);
+        assert_eq!(net(&reports, "mosi").edges, data_edges(&MASTER_TX, false));
+        assert_eq!(net(&reports, "miso").edges, miso_edges());
+    }
+
+    #[test]
+    fn an_nrf52_spis_slave_answers_a_g071_master_from_its_easydma_buffer() {
+        let mut world = build("env-spi-nrf52-slave.yaml", |s| s);
+        run_us(&mut world, 400);
+        let a = result(&world, "a", 8);
+        assert_eq!(a[7], 1, "master finished: {a:x?}");
+        assert_eq!(&a[..4], SLAVE_TX.map(u32::from).as_slice());
+        let nrf = result(&world, "nrf", 8);
+        assert_eq!(nrf[7], 1, "slave finished: {nrf:x?}");
+        assert_eq!(&nrf[..4], MASTER_TX.map(u32::from).as_slice(), "RX buffer");
+        assert_eq!((nrf[4], nrf[5]), (4, 4), "RXD.AMOUNT, TXD.AMOUNT");
+        assert_eq!(nrf[6], 1, "END_ACQUIRE: the CPU holds the semaphore");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        assert_eq!(net(&reports, "sck").edges, 64);
+        assert_eq!(net(&reports, "cs").edges, 2);
+        assert_eq!(net(&reports, "mosi").edges, data_edges(&MASTER_TX, false));
+        assert_eq!(net(&reports, "miso").edges, miso_edges());
+    }
+
+    #[test]
+    fn nrf52_spi_exchanges_do_not_depend_on_node_order_or_round_size() {
+        assert_order_and_round_independent("env-spi-nrf52.yaml", |s| s, ["nrf", "b"], 600, 8);
+        assert_order_and_round_independent("env-spi-nrf52-slave.yaml", |s| s, ["a", "nrf"], 400, 8);
+    }
+}
+
+/// The nRF52840's TWIM0 / TWIS0 (EasyDMA) against the STM32G071's modern
+/// I²C, both ways round (`env-i2c-nrf52.yaml`, `env-i2c-nrf52-target.yaml`):
+/// the same register-file exchange as `env-i2c.yaml`.
+mod nrf52_i2c {
+    use super::*;
+
+    /// Ten bytes of 9 clocks (address + 3; address + 1, address + 2;
+    /// address), one repeated START, three STOPs.
+    const SCL_EDGES: u64 = 2 * (9 * 10 + 1 + 3);
+
+    fn check_twim(world: &World) {
+        let nrf = result(world, "nrf", 8);
+        assert_eq!(nrf[7], 1, "controller finished: {nrf:x?}");
+        assert_eq!(nrf[2], 0, "0x42 ACKed the write: ERRORSRC clear");
+        assert_eq!(
+            &nrf[..2],
+            &[0xDE, 0xAD],
+            "read back after a repeated START: {nrf:x?} {:x?}",
+            result(world, "b", 8)
+        );
+        assert_eq!(nrf[6], 2, "RXD.AMOUNT");
+        assert_eq!(nrf[3], 2, "nobody at 0x50: ERRORSRC.ANACK");
+        assert_eq!(nrf[5], 0, "TXD.AMOUNT after an address NACK");
+        assert_eq!(nrf[4], 3, "three STOPPED events");
+
+        let b = result(world, "b", 8);
+        assert_eq!(b[0], 2, "the target saw its two transfers end");
+        assert_eq!(&b[1..3], &[0xDE, 0xAD]);
+        assert_eq!(b[3], 4, "pointer + 2 data, then the pointer again");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        let scl = net(&reports, "scl");
+        assert!(
+            scl.level && net(&reports, "sda").level,
+            "bus idle at the end"
+        );
+        assert_eq!(scl.edges, SCL_EDGES, "{scl:#?}");
+    }
+
+    #[test]
+    fn an_nrf52_twim_controller_writes_and_reads_a_g071_target() {
+        let mut world = build("env-i2c-nrf52.yaml", |s| s);
+        run_us(&mut world, 1500);
+        check_twim(&world);
+    }
+
+    #[test]
+    fn a_slow_g071_target_holds_the_nrf52_twim_by_stretching_scl() {
+        // The G071 handler waits about 15 us before it answers ADDR or TXIS,
+        // several of the TWIM's SCL low periods.
+        let mut world = build("env-i2c-nrf52.yaml", |s| {
+            s.replace("i2c-target.elf", "i2c-target-slow.elf")
+        });
+        run_us(&mut world, 2500);
+        check_twim(&world);
+        // K250: a 256-cycle bit, SCL low for 128 of them.
+        let held = longest_low(&world, "nrf", 27);
+        assert!(held > 4 * 128, "SCL held low {held} cycles");
+    }
+
+    fn check_twis(world: &World) {
+        let a = result(world, "a", 8);
+        assert_eq!(a[7], 1, "controller finished: {a:x?}");
+        assert_eq!(a[2], 0, "0x42 ACKed the write");
+        assert_eq!(&a[..2], &[0xDE, 0xAD], "read back through a repeated START");
+        assert_eq!(a[3], 1, "nobody at 0x50: NACKF");
+        assert_eq!(a[4], 3);
+
+        let nrf = result(world, "nrf", 8);
+        assert_eq!(nrf[0], 2, "STOPPED for its two transfers only: {nrf:x?}");
+        assert_eq!(&nrf[1..3], &[0xDE, 0xAD]);
+        assert_eq!(nrf[3], 4, "pointer + 2 data, then the pointer again");
+        assert_eq!(nrf[4], 2, "TXD.AMOUNT: two bytes read");
+        assert_eq!((nrf[5], nrf[6]), (1, 2), "READ and WRITE events");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        let scl = net(&reports, "scl");
+        assert!(scl.level && net(&reports, "sda").level);
+        assert_eq!(scl.edges, SCL_EDGES, "{scl:#?}");
+    }
+
+    #[test]
+    fn a_g071_controller_writes_and_reads_an_nrf52_twis_target() {
+        let mut world = build("env-i2c-nrf52-target.yaml", |s| s);
+        run_us(&mut world, 1500);
+        check_twis(&world);
+    }
+
+    #[test]
+    fn a_slow_nrf52_twis_target_holds_the_controller_by_stretching_scl() {
+        // About 25 us before each prepare: the TWIS holds SCL low after its
+        // address until the firmware hands it a buffer.
+        let mut world = build("env-i2c-nrf52-target.yaml", |s| {
+            s.replace("nrf-twis-target.elf", "nrf-twis-target-slow.elf")
+        });
+        run_us(&mut world, 2500);
+        check_twis(&world);
+        // The G071's own SCL low period is (SCLL + 1) x 8 = 128 cycles.
+        let held = longest_low(&world, "a", 6);
+        assert!(held > 4 * 128, "SCL held low {held} cycles");
+    }
+
+    #[test]
+    fn nrf52_i2c_does_not_depend_on_node_order_or_round_size() {
+        assert_order_and_round_independent("env-i2c-nrf52.yaml", |s| s, ["nrf", "b"], 1500, 8);
+        assert_order_and_round_independent(
+            "env-i2c-nrf52-target.yaml",
+            |s| s,
+            ["a", "nrf"],
             1500,
             8,
         );

@@ -2399,6 +2399,11 @@ impl crate::pins::PinPort for GpioPort {
             // Every peripheral line this pad can carry now shares a wire with
             // other chips.
             self.pad_routes.mark_on_net(pin);
+            // A family whose peripherals name their pads (nRF `PSEL`) asks
+            // per pad, through the claim table.
+            if let Some((claims, port)) = &self.pad_claims {
+                claims.mark_on_net(*port, pin);
+            }
         }
     }
 
@@ -2429,6 +2434,9 @@ impl crate::pins::PinPort for GpioPort {
 
     fn routes_changed(&mut self) {
         self.sync_pad_line_taps();
+        // A pad that just became routed to a peripheral line hands it the
+        // level the outside already holds there.
+        self.sync_wire_inputs();
     }
 
     fn pad_control(&self) -> Option<(&str, crate::pins::PadControl)> {
@@ -2659,6 +2667,10 @@ impl crate::Peripheral for GpioPort {
 
     fn take_timer_input_edges(&mut self) -> Vec<TimerInputEdge> {
         std::mem::take(&mut self.timer_edges)
+    }
+
+    fn reads_pad_claims(&self) -> bool {
+        self.pad_claims.is_some()
     }
 
     fn take_wire_input_edges(&mut self) -> Vec<crate::peripherals::pad_lines::WireInputEdge> {
