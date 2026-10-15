@@ -180,6 +180,9 @@ pub struct LabwiredAdapter {
     source: Arc<Mutex<Option<SourceDebug>>>,
     /// The loaded machine's architecture family.
     family: Arc<Mutex<Option<MachineFamily>>>,
+    /// The inline frame the last source step stopped in, as `(pc, depth)`;
+    /// see [`SourceDebug::location_at`]. Ignored once the pc moves on.
+    source_view: Arc<Mutex<Option<(u32, usize)>>>,
     /// A classic-ESP32 Arduino machine's thread-local boot hooks, carried to
     /// whichever thread runs the machine next (see [`Self::on_this_thread`]).
     esp32_thread: Arc<Mutex<Option<Esp32ThreadState>>>,
@@ -245,6 +248,7 @@ impl LabwiredAdapter {
             console: Arc::new(Mutex::new(None)),
             source: Arc::new(Mutex::new(None)),
             family: Arc::new(Mutex::new(None)),
+            source_view: Arc::new(Mutex::new(None)),
             esp32_thread: Arc::new(Mutex::new(None)),
         }
     }
@@ -341,6 +345,7 @@ impl LabwiredAdapter {
             journal.points.clear();
         }
         self.forget_history();
+        *self.source_view.lock().unwrap() = None;
         self.cycle_count.store(0, Ordering::SeqCst);
         self.board_io_bindings.lock().unwrap().clear();
         *self.console.lock().unwrap() = None;
@@ -684,8 +689,24 @@ impl LabwiredAdapter {
 
     /// Where `pc` is in the source, with its function. At a function's first
     /// instruction this is the first statement's line, as the browser shows it.
+    ///
+    /// Inside inlined code it is the frame the last source step stopped in,
+    /// else the line a breakpoint there was set on (see
+    /// [`SourceDebug::default_depth`]).
     pub fn source_location(&self, pc: u32) -> Option<source_step::SourceLocation> {
-        self.source.lock().unwrap().as_ref()?.location(pc)
+        let source = self.source.lock().unwrap();
+        let debug = source.as_ref()?;
+        let depth = self.view_at(pc).unwrap_or_else(|| debug.default_depth(pc));
+        debug.location_at(pc, depth)
+    }
+
+    /// The inline depth the last source step left at `pc`, if it is still there.
+    fn view_at(&self, pc: u32) -> Option<usize> {
+        self.source_view
+            .lock()
+            .unwrap()
+            .filter(|(at, _)| *at == pc)
+            .map(|(_, depth)| depth)
     }
 
     /// Whether the firmware carries a DWARF line table.
@@ -750,12 +771,14 @@ impl LabwiredAdapter {
             .ok_or_else(|| anyhow!("Machine not initialized"))?;
         self.record(JournalOp::StepSource(kind, max_instructions));
         self.forget_history();
+        let view = self.view_at(machine.debug_cpu().get_pc());
         let target: &mut dyn labwired_core::debug::SourceStepTarget = &mut **machine;
-        self.on_this_thread(|| {
-            source_step::step(target, debug, family, kind, max_instructions, &[])
-                .map(Some)
+        let out = self.on_this_thread(|| {
+            source_step::step(target, debug, family, kind, max_instructions, &[], view)
                 .map_err(|e| anyhow!(e))
-        })
+        })?;
+        *self.source_view.lock().unwrap() = Some((out.pc, out.depth));
+        Ok(Some(out))
     }
 
     pub fn step_over_source_line(

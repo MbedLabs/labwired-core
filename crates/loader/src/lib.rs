@@ -161,6 +161,14 @@ pub struct SourceLocation {
     pub function: Option<String>,
 }
 
+/// One frame of the inline chain at an address (see [`SymbolProvider::frames`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlineFrame {
+    pub file: Option<String>,
+    pub line: Option<u32>,
+    pub function: Option<String>,
+}
+
 /// One row of the DWARF line-number program: the instruction address and the
 /// source position it maps to. Unlike the reverse `line_map`, these are NOT
 /// deduplicated — every row is retained, so the set of `is_stmt` rows is the
@@ -326,6 +334,35 @@ impl SymbolProvider {
     /// with the Thumb bit cleared from `start`.
     pub fn functions(&self) -> &[(u64, u64, String)] {
         &self.functions
+    }
+
+    /// The inline chain at `addr`, innermost first. The first frame's
+    /// position is the line-table row of `addr`; each outer frame's position
+    /// is the call site (`DW_AT_call_file`/`DW_AT_call_line`) of the frame
+    /// inside it, so the last frame is the physical function and its line.
+    /// Empty when `addr` has no debug information.
+    pub fn frames(&self, addr: u64) -> Vec<InlineFrame> {
+        let mut frames = match self.context.find_frames(addr) {
+            addr2line::LookupResult::Output(Ok(frames)) => frames,
+            _ => return Vec::new(),
+        };
+        let mut out = Vec::new();
+        while let Ok(Some(frame)) = frames.next() {
+            out.push(InlineFrame {
+                file: frame
+                    .location
+                    .as_ref()
+                    .and_then(|l| l.file)
+                    .map(str::to_string),
+                line: frame.location.as_ref().and_then(|l| l.line),
+                function: frame
+                    .function
+                    .as_ref()
+                    .and_then(|f| f.demangle().ok())
+                    .map(|s| s.into_owned()),
+            });
+        }
+        out
     }
 
     pub fn lookup(&self, addr: u64) -> Option<SourceLocation> {

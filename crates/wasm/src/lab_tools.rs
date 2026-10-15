@@ -148,6 +148,10 @@ pub(crate) struct SimTools {
     /// The firmware's DWARF, parsed once for source-level debugging. Dropped
     /// when `install_arduino_esp32_quirks` hands over a different ELF.
     pub(crate) source_debug: Option<Rc<crate::source_debug::SourceDebug>>,
+    /// The inline frame the last source step stopped in, as `(pc, depth)`
+    /// (see `SourceDebug::location_at`). Any later call that changes the
+    /// machine drops it.
+    pub(crate) source_view: Option<(u32, usize)>,
 }
 
 fn js(e: impl std::fmt::Display) -> JsValue {
@@ -157,6 +161,7 @@ fn js(e: impl std::fmt::Display) -> JsValue {
 impl WasmSimulator {
     pub(crate) fn record(&self, op: Op) {
         let mut tools = self.tools.borrow_mut();
+        tools.source_view = None;
         if let Op::InstallEsp32Quirks(elf) = &op {
             tools.elf = Some(elf.clone());
             tools.source_debug = None;
