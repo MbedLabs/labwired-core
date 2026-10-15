@@ -608,6 +608,9 @@ pub fn configure_xtensa_esp32(bus: &mut SystemBus) -> XtensaLx7 {
     // `configs/chips/esp32.yaml` is not what a classic lab is built from.
     bus.wire_esp32_spi_pads();
     bus.wire_esp32_uart_pads();
+    // …and the LEDC channel outputs (matrix signals 71..86), so a servo or LED
+    // pad attached with `ledcAttachPin` shows its PWM edges.
+    bus.wire_esp32_ledc_pads();
     // AHB TX FIFO alias registered after wifi_mac_phy (see below).
 
     // SYSCON (TRM §13.2) — system controller. Owns SYSCLK_CONF, TICK_CONF,
@@ -654,7 +657,8 @@ pub fn configure_xtensa_esp32(bus: &mut SystemBus) -> XtensaLx7 {
     // LEDC — LED PWM controller (TRM §14) at 0x3FF5_9000. Real model: 8 HS +
     // 8 LS channels over 4 HS / 4 LS timers, CONF1.DUTY_START latch so
     // ledc_get_duty()/ledcRead() read back the committed duty, derived duty
-    // fraction + frequency. (PWM-edge emission to GPIO deferred.) Registered
+    // fraction + frequency, and the PWM waveform on the matrix-routed pads
+    // (`wire_esp32_ledc_pads`). Registered
     // before the catch-all loop below so its window wins (first-registered).
 
     // TWAI / CAN controller (TRM §27) at 0x3FF6_B000. SJA1000-derived:

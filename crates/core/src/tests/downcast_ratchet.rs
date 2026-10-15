@@ -206,8 +206,14 @@ const MAX_DOWNCAST_REF: usize = 197;
 // 273 → 269 / 340 → 336: the C3 IO_MUX and RP2040 IO_BANK0 pad brackets
 // reach the GPIO port through `Peripheral::pins_mut` (the pin interface,
 // `crate::pins`) instead of downcasting to `Esp32c3Gpio` / `Rp2040Sio`.
-const MAX_AS_ANY_MUT: usize = 269;
-const MAX_DOWNCAST_MUT: usize = 336;
+// 269 → 272 / 336 → 338: `wire_esp32_ledc_pads` joins the classic
+// `wire_esp32_{i2c,spi,uart}_pads` family with the same shape — one type check
+// on the GPIO port before the LEDC wire cell is created, one reach into each
+// model to hand the cell over. It resolves both by NAME, so it adds no
+// `as_any()`. Moving the whole family onto a capability trait is the fix for
+// all four at once, not for this one.
+const MAX_AS_ANY_MUT: usize = 272;
+const MAX_DOWNCAST_MUT: usize = 338;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

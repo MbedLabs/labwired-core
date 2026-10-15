@@ -146,6 +146,34 @@ const SIG_U0TXD: u32 = 14;
 const SIG_U1TXD: u32 = 17;
 const SIG_U2TXD: u32 = 198;
 
+/// GPIO-matrix OUTPUT signal index of the first LEDC channel —
+/// `LEDC_HS_SIG_OUT0_IDX` = 71 in esp-idf `soc/esp32/include/soc/gpio_sig_map.h`.
+/// HS0..HS7 are 71..78 and LS0..LS7 are 79..86 (`LEDC_LS_SIG_OUT0_IDX` = 79),
+/// one per line of [`crate::peripherals::esp32::ledc::LEDC_LINES`], in order.
+/// `ledcAttachPin` routes a pad with `gpio_matrix_out(pin, LEDC_HS_SIG_OUT0_IDX +
+/// channel, ...)`.
+const SIG_LEDC_HS0: u32 = 71;
+
+/// Names of the 16 LEDC output signals, as `gpio_sig_map.h` spells them.
+const LEDC_SIGNAL_NAMES: [&str; 16] = [
+    "LEDC_HS_SIG_OUT0",
+    "LEDC_HS_SIG_OUT1",
+    "LEDC_HS_SIG_OUT2",
+    "LEDC_HS_SIG_OUT3",
+    "LEDC_HS_SIG_OUT4",
+    "LEDC_HS_SIG_OUT5",
+    "LEDC_HS_SIG_OUT6",
+    "LEDC_HS_SIG_OUT7",
+    "LEDC_LS_SIG_OUT0",
+    "LEDC_LS_SIG_OUT1",
+    "LEDC_LS_SIG_OUT2",
+    "LEDC_LS_SIG_OUT3",
+    "LEDC_LS_SIG_OUT4",
+    "LEDC_LS_SIG_OUT5",
+    "LEDC_LS_SIG_OUT6",
+    "LEDC_LS_SIG_OUT7",
+];
+
 /// Pads that can drive an output at all: `SOC_GPIO_VALID_OUTPUT_GPIO_MASK`
 /// (esp-idf `soc_caps.h`) — the 40 pads minus GPIO24 and GPIO28..31 (absent
 /// from the package) and minus GPIO34..39 (input-only). Binding a peripheral
@@ -182,6 +210,9 @@ fn esp32_out_signal_name(idx: u32) -> Option<&'static str> {
         95 => "I2CEXT1_SCL",
         96 => "I2CEXT1_SDA",
         SIG_U2TXD => "U2TXD",
+        idx if (SIG_LEDC_HS0..SIG_LEDC_HS0 + 16).contains(&idx) => {
+            LEDC_SIGNAL_NAMES[(idx - SIG_LEDC_HS0) as usize]
+        }
         _ => return None,
     })
 }
@@ -534,6 +565,23 @@ impl Esp32Gpio {
                 crate::peripherals::uart::LINE_TX,
                 func,
             );
+        }
+    }
+
+    /// Bind the LEDC controller's 16 channel outputs to every output-capable
+    /// pad the matrix can route them to — the classic `ledcAttachPin` path,
+    /// which programs `FUNCn_OUT_SEL = LEDC_HS_SIG_OUT0_IDX + channel`. Which
+    /// pad is live at any moment is then decided by `FUNCn_OUT_SEL`, through
+    /// the shared seam.
+    pub(crate) fn bind_ledc_lines(&mut self, lines: &Arc<crate::peripherals::pad_lines::PadLines>) {
+        for pin in 0..PAD_COUNT {
+            if VALID_OUTPUT_PADS & (1u64 << pin) == 0 {
+                continue;
+            }
+            for (line, func) in LEDC_SIGNAL_NAMES.iter().enumerate() {
+                self.pad_routes
+                    .bind(lines, pin, Some(SIG_LEDC_HS0 + line as u32), line, func);
+            }
         }
     }
 
