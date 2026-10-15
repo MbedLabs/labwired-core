@@ -459,7 +459,8 @@ fn collect_inline_sites(
                 other => other.and_then(|v| v.udata_value()),
             };
             let line = value(gimli::DW_AT_call_line).and_then(|v| v.udata_value());
-            let (Some(call_file), Some(line)) = (call_file, line) else {
+            // Line 0: code the compiler merged from several call sites.
+            let (Some(call_file), Some(line)) = (call_file, line.filter(|l| *l != 0)) else {
                 continue;
             };
             let Some(addr) = inline_entry(dwarf, &unit, entry) else {

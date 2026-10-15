@@ -233,11 +233,9 @@ fn esp32_arduino_runs_to_loop_from_another_thread() {
     assert_eq!(here(&adapter).1, 28);
 }
 
-/// RISC-V (riscv-rt, Rust release build): each of the six
-/// `write_volatile`s inlined from core is one line of `main`, so step over
-/// stops on each call's line in turn (15..=20, though they share one
-/// line-table row), then on `loop {}`; step into stops in the inlined
-/// `ptr/mod.rs`.
+/// RISC-V (riscv-rt, Rust release build): step over runs the six
+/// `write_volatile`s inlined from core in one step and lands on `loop {}`;
+/// step into stops in the inlined `ptr/mod.rs`.
 #[test]
 fn riscv_step_over_runs_through_code_inlined_from_another_file() {
     let adapter = load(
@@ -246,11 +244,11 @@ fn riscv_step_over_runs_through_code_inlined_from_another_file() {
     );
     set_line_breakpoint(&adapter, "riscv-ci-fixture/src/main.rs", 12);
     assert_eq!(run_to_breakpoint(&adapter, 5_000_000), 0x8000_02ec);
-    for line in [15, 16, 17, 18, 19, 20, 24] {
-        assert_eq!(step(&adapter, StepKind::Over).0, StepStop::LineChanged);
-        assert_eq!(here(&adapter), ("main.rs".into(), line, "main".into()));
-    }
-    assert_eq!(adapter.get_pc().unwrap(), 0x8000_0320);
+    assert_eq!(
+        step(&adapter, StepKind::Over),
+        (StepStop::LineChanged, 0x8000_0320)
+    );
+    assert_eq!(here(&adapter).1, 24);
 
     let adapter = load(
         "configs/systems/ci-fixture-riscv-uart1.yaml",

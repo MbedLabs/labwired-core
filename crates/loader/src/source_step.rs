@@ -230,12 +230,16 @@ impl SourceDebug {
             return self.location(pc);
         }
         let frame = &frames[frames.len() - depth];
-        Some(SourceLocation {
-            file: frame.file.clone()?,
-            line: frame.line?,
-            column: None,
-            function: frame.function.clone(),
-        })
+        match (frame.file.clone(), frame.line.filter(|l| *l != 0)) {
+            (Some(file), Some(line)) => Some(SourceLocation {
+                file,
+                line,
+                column: None,
+                function: frame.function.clone(),
+            }),
+            // A call site the compiler gave no line: show the code itself.
+            _ => self.location(pc),
+        }
     }
 
     /// Where a source step starts: the frame shown at `pc` (`view`, else
@@ -256,19 +260,25 @@ impl SourceDebug {
         }
     }
 
-    /// Step-over's verdict on the statement at `pc`, in the physical
-    /// function the step started in. Deeper than the frame being stepped is
-    /// code inlined into it: part of the same line while that frame's call
-    /// site is still the starting line, else the next line's inlined call.
-    /// Shallower is the stepped frame's return to the line that inlined it.
+    /// Step-over's verdict on the instruction at `pc`, in the physical
+    /// function the step started in.
+    ///
+    /// Deeper than the frame being stepped is code inlined into it. Code
+    /// inlined from another file (core's `write_volatile`, a range iterator,
+    /// a `nop()` delay loop) is part of the line being stepped, as it always
+    /// was. A function of the stepped frame's own file inlined into it
+    /// (`lcd_frame(&FB);`) is a line of its own: the step stops where the
+    /// next line's inlined call starts. Shallower than the stepped frame is
+    /// its return to the line that inlined it.
     pub fn over_inline(&self, start: &StepFrame, pc: u32) -> InlineVerdict {
         if start.depth == 0 || self.function_range(pc) != start.function {
             return InlineVerdict::Defer;
         }
         let frames = self.frames(pc);
         let n = frames.len();
+        let statement = self.map.is_statement(u64::from(pc));
         if n < start.depth {
-            return if self.map.is_statement(u64::from(pc)) {
+            return if statement {
                 InlineVerdict::Stop
             } else {
                 InlineVerdict::Pass
@@ -277,15 +287,19 @@ impl SourceDebug {
         if n == start.depth {
             return InlineVerdict::Defer;
         }
-        let frame = &frames[n - start.depth];
-        if frame.file.clone().zip(frame.line) == start.pos {
+        let at = &frames[n - start.depth];
+        let callee = &frames[n - start.depth - 1];
+        let own_file = start.pos.as_ref().map(|p| p.0.as_str());
+        if callee.file.as_deref() != own_file {
+            return InlineVerdict::Continue;
+        }
+        let line = at.line.filter(|l| *l != 0);
+        if line.is_none() || at.file.clone().zip(line) == start.pos {
+            // Still the line being stepped (or code the compiler gave no line).
             InlineVerdict::Continue
-        } else if self.map.is_statement(u64::from(pc))
-            || self.map.inline_calls_at(u64::from(pc)).next().is_some()
-        {
-            // The next line's inlined call starts here. Its first instruction
-            // need not start a line-table statement: six inlined
-            // `write_volatile`s can share one row.
+        } else if statement || self.map.inline_calls_at(u64::from(pc)).next().is_some() {
+            // The next line's inlined call starts here; its first
+            // instruction need not start a line-table statement.
             InlineVerdict::Stop
         } else {
             InlineVerdict::Pass

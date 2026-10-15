@@ -1004,21 +1004,17 @@ mod tests {
             .file
             .ends_with("ptr/mod.rs"));
 
-        // Each of the six writes inlined from core is a line of main: over
-        // stops on each call's line (they share one line-table row), then on
-        // `loop {}`.
+        // Over runs the six writes inlined from core in one call and lands on
+        // `loop {}`, back in main.rs.
         let mut sim = build(
             "configs/systems/ci-fixture-riscv-uart1.yaml",
             "tests/fixtures/riscv-ci-fixture.elf",
         );
         run_to(&mut sim, main);
-        for line in [15, 16, 17, 18, 19, 20] {
-            let (reason, pc, _) = sim.step_source_line_s(true, 10_000, &[]).unwrap();
-            assert_eq!((reason, line_of(&sim, pc)), ("line_changed", line));
-        }
-        let (reason, pc, _) = sim.step_source_line_s(true, 10_000, &[]).unwrap();
+        let (reason, pc, n) = sim.step_source_line_s(true, 10_000, &[]).unwrap();
         assert_eq!(reason, "line_changed");
         assert_eq!((pc, line_of(&sim, pc)), (0x8000_0320, 24));
+        assert!(n > 6, "ran the inlined writes ({n} instructions)");
         // `loop {}` never leaves its line.
         let (reason, _, _) = sim.step_source_line_s(true, 50, &[]).unwrap();
         assert_eq!(reason, "cap");
