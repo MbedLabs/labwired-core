@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- Firmware branch coverage that counts every conditional branch, measured on
+  the unmodified ELF (`docs/howto/firmware-coverage.md`,
+  `examples/coverage-brake-ecu`). The branch list comes from decoding the ELF
+  (Thumb `B<cond>`/`CBZ`/`CBNZ`, RISC-V `B*`/`C.BEQZ`/`C.BNEZ`; function
+  symbols, `$t`/`$x`/`$d` mapping symbols and DWARF line sequences, so
+  assembly with line info is included), so branches no test reached count
+  against coverage (`BRDA:…,-`) instead of disappearing. Checked against
+  llvm-objdump on all 81 committed ELFs with line info: 18,195 of 18,195
+  two-outcome branches, no extras, no wrong targets
+  (`crates/loader/tests/branch_sites_fixtures.rs`). Lines and functions now
+  carry hit and call counts.
+- `labwired coverage merge`: merge LCOV files from many runs (and from
+  gcov/llvm-cov host tests), list every branch the tests never took with the
+  tests that ran its line, write LCOV / Cobertura / JSON, and fail CI with
+  `--fail-under-lines` / `--fail-under-branches`. Matches `lcov -a` record
+  for record. `labwired test --coverage` also writes
+  `coverage.cobertura.xml` (valid against `coverage-04.dtd`) and names each
+  run's `TN:` after its script.
+
+### Fixed
+- Firmware coverage branch numbers were wrong on every ISA but Thumb: the
+  fall-through address came from a Thumb-only instruction-length rule, so a
+  RISC-V run reported ~200 "branch sites" for firmware with 19. The observer
+  now records `(from, to)` step counts with no ISA assumption.
+- Branch coverage counted unconditional jumps, calls and returns as
+  half-covered branches, and dropped branches the run never reached.
+- Coverage source files are keyed by their path with directory
+  (`src/main.c`), not the bare name: two `main.c` files no longer merge, and
+  branch data is no longer lost when the compiler records the source with a
+  directory (a clang build of `src/brake_ecu.c` produced LCOV with no `BRDA`
+  at all).
+- `Session::restore` replayed the run into the coverage observer on top of
+  the counts it already had; the counts now equal a straight run's. The
+  playground's restore no longer records the rewind as a jump.
+- Plain C function names were passed through the C++ demangler (`f` became
+  `float`, `d` became `double`).
 - Classic ESP32 LEDC drives its pads. Each of the 16 channels generates its
   PWM waveform (TRM §14.2: REF_TICK / APB / RTC8M source, Q8 `DIV_NUM`,
   `2^DUTY_RES` period, `HPOINT`/`DUTY`, duty latched at the next overflow,

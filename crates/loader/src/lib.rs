@@ -16,8 +16,10 @@ use std::path::Path;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
+pub mod branch_sites;
 pub mod coverage;
 pub mod footprint;
+pub mod lcov;
 pub mod multi_image;
 pub mod source_map;
 pub mod source_step;
@@ -181,7 +183,14 @@ pub struct InlineFrame {
 #[derive(Debug, Clone)]
 pub struct StmtRow {
     pub addr: u64,
+    /// File name exactly as the line program records it (often a bare name
+    /// such as `main.c`).
     pub file: String,
+    /// The same file with its line-program directory joined on: relative to
+    /// the compilation directory (`src/main.c`) or absolute
+    /// (`/usr/include/stdint.h`). Unique where `file` is not — two different
+    /// `main.c` files have different paths.
+    pub path: String,
     pub line: u32,
     pub is_stmt: bool,
 }
@@ -213,6 +222,14 @@ pub struct SymbolProvider {
     line_map: HashMap<(String, u32), u64>,
     // Full line-program rows (not deduped) — the statement universe for coverage
     stmt_rows: Vec<StmtRow>,
+    // Address-sorted line table for address -> source: (addr, index into
+    // stmt_rows), with `None` marking the end of a sequence so an address in
+    // a gap between sequences maps to nothing.
+    line_index: Vec<(u64, Option<usize>)>,
+    // Compilation directories of the units, deduplicated (Cobertura <source>).
+    comp_dirs: Vec<String>,
+    // Line-table sequences as [start, end) address ranges.
+    line_sequences: Vec<(u64, u64)>,
     // Map of symbol_name -> address
     symbol_map: HashMap<String, u64>,
     // Function symbols with a size: (start, size, name), start Thumb bit cleared
@@ -271,18 +288,41 @@ impl SymbolProvider {
 
         let dwarf = gimli::Dwarf::load(&load_section).context("Failed to load DWARF")?;
 
+        let mut line_index: Vec<(u64, Option<usize>)> = Vec::new();
+        let mut comp_dirs: Vec<String> = Vec::new();
+        let mut line_sequences: Vec<(u64, u64)> = Vec::new();
         let mut iter = dwarf.units();
         while let Ok(Some(header)) = iter.next() {
             let unit = dwarf.unit(header).ok();
             if let Some(unit) = unit {
+                if let Some(dir) = unit
+                    .comp_dir
+                    .as_ref()
+                    .and_then(|d| d.to_string_lossy().ok())
+                {
+                    if !comp_dirs.iter().any(|c| c.as_str() == dir.as_ref()) {
+                        comp_dirs.push(dir.into_owned());
+                    }
+                }
                 if let Some(ref line_program) = unit.line_program {
+                    let header = line_program.header();
                     let mut rows = line_program.clone().rows();
+                    let mut seq_start: Option<u64> = None;
                     while let Ok(Some((_, row))) = rows.next_row() {
                         if row.end_sequence() {
+                            line_index.push((row.address(), None));
+                            // A sequence at address 0 with no code is a
+                            // discarded (garbage-collected) function; skip it.
+                            if let Some(start) = seq_start.take() {
+                                if row.address() > start && start != 0 {
+                                    line_sequences.push((start, row.address()));
+                                }
+                            }
                             continue;
                         }
+                        seq_start.get_or_insert(row.address());
                         let file_idx = row.file_index();
-                        if let Some(file) = line_program.header().file(file_idx) {
+                        if let Some(file) = header.file(file_idx) {
                             let file_name = dwarf
                                 .attr_string(&unit, file.path_name())
                                 .ok()
@@ -293,10 +333,13 @@ impl SymbolProvider {
 
                             if let (Some(f), Some(line)) = (file_name, row.line()) {
                                 let line_u32 = line.get() as u32;
+                                let path = joined_file_path(&dwarf, &unit, header, file, &f);
                                 // Retain every row for the statement universe...
+                                line_index.push((row.address(), Some(stmt_rows.len())));
                                 stmt_rows.push(StmtRow {
                                     addr: row.address(),
                                     file: f.clone(),
+                                    path,
                                     line: line_u32,
                                     is_stmt: row.is_stmt(),
                                 });
@@ -336,6 +379,14 @@ impl SymbolProvider {
             context,
             line_map,
             stmt_rows,
+            line_index: {
+                // Stable sort: rows at the same address keep line-program
+                // order, so the last one at an address wins in `line_at`.
+                line_index.sort_by_key(|(a, _)| *a);
+                line_index
+            },
+            comp_dirs,
+            line_sequences,
             symbol_map,
             functions,
             test_locals: HashMap::new(),
@@ -348,6 +399,31 @@ impl SymbolProvider {
     /// instruction at its address was executed.
     pub fn statement_rows(&self) -> &[StmtRow] {
         &self.stmt_rows
+    }
+
+    /// The source row covering `addr`: the last line-table row at or before it
+    /// in the same sequence. `None` when `addr` is outside every sequence.
+    pub fn line_at(&self, addr: u64) -> Option<&StmtRow> {
+        let idx = self.line_index.partition_point(|(a, _)| *a <= addr);
+        let (_, row) = self.line_index.get(idx.checked_sub(1)?)?;
+        row.map(|i| &self.stmt_rows[i])
+    }
+
+    /// Compilation directories of the DWARF units, in first-seen order. Paths
+    /// in [`StmtRow::path`] that are relative are relative to one of these.
+    pub fn comp_dirs(&self) -> &[String] {
+        &self.comp_dirs
+    }
+
+    /// The line table's sequences as `[start, end)` address ranges: the code
+    /// that has line info.
+    pub fn line_sequences(&self) -> &[(u64, u64)] {
+        &self.line_sequences
+    }
+
+    /// The raw ELF this provider was built from.
+    pub fn elf_bytes(&self) -> &[u8] {
+        &self.data
     }
 
     /// Sized function symbols as `(start, size, name)`, ascending by start,
@@ -670,6 +746,9 @@ impl SymbolProvider {
             context,
             line_map: HashMap::new(),
             stmt_rows: Vec::new(),
+            line_index: Vec::new(),
+            comp_dirs: Vec::new(),
+            line_sequences: Vec::new(),
             symbol_map: HashMap::new(),
             functions: Vec::new(),
             test_locals: HashMap::new(),
@@ -733,6 +812,46 @@ impl labwired_core::fault_verdict::FaultSymbolizer for SymbolProvider {
                 line: None,
             }),
         }
+    }
+}
+
+/// `name` with its line-program directory joined on. Directory 0 is the
+/// compilation directory itself, so its files stay bare (`main.c`); other
+/// directories are prefixed (`src/main.c`, `/usr/include/stdint.h`). An
+/// absolute `name` is returned unchanged.
+fn joined_file_path<R: gimli::Reader>(
+    dwarf: &gimli::Dwarf<R>,
+    unit: &gimli::Unit<R>,
+    header: &gimli::LineProgramHeader<R>,
+    file: &gimli::FileEntry<R>,
+    name: &str,
+) -> String {
+    if name.starts_with('/') || file.directory_index() == 0 {
+        return name.to_string();
+    }
+    let dir = file
+        .directory(header)
+        .and_then(|d| dwarf.attr_string(unit, d).ok())
+        .and_then(|d| d.to_string_lossy().ok().map(|c| c.into_owned()));
+    match dir {
+        Some(d) if !d.is_empty() && d != "." => {
+            // DWARF 5 repeats the compilation directory as directory 0 *and*
+            // sometimes as an absolute entry; strip it so paths stay relative.
+            let comp = unit
+                .comp_dir
+                .as_ref()
+                .and_then(|c| c.to_string_lossy().ok().map(|c| c.into_owned()));
+            let rel = match comp {
+                Some(c) if d == c => return name.to_string(),
+                Some(c) => d
+                    .strip_prefix(&format!("{}/", c.trim_end_matches('/')))
+                    .map(str::to_string)
+                    .unwrap_or(d),
+                None => d,
+            };
+            format!("{}/{}", rel.trim_end_matches('/'), name)
+        }
+        _ => name.to_string(),
     }
 }
 
