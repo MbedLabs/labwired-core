@@ -3552,7 +3552,7 @@ fn test_flash_boot_alias_read_and_write() {
         ram: LinearMemory::new(256, 0x2000_0000),
         extra_mem: Vec::new(),
         peripherals: Vec::new(),
-        debug_schemas: std::collections::HashMap::new(),
+        debug_schemas: std::collections::BTreeMap::new(),
         external_device_decls: Vec::new(),
         semihost: SemihostState::new(),
         nvic: None,
@@ -3632,6 +3632,7 @@ fn test_flash_boot_alias_read_and_write() {
         io_voltage_v: None,
         gpio_input_thresholds: None,
         supply: crate::power::SupplySupervisor::default(),
+        supply_domains: Default::default(),
     };
 
     bus.flash.write_u8(0x0800_0000, 0x12);
@@ -3671,7 +3672,7 @@ fn h5_flash_bus(gate: bool) -> SystemBus {
             ticks_remaining: 0,
             clock_gate: None,
         }],
-        debug_schemas: std::collections::HashMap::new(),
+        debug_schemas: std::collections::BTreeMap::new(),
         external_device_decls: Vec::new(),
         semihost: SemihostState::new(),
         nvic: None,
@@ -3751,6 +3752,7 @@ fn h5_flash_bus(gate: bool) -> SystemBus {
         io_voltage_v: None,
         gpio_input_thresholds: None,
         supply: crate::power::SupplySupervisor::default(),
+        supply_domains: Default::default(),
     };
     bus.rebuild_peripheral_ranges();
     bus
@@ -3943,7 +3945,7 @@ fn h5_rww_bus(gate: bool) -> SystemBus {
             ticks_remaining: 0,
             clock_gate: None,
         }],
-        debug_schemas: std::collections::HashMap::new(),
+        debug_schemas: std::collections::BTreeMap::new(),
         external_device_decls: Vec::new(),
         semihost: SemihostState::new(),
         nvic: None,
@@ -4023,6 +4025,7 @@ fn h5_rww_bus(gate: bool) -> SystemBus {
         io_voltage_v: None,
         gpio_input_thresholds: None,
         supply: crate::power::SupplySupervisor::default(),
+        supply_domains: Default::default(),
     };
     bus.rebuild_peripheral_ranges();
     bus
@@ -4211,7 +4214,7 @@ fn test_peripheral_range_index_lookup() {
                 clock_gate: None,
             },
         ],
-        debug_schemas: std::collections::HashMap::new(),
+        debug_schemas: std::collections::BTreeMap::new(),
         external_device_decls: Vec::new(),
         semihost: SemihostState::new(),
         nvic: None,
@@ -4291,6 +4294,7 @@ fn test_peripheral_range_index_lookup() {
         io_voltage_v: None,
         gpio_input_thresholds: None,
         supply: crate::power::SupplySupervisor::default(),
+        supply_domains: Default::default(),
     };
 
     bus.rebuild_peripheral_ranges();
@@ -4334,7 +4338,7 @@ fn test_dma_tick_executes_copy_and_raises_irq() {
             ticks_remaining: 0,
             clock_gate: None,
         }],
-        debug_schemas: std::collections::HashMap::new(),
+        debug_schemas: std::collections::BTreeMap::new(),
         external_device_decls: Vec::new(),
         semihost: SemihostState::new(),
         nvic: None,
@@ -4414,6 +4418,7 @@ fn test_dma_tick_executes_copy_and_raises_irq() {
         io_voltage_v: None,
         gpio_input_thresholds: None,
         supply: crate::power::SupplySupervisor::default(),
+        supply_domains: Default::default(),
     };
     bus.rebuild_peripheral_ranges();
 

@@ -1980,6 +1980,7 @@ impl Cpu for RiscV {
             mtval: self.mtval,
             mtime: self.mtime,
             mtimecmp: self.mtimecmp,
+            triggers: Some(self.triggers.snapshot()),
         })
     }
 
@@ -2000,12 +2001,19 @@ impl Cpu for RiscV {
             self.mtval = s.mtval;
             self.mtime = s.mtime;
             self.mtimecmp = s.mtimecmp;
+            // A snapshot from before triggers were captured carries none:
+            // the module comes back at reset, so the result does not depend
+            // on what the machine it is applied to had programmed.
+            match &s.triggers {
+                Some(t) => self.triggers.restore(t),
+                None => self.triggers = trigger::TriggerModule::default(),
+            }
         }
     }
 
     fn runtime_snapshot(&self) -> Option<(crate::runtime_snapshot::CpuKind, Vec<u8>)> {
-        use crate::runtime_snapshot::RiscVRuntimeSnapshot;
-        let snap = RiscVRuntimeSnapshot {
+        use crate::runtime_snapshot::{RiscVRuntimeSnapshot, RiscVRuntimeSnapshotV2};
+        let base = RiscVRuntimeSnapshot {
             x: self.x,
             pc: self.pc,
             mstatus: self.mstatus,
@@ -2020,6 +2028,10 @@ impl Cpu for RiscV {
             mtimecmp: self.mtimecmp,
             reservation: self.reservation,
         };
+        let snap = RiscVRuntimeSnapshotV2 {
+            base,
+            triggers: self.triggers.snapshot(),
+        };
         let bytes = bincode::serialize(&snap).expect("bincode serialize RiscVRuntimeSnapshot");
         Some((crate::runtime_snapshot::CpuKind::RiscV, bytes))
     }
@@ -2029,15 +2041,29 @@ impl Cpu for RiscV {
         kind: crate::runtime_snapshot::CpuKind,
         bytes: &[u8],
     ) -> SimResult<()> {
-        use crate::runtime_snapshot::{CpuKind, RiscVRuntimeSnapshot};
+        use crate::runtime_snapshot::{CpuKind, RiscVRuntimeSnapshot, RiscVRuntimeSnapshotV2};
         if kind != CpuKind::RiscV {
             return Err(crate::SimulationError::NotImplemented(format!(
                 "apply_runtime_snapshot: kind {kind:?} given to RiscV"
             )));
         }
-        let snap: RiscVRuntimeSnapshot = bincode::deserialize(bytes).map_err(|e| {
-            crate::SimulationError::NotImplemented(format!("RiscV snapshot decode: {e}"))
-        })?;
+        // Newest layout first: an older, shorter blob cannot decode as it, but
+        // it decodes exactly as the bare V1 layout. A V1 blob carries no
+        // trigger state, so the module comes back at reset — what a machine
+        // that never programmed a trigger has.
+        let (snap, triggers) = match bincode::deserialize::<RiscVRuntimeSnapshotV2>(bytes) {
+            Ok(v2) => (v2.base, Some(v2.triggers)),
+            Err(_) => {
+                let v1: RiscVRuntimeSnapshot = bincode::deserialize(bytes).map_err(|e| {
+                    crate::SimulationError::NotImplemented(format!("RiscV snapshot decode: {e}"))
+                })?;
+                (v1, None)
+            }
+        };
+        match &triggers {
+            Some(t) => self.triggers.restore(t),
+            None => self.triggers = trigger::TriggerModule::default(),
+        }
         self.x = snap.x;
         self.x[0] = 0; // x0 is hardwired to zero regardless of the blob.
         self.pc = snap.pc;
