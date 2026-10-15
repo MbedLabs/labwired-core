@@ -26,8 +26,8 @@ use labwired_core::decoder::xtensa_length;
 use labwired_core::snapshot::CpuSnapshot;
 use labwired_core::system::arch_policy::MachineFamily;
 use labwired_core::{AdvanceRequest, AdvanceStop, Bus, Cpu, Machine};
-use labwired_loader::source_map::SourceMap;
-use labwired_loader::{DwarfLocation, SymbolProvider};
+use labwired_loader::source_step::InlineVerdict;
+use labwired_loader::DwarfLocation;
 use serde::Serialize;
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
@@ -61,11 +61,9 @@ enum Through {
     Halted,
 }
 
-/// The parsed DWARF of the loaded firmware.
-pub(crate) struct SourceDebug {
-    symbols: SymbolProvider,
-    map: SourceMap,
-}
+/// The parsed DWARF of the loaded firmware: the same index and inline-frame
+/// rules the native debug adapter steps with.
+pub(crate) use labwired_loader::source_step::SourceDebug;
 
 #[derive(Serialize)]
 struct Location {
@@ -128,17 +126,7 @@ impl WasmSimulator {
             "source debugging needs the firmware ELF; this machine was built from flash \
              images only",
         )?;
-        let symbols =
-            SymbolProvider::from_bytes(elf).map_err(|e| format!("firmware debug info: {e:#}"))?;
-        let map = SourceMap::from_provider(&symbols);
-        if map.is_empty() {
-            return Err(
-                "the firmware ELF has no DWARF line information (built without \
-                        debug info, or stripped)"
-                    .into(),
-            );
-        }
-        let parsed = Rc::new(SourceDebug { symbols, map });
+        let parsed = Rc::new(SourceDebug::from_elf(elf)?);
         self.tools.borrow_mut().source_debug = Some(parsed.clone());
         Ok(parsed)
     }
@@ -158,24 +146,27 @@ impl WasmSimulator {
     /// At a function's first instruction the first statement's line is
     /// reported rather than the opening line (see
     /// [`SourceMap::location_at_entry`]).
-    fn location_of(debug: &SourceDebug, pc: u32) -> Option<Location> {
-        let at_entry = Self::function_range(debug, pc)
-            .is_some_and(|r| r.start == debug.map.code_address(u64::from(pc)));
-        let pos = if at_entry {
-            debug.map.location_at_entry(u64::from(pc))?
-        } else {
-            debug.map.location(u64::from(pc))?
-        };
-        let function = debug
-            .symbols
-            .lookup(debug.map.code_address(u64::from(pc)))
-            .and_then(|l| l.function);
-        Some(Location {
-            file: pos.file,
-            line: pos.line,
-            column: pos.column,
-            function,
+    ///
+    /// Inside inlined code it is the frame the last source step stopped in,
+    /// else the line a breakpoint there was set on (see
+    /// `SourceDebug::default_depth`).
+    fn location_of(&self, debug: &SourceDebug, pc: u32) -> Option<Location> {
+        let depth = self.view_at(pc).unwrap_or_else(|| debug.default_depth(pc));
+        debug.location_at(pc, depth).map(|l| Location {
+            file: l.file,
+            line: l.line,
+            column: l.column,
+            function: l.function,
         })
+    }
+
+    /// The inline depth the last source step left at `pc`, if still there.
+    fn view_at(&self, pc: u32) -> Option<usize> {
+        self.tools
+            .borrow()
+            .source_view
+            .filter(|(at, _)| *at == pc)
+            .map(|(_, depth)| depth)
     }
 
     fn locals_s(&self, pc: u32) -> Result<Vec<Local>, JsValue> {
@@ -386,6 +377,20 @@ impl WasmSimulator {
         max_instructions: u32,
         breakpoints: &[u32],
     ) -> Result<(&'static str, u32, u32), JsValue> {
+        let (reason, pc, instructions, depth) =
+            self.step_line(over, max_instructions, breakpoints)?;
+        // After the step's own journaled calls, which drop any older view.
+        self.tools.borrow_mut().source_view = Some((pc, depth));
+        Ok((reason, pc, instructions))
+    }
+
+    /// [`Self::step_source_line_s`], with the inline depth the stop shows.
+    fn step_line(
+        &mut self,
+        over: bool,
+        max_instructions: u32,
+        breakpoints: &[u32],
+    ) -> Result<(&'static str, u32, u32, usize), JsValue> {
         let debug = self.source_debug_s().map_err(js)?;
         let arch = self.arch;
         let sp_id = self.stack_register();
@@ -399,7 +404,22 @@ impl WasmSimulator {
         let run_budget = u64::from(max_instructions).saturating_mul(RUN_THROUGH_CYCLES_PER_STEP);
 
         let (start_pc, start_sp) = self.focused_pc_sp(sp_id)?;
-        let start_line = debug.map.line_key(u64::from(start_pc));
+        let frame = debug.step_frame(start_pc, self.view_at(start_pc));
+        if !over && frame.depth < frame.len {
+            // Into a call inlined here: its body starts at this pc, so show
+            // it one frame deeper without running anything.
+            return Ok(("line_changed", start_pc, 0, frame.depth + 1));
+        }
+        // Started in a shallower inline frame than the innermost, the line
+        // being stepped is that frame's: the call site of what is inlined.
+        let start_line = if frame.depth < frame.len {
+            frame
+                .pos
+                .as_ref()
+                .and_then(|(file, line)| debug.map.key_of(file, *line))
+        } else {
+            debug.map.line_key(u64::from(start_pc))
+        };
         // Set once step-over has run into code inlined from another file.
         let mut left_file = false;
         let mut frame_sp = start_sp;
@@ -409,6 +429,16 @@ impl WasmSimulator {
         let mut ran_through = 0u64;
         let total =
             |stepped: u32, ran: u64| (u64::from(stepped) + ran).min(u64::from(u32::MAX)) as u32;
+        let depth = |reason: &str, pc: u32| {
+            if reason == "breakpoint" {
+                debug.default_depth(pc)
+            } else {
+                debug.stop_depth(&frame, pc, over)
+            }
+        };
+        let done = |reason: &'static str, pc: u32, stepped: u32, ran: u64| {
+            Ok((reason, pc, total(stepped, ran), depth(reason, pc)))
+        };
         while stepped < max_instructions {
             let (before_pc, before_sp) = self.focused_pc_sp(sp_id)?;
             let xtensa = arch == MachineFamily::Xtensa;
@@ -430,11 +460,11 @@ impl WasmSimulator {
                 report.stop,
                 AdvanceStop::NoProgress | AdvanceStop::FirmwareExit { .. }
             ) {
-                return Ok(("halted", pc, total(stepped, ran_through)));
+                return done("halted", pc, stepped, ran_through);
             }
             if breakpoints.contains(&pc) || self.machine_or_err()?.breakpoints.contains(&(pc & !1))
             {
-                return Ok(("breakpoint", pc, total(stepped, ran_through)));
+                return done("breakpoint", pc, stepped, ran_through);
             }
 
             let mut pending: Option<Pending> = None;
@@ -499,15 +529,26 @@ impl WasmSimulator {
                 let pc = self.focused_pc_sp(sp_id)?.0;
                 match outcome {
                     Through::Returned => {}
-                    Through::Breakpoint(at) => {
-                        return Ok(("breakpoint", at, total(stepped, ran_through)))
-                    }
-                    Through::Cap => return Ok(("cap", pc, total(stepped, ran_through))),
-                    Through::Halted => return Ok(("halted", pc, total(stepped, ran_through))),
+                    Through::Breakpoint(at) => return done("breakpoint", at, stepped, ran_through),
+                    Through::Cap => return done("cap", pc, stepped, ran_through),
+                    Through::Halted => return done("halted", pc, stepped, ran_through),
                 }
             }
 
             let (pc, sp) = self.focused_pc_sp(sp_id)?;
+            match if over {
+                debug.over_inline(&frame, pc)
+            } else {
+                InlineVerdict::Defer
+            } {
+                InlineVerdict::Continue => {
+                    left_file = true;
+                    continue;
+                }
+                InlineVerdict::Pass => continue,
+                InlineVerdict::Stop => return done("line_changed", pc, stepped, ran_through),
+                InlineVerdict::Defer => {}
+            }
             if debug.map.is_statement(u64::from(pc)) {
                 let key = debug.map.line_key(u64::from(pc));
                 if key != start_line || left_file {
@@ -517,14 +558,14 @@ impl WasmSimulator {
                         && key.map(|k| k.0) != start_line.map(|k| k.0)
                         && sp <= start_sp;
                     if !inlined_elsewhere {
-                        return Ok(("line_changed", pc, total(stepped, ran_through)));
+                        return done("line_changed", pc, stepped, ran_through);
                     }
                     left_file = true;
                 }
             }
         }
         let pc = self.focused_pc_sp(sp_id)?.0;
-        Ok(("cap", pc, total(stepped, ran_through)))
+        done("cap", pc, stepped, ran_through)
     }
 
     /// Point the debugger at core `core` (0, or 1 on a dual-core chip).
@@ -548,7 +589,7 @@ impl WasmSimulator {
     #[wasm_bindgen]
     pub fn source_location(&self, pc: u32) -> Result<JsValue, JsValue> {
         let debug = self.source_debug_s().map_err(js)?;
-        to_js(&Self::location_of(&debug, pc))
+        to_js(&self.location_of(&debug, pc))
     }
 
     /// Where `line` of `file` starts: `{ pc, pcs: number[], file, line }`, or
@@ -637,7 +678,7 @@ impl WasmSimulator {
             reason,
             pc,
             instructions,
-            location: Self::location_of(&debug, pc),
+            location: self.location_of(&debug, pc),
         })
     }
 }
@@ -691,7 +732,7 @@ mod tests {
 
     fn line_of(sim: &WasmSimulator, pc: u32) -> u32 {
         let debug = sim.source_debug_s().unwrap();
-        WasmSimulator::location_of(&debug, pc).unwrap().line
+        sim.location_of(&debug, pc).unwrap().line
     }
 
     fn line_pc(sim: &WasmSimulator, file: &str, line: u32) -> u32 {
@@ -703,7 +744,7 @@ mod tests {
     fn location_and_line_lookup_round_trip() {
         let sim = ring();
         let debug = sim.source_debug_s().unwrap();
-        let at = WasmSimulator::location_of(&debug, 0x2ca).unwrap();
+        let at = sim.location_of(&debug, 0x2ca).unwrap();
         assert!(at.file.ends_with("nrf54l15-smart-ring/src/main.c"));
         assert_eq!(at.line, 223);
         assert_eq!(at.function.as_deref(), Some("main"));
@@ -723,7 +764,7 @@ mod tests {
         assert_eq!(reason, "line_changed");
         assert_eq!(n, 2, "ldr + bl");
         let debug = sim.source_debug_s().unwrap();
-        let loc = WasmSimulator::location_of(&debug, pc).unwrap();
+        let loc = sim.location_of(&debug, pc).unwrap();
         // uart_puts' first instruction is str_len, inlined (main.c:45).
         assert_eq!(pc, 0x160, "uart_puts entry");
         assert_eq!(loc.function.as_deref(), Some("str_len"));
@@ -781,7 +822,7 @@ mod tests {
         assert_eq!(entry, 0x1d8, "probe8 entry");
         run_to(&mut sim, entry);
         let debug = sim.source_debug_s().unwrap();
-        let at = WasmSimulator::location_of(&debug, entry).unwrap();
+        let at = sim.location_of(&debug, entry).unwrap();
         // The entry address carries 176 (`{`), 177 and 176 again; the
         // statement wins.
         assert_eq!((at.line, at.function.as_deref()), (177, Some("probe8")));
@@ -797,7 +838,7 @@ mod tests {
         let (reason, pc, n) = sim.step_source_line_s(true, 1_000_000, &[]).unwrap();
         assert_eq!(reason, "line_changed");
         let debug = sim.source_debug_s().unwrap();
-        let at = WasmSimulator::location_of(&debug, pc).unwrap();
+        let at = sim.location_of(&debug, pc).unwrap();
         assert_eq!(
             (pc, at.line, at.function.as_deref()),
             (0x1f2, 180, Some("probe8"))
@@ -818,14 +859,14 @@ mod tests {
         let (reason, pc) = loop {
             let (reason, pc, n) = sim.step_source_line_s(true, 1_000_000, &[]).unwrap();
             total += n;
-            let function = WasmSimulator::location_of(&debug, pc).and_then(|l| l.function);
+            let function = sim.location_of(&debug, pc).and_then(|l| l.function);
             if reason != "line_changed" || function.as_deref() != Some("probe8") {
                 break (reason, pc);
             }
             assert!(total < 1_000_000, "step out ran away");
         };
         assert_eq!(reason, "line_changed");
-        let at = WasmSimulator::location_of(&debug, pc).unwrap();
+        let at = sim.location_of(&debug, pc).unwrap();
         assert_eq!(
             (pc, at.line, at.function.as_deref()),
             (0x2d6, 224, Some("main"))
@@ -906,6 +947,44 @@ mod tests {
     }
 
     /// RISC-V (riscv-rt, Rust release build with DWARF).
+    /// Nokia 5110 starter (STM32L476, Rust release build): `main`'s loop is
+    /// mostly inlined. Step over walks its lines, each inlined call shown on
+    /// the line that makes it, not inside the inlined body; into enters one.
+    #[test]
+    fn rust_step_over_walks_inlined_calls() {
+        let mut sim = build(
+            "examples/nokia5110-invaders-lab/system.yaml",
+            "tests/fixtures/nokia5110-invaders-lab.elf",
+        );
+        let render = line_pc(&sim, "src/main.rs", 508);
+        sim.set_breakpoints(vec![render]).unwrap();
+        for _ in 0..200 {
+            if sim.get_pc().unwrap() == render {
+                break;
+            }
+            sim.step_batch(1_000_000).unwrap();
+        }
+        assert_eq!(sim.get_pc().unwrap(), render);
+        let debug = sim.source_debug_s().unwrap();
+        let main = sim.location_of(&debug, render).unwrap().function.unwrap();
+        for line in [509, 511, 491] {
+            let (reason, pc, _) = sim.step_source_line_s(true, 2_000_000, &[]).unwrap();
+            let at = sim.location_of(&debug, pc).unwrap();
+            assert_eq!((reason, at.line), ("line_changed", line));
+            assert_eq!(at.function.as_deref(), Some(main.as_str()));
+        }
+        let (reason, pc, n) = sim.step_source_line_s(false, 2_000_000, &[]).unwrap();
+        assert_eq!(
+            (reason, n),
+            ("line_changed", 0),
+            "into an inlined call runs nothing"
+        );
+        let at = sim.location_of(&debug, pc).unwrap();
+        assert!(at.function.unwrap().ends_with("::measure"));
+        // A breakpoint on an inlined call's line resolves to that line.
+        assert_eq!(debug.map.line_to_pc("src/main.rs", 509).unwrap().line, 509);
+    }
+
     #[test]
     fn riscv_step_over_and_lookup() {
         let mut sim = build(
@@ -919,22 +998,27 @@ mod tests {
         let (reason, pc, _) = sim.step_source_line_s(false, 10_000, &[]).unwrap();
         assert_eq!(reason, "line_changed");
         let debug = sim.source_debug_s().unwrap();
-        assert!(WasmSimulator::location_of(&debug, pc)
+        assert!(sim
+            .location_of(&debug, pc)
             .unwrap()
             .file
             .ends_with("ptr/mod.rs"));
 
-        // Over runs the six writes inlined from core in one call and lands on
-        // `loop {}`, back in main.rs.
+        // Each of the six writes inlined from core is a line of main: over
+        // stops on each call's line (they share one line-table row), then on
+        // `loop {}`.
         let mut sim = build(
             "configs/systems/ci-fixture-riscv-uart1.yaml",
             "tests/fixtures/riscv-ci-fixture.elf",
         );
         run_to(&mut sim, main);
-        let (reason, pc, n) = sim.step_source_line_s(true, 10_000, &[]).unwrap();
+        for line in [15, 16, 17, 18, 19, 20] {
+            let (reason, pc, _) = sim.step_source_line_s(true, 10_000, &[]).unwrap();
+            assert_eq!((reason, line_of(&sim, pc)), ("line_changed", line));
+        }
+        let (reason, pc, _) = sim.step_source_line_s(true, 10_000, &[]).unwrap();
         assert_eq!(reason, "line_changed");
         assert_eq!((pc, line_of(&sim, pc)), (0x8000_0320, 24));
-        assert!(n > 6, "ran the inlined writes ({n} instructions)");
         // `loop {}` never leaves its line.
         let (reason, _, _) = sim.step_source_line_s(true, 50, &[]).unwrap();
         assert_eq!(reason, "cap");
@@ -996,7 +1080,7 @@ mod esp32_tests {
 
     fn at(sim: &WasmSimulator, pc: u32) -> (u32, String) {
         let debug = sim.source_debug_s().unwrap();
-        let loc = WasmSimulator::location_of(&debug, pc).unwrap();
+        let loc = sim.location_of(&debug, pc).unwrap();
         assert!(loc.file.ends_with(SKETCH), "{pc:#x} is in {}", loc.file);
         (loc.line, loc.function.unwrap_or_default())
     }
@@ -1079,7 +1163,7 @@ mod esp32_tests {
         let (reason, pc, _) = sim.step_source_line_s(true, 2_000_000, &[]).unwrap();
         assert_eq!(reason, "line_changed");
         let debug = sim.source_debug_s().unwrap();
-        let loc = WasmSimulator::location_of(&debug, pc).unwrap();
+        let loc = sim.location_of(&debug, pc).unwrap();
         assert!(loc.file.ends_with("cores/esp32/main.cpp"), "{}", loc.file);
         assert_eq!(loc.function.as_deref(), Some("loopTask(void*)"));
 
@@ -1242,7 +1326,7 @@ mod esp32_tests {
         .unwrap_or_else(|_| panic!("build uno"));
         let line = |sim: &WasmSimulator, pc: u32| {
             let debug = sim.source_debug_s().unwrap();
-            let loc = WasmSimulator::location_of(&debug, pc).unwrap();
+            let loc = sim.location_of(&debug, pc).unwrap();
             (loc.file.rsplit('/').next().unwrap().to_string(), loc.line)
         };
         assert_eq!(line_pcs(&sim, 26), vec![0x692]);

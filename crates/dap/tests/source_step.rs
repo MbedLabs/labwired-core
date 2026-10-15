@@ -156,10 +156,14 @@ fn cortex_m_step_over_into_and_out() {
     let locals = adapter.source_locals().unwrap();
     let p = locals.iter().find(|l| l.name == "p").expect("local p");
     assert_eq!(p.kind, "frame_offset");
-    // Out: back in main, past the call on 224. The next statement main
-    // reaches is probe_tmp117's first line, which -Os inlined into main (it
-    // has no symbol of its own), so DWARF names the inlined function.
+    // Out: back in main. Its next statement is the call to probe_tmp117,
+    // which -Os inlined (it has no symbol of its own): the stop shows the
+    // line in main that makes the call, not the inlined body.
     let (stop, _) = step(&adapter, StepKind::Out);
+    assert_eq!(stop, StepStop::LineChanged);
+    assert_eq!(here(&adapter), ("main.c".into(), 225, "main".into()));
+    // Into enters the inlined probe_tmp117 without running anything.
+    let (stop, _) = step(&adapter, StepKind::Into);
     assert_eq!(stop, StepStop::LineChanged);
     let (file, line, function) = here(&adapter);
     assert_eq!(
@@ -229,9 +233,11 @@ fn esp32_arduino_runs_to_loop_from_another_thread() {
     assert_eq!(here(&adapter).1, 28);
 }
 
-/// RISC-V (riscv-rt, Rust release build): step over runs the six
-/// `write_volatile`s inlined from core in one step and lands on `loop {}`;
-/// step into stops in the inlined `ptr/mod.rs`.
+/// RISC-V (riscv-rt, Rust release build): each of the six
+/// `write_volatile`s inlined from core is one line of `main`, so step over
+/// stops on each call's line in turn (15..=20, though they share one
+/// line-table row), then on `loop {}`; step into stops in the inlined
+/// `ptr/mod.rs`.
 #[test]
 fn riscv_step_over_runs_through_code_inlined_from_another_file() {
     let adapter = load(
@@ -240,11 +246,11 @@ fn riscv_step_over_runs_through_code_inlined_from_another_file() {
     );
     set_line_breakpoint(&adapter, "riscv-ci-fixture/src/main.rs", 12);
     assert_eq!(run_to_breakpoint(&adapter, 5_000_000), 0x8000_02ec);
-    assert_eq!(
-        step(&adapter, StepKind::Over),
-        (StepStop::LineChanged, 0x8000_0320)
-    );
-    assert_eq!(here(&adapter).1, 24);
+    for line in [15, 16, 17, 18, 19, 20, 24] {
+        assert_eq!(step(&adapter, StepKind::Over).0, StepStop::LineChanged);
+        assert_eq!(here(&adapter), ("main.rs".into(), line, "main".into()));
+    }
+    assert_eq!(adapter.get_pc().unwrap(), 0x8000_0320);
 
     let adapter = load(
         "configs/systems/ci-fixture-riscv-uart1.yaml",
@@ -254,4 +260,45 @@ fn riscv_step_over_runs_through_code_inlined_from_another_file() {
     run_to_breakpoint(&adapter, 5_000_000);
     assert_eq!(step(&adapter, StepKind::Into).0, StepStop::LineChanged);
     assert_eq!(here(&adapter).0, "mod.rs");
+}
+
+/// Nokia 5110 starter (STM32L476, Rust release build): most of `main`'s loop
+/// is inlined and has no line-table row of its own. Step over walks the
+/// loop's lines (each inlined call is shown on the line that makes it),
+/// into enters an inlined function, out returns to its caller, and a
+/// breakpoint on an inlined call's line stops on that line.
+#[test]
+fn cortex_m_rust_steps_through_inlined_calls() {
+    let adapter = load(
+        "examples/nokia5110-invaders-lab/system.yaml",
+        "tests/fixtures/nokia5110-invaders-lab.elf",
+    );
+    set_line_breakpoint(&adapter, "src/main.rs", 508);
+    run_to_breakpoint(&adapter, 50_000_000);
+    let main = here(&adapter).2;
+    assert!(main.ends_with("__cortex_m_rt_main"), "{main}");
+    assert_eq!(here(&adapter).1, 508);
+
+    // 508 calls render; 509 (lcd_frame) and 511 (delay) are inlined.
+    for line in [509, 511, 491] {
+        assert_eq!(step(&adapter, StepKind::Over).0, StepStop::LineChanged);
+        assert_eq!(here(&adapter), ("main.rs".into(), line, main.clone()));
+    }
+    // 491 is `let count = measure();`: into enters the inlined measure.
+    assert_eq!(
+        step(&adapter, StepKind::Into),
+        (StepStop::LineChanged, 0x0800_0f6a)
+    );
+    let (file, line, function) = here(&adapter);
+    assert_eq!(file, "main.rs");
+    assert!(function.ends_with("::measure"), "{function}");
+    assert!((223..=248).contains(&line), "measure body, got {line}");
+    // Out finishes measure and is back in main, past the call.
+    assert_eq!(step(&adapter, StepKind::Out).0, StepStop::LineChanged);
+    assert_eq!(here(&adapter), ("main.rs".into(), 493, main.clone()));
+
+    // A breakpoint on an inlined call's line stops there, shown on that line.
+    set_line_breakpoint(&adapter, "src/main.rs", 509);
+    run_to_breakpoint(&adapter, 50_000_000);
+    assert_eq!(here(&adapter), ("main.rs".into(), 509, main));
 }
