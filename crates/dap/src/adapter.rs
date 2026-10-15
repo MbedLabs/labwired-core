@@ -745,6 +745,47 @@ impl LabwiredAdapter {
         Ok(debug.locals(&**machine, family, pc))
     }
 
+    /// The call stack of the debugged core, innermost first (see
+    /// [`SourceDebug::call_stack`]). Frame 0 is the frame the stop shows.
+    pub fn call_stack(&self, max_frames: usize) -> Result<Vec<source_step::StackFrame>> {
+        let source = self.source.lock().unwrap();
+        let debug = source
+            .as_ref()
+            .ok_or_else(|| anyhow!("the firmware has no DWARF line information"))?;
+        let family = self
+            .family
+            .lock()
+            .unwrap()
+            .ok_or_else(|| anyhow!("Machine not initialized"))?;
+        let guard = self.machine.lock().unwrap();
+        let machine = guard
+            .as_ref()
+            .ok_or_else(|| anyhow!("Machine not initialized"))?;
+        let view = self.view_at(machine.debug_cpu().get_pc());
+        Ok(debug.call_stack(&**machine, family, view, max_frames))
+    }
+
+    /// The variables of call-stack frame `index`, with typed values.
+    pub fn frame_variables(&self, index: usize) -> Result<Vec<labwired_loader::VariableValue>> {
+        let source = self.source.lock().unwrap();
+        let debug = source
+            .as_ref()
+            .ok_or_else(|| anyhow!("the firmware has no DWARF line information"))?;
+        let family = self
+            .family
+            .lock()
+            .unwrap()
+            .ok_or_else(|| anyhow!("Machine not initialized"))?;
+        let guard = self.machine.lock().unwrap();
+        let machine = guard
+            .as_ref()
+            .ok_or_else(|| anyhow!("Machine not initialized"))?;
+        let view = self.view_at(machine.debug_cpu().get_pc());
+        debug
+            .frame_variables(&**machine, family, view, index)
+            .ok_or_else(|| anyhow!("no frame {index}"))
+    }
+
     /// One source-level step (into, over or out), the same algorithm the
     /// browser runs: calls stepped over run at engine speed with idle
     /// fast-forward, and the debugger follows the core a breakpoint stopped.

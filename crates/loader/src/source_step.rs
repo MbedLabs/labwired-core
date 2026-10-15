@@ -18,7 +18,10 @@
 //! stopped (an Arduino-ESP32 sketch's `loop()` runs on core 1).
 
 use crate::source_map::{LineAddress, SourceMap};
-use crate::{DwarfLocation, InlineFrame, SymbolProvider};
+use crate::{
+    Abi, DwarfLocation, FrameContext, InlineFrame, PhysicalFrame, RegisterSet, SymbolProvider,
+    TargetMemory, VariableValue,
+};
 use labwired_core::debug::SourceStepTarget;
 use labwired_core::decoder::xtensa_length;
 use labwired_core::snapshot::CpuSnapshot;
@@ -35,6 +38,9 @@ const RUN_THROUGH_CYCLES_PER_STEP: u64 = 256;
 /// Step-out is step-over repeated until the line lands in another function;
 /// this bounds how many lines it may cross on the way.
 const STEP_OUT_MAX_LINES: u32 = 10_000;
+
+/// The most frames a call stack shows.
+pub const MAX_STACK_FRAMES: usize = 32;
 
 /// The parsed DWARF of one firmware ELF.
 pub struct SourceDebug {
@@ -373,6 +379,258 @@ impl SourceDebug {
                 out
             })
             .collect()
+    }
+}
+
+/// One frame of the call stack, innermost first. A physical frame (one
+/// activation of a real function) shows as its inline chain: the inlined
+/// calls first, then the function they were inlined into.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StackFrame {
+    pub index: usize,
+    /// The frame's pc: where frame 0 stopped, or for a caller the return
+    /// address (the instruction after the call).
+    pub pc: u32,
+    pub function: Option<String>,
+    pub file: Option<String>,
+    pub line: Option<u32>,
+    pub column: Option<u32>,
+    /// True for a call the compiler inlined into the frame below it.
+    pub inlined: bool,
+}
+
+/// A logical frame and where its variables come from.
+struct FrameSlot {
+    frame: StackFrame,
+    /// Index into the physical frames.
+    physical: usize,
+    /// The inline level whose variables the frame shows (0 is the physical
+    /// function); `None` without debug information.
+    level: Option<usize>,
+}
+
+/// The debugged core's memory, read through the bus.
+struct BusMemory<'a>(&'a dyn SourceStepTarget);
+
+impl TargetMemory for BusMemory<'_> {
+    fn read_memory(&self, addr: u64, buf: &mut [u8]) -> bool {
+        let Ok(base) = u32::try_from(addr) else {
+            return false;
+        };
+        for (i, b) in buf.iter_mut().enumerate() {
+            match self.0.read_code_u8(base.wrapping_add(i as u32)) {
+                Some(v) => *b = v,
+                None => return false,
+            }
+        }
+        true
+    }
+}
+
+/// How to unwind and read registers on `family`. Cortex-M/A and RISC-V
+/// unwind with CFI; Xtensa (register windows) and AVR show frame 0 only.
+fn abi(family: MachineFamily) -> Abi {
+    match family {
+        MachineFamily::CortexM | MachineFamily::CortexA => Abi {
+            sp: 13,
+            callee_saved: (4..=11).collect(),
+            code_mask: !1,
+            register_size: 4,
+            unwind: true,
+            exc_return: family == MachineFamily::CortexM,
+        },
+        MachineFamily::RiscV => Abi {
+            sp: 2,
+            callee_saved: [3, 4, 8, 9].into_iter().chain(18..=27).collect(),
+            code_mask: !0,
+            register_size: 4,
+            unwind: true,
+            exc_return: false,
+        },
+        MachineFamily::Xtensa => Abi {
+            sp: 1,
+            callee_saved: Vec::new(),
+            code_mask: !0,
+            register_size: 4,
+            unwind: false,
+            exc_return: false,
+        },
+        MachineFamily::Avr => Abi {
+            sp: 32,
+            callee_saved: Vec::new(),
+            code_mask: !0,
+            register_size: 1,
+            unwind: false,
+            exc_return: false,
+        },
+    }
+}
+
+/// The debugged core's registers by DWARF number: r0-r15, x0-x31, the
+/// current window's a0-a15, or AVR r0-r31 and SP (32).
+fn live_registers(target: &dyn SourceStepTarget, family: MachineFamily) -> RegisterSet {
+    let cpu = target.debug_cpu();
+    let mut regs = RegisterSet::default();
+    let count: u8 = match family {
+        MachineFamily::CortexM | MachineFamily::CortexA | MachineFamily::Xtensa => 16,
+        MachineFamily::RiscV => 32,
+        MachineFamily::Avr => 33,
+    };
+    for r in 0..count {
+        regs.set(u16::from(r), Some(u64::from(cpu.get_register(r))));
+    }
+    match family {
+        MachineFamily::CortexM | MachineFamily::CortexA => {
+            regs.set(15, Some(u64::from(cpu.get_pc())));
+        }
+        MachineFamily::RiscV => regs.set(0, Some(0)),
+        _ => {}
+    }
+    regs
+}
+
+impl SourceDebug {
+    /// The call stack of the debugged core, innermost frame first, at most
+    /// `max_frames` frames. Frame 0 is the frame the stop shows (`view`, the
+    /// inline depth the last source step left, else
+    /// [`Self::default_depth`]), as [`Self::location_at`] reports it.
+    pub fn call_stack(
+        &self,
+        target: &dyn SourceStepTarget,
+        family: MachineFamily,
+        view: Option<usize>,
+        max_frames: usize,
+    ) -> Vec<StackFrame> {
+        let (_, slots) = self.stack(target, family, view, max_frames);
+        slots.into_iter().map(|s| s.frame).collect()
+    }
+
+    /// The variables and parameters of call-stack frame `index` (see
+    /// [`Self::call_stack`]) with their values in that frame. `None` when
+    /// there is no such frame.
+    pub fn frame_variables(
+        &self,
+        target: &dyn SourceStepTarget,
+        family: MachineFamily,
+        view: Option<usize>,
+        index: usize,
+    ) -> Option<Vec<VariableValue>> {
+        let (physical, slots) = self.stack(target, family, view, index + 1);
+        let slot = slots.get(index)?;
+        let frame = &physical[slot.physical];
+        let mem = BusMemory(target);
+        let ctx = FrameContext {
+            pc: frame.lookup_pc,
+            regs: &frame.regs,
+            cfa: frame.cfa,
+            mem: &mem,
+            register_size: abi(family).register_size,
+        };
+        Some(self.symbols.variables(&ctx, slot.level))
+    }
+
+    /// The physical frames and, for at least `max_frames` logical frames,
+    /// what each shows.
+    fn stack(
+        &self,
+        target: &dyn SourceStepTarget,
+        family: MachineFamily,
+        view: Option<usize>,
+        max_frames: usize,
+    ) -> (Vec<PhysicalFrame>, Vec<FrameSlot>) {
+        let abi = abi(family);
+        let pc = target.debug_cpu().get_pc();
+        let regs = live_registers(target, family);
+        let mem = BusMemory(target);
+        let max_frames = max_frames.clamp(1, MAX_STACK_FRAMES);
+        let physical = self.symbols.unwind(
+            self.map.code_address(u64::from(pc)),
+            regs,
+            &mem,
+            &abi,
+            max_frames,
+        );
+        let mut slots: Vec<FrameSlot> = Vec::new();
+        for (i, frame) in physical.iter().enumerate() {
+            if slots.len() >= max_frames {
+                break;
+            }
+            let lookup = frame.lookup_pc as u32;
+            let chain = self.frames(lookup);
+            let n = chain.len();
+            let push = |slots: &mut Vec<FrameSlot>, mut f: StackFrame, level| {
+                f.index = slots.len();
+                slots.push(FrameSlot {
+                    frame: f,
+                    physical: i,
+                    level,
+                });
+            };
+            if n == 0 {
+                // No debug information: the symbol table names the function.
+                let function = self
+                    .symbols
+                    .functions()
+                    .iter()
+                    .rev()
+                    .find(|(start, size, _)| {
+                        *start <= frame.lookup_pc && frame.lookup_pc < start + size
+                    })
+                    .map(|(_, _, name)| name.clone());
+                push(
+                    &mut slots,
+                    StackFrame {
+                        index: 0,
+                        pc: frame.pc as u32,
+                        function,
+                        file: None,
+                        line: None,
+                        column: None,
+                        inlined: false,
+                    },
+                    None,
+                );
+                continue;
+            }
+            // Frame 0 shows `depth` frames of its chain; callers show all.
+            let depth = if i == 0 {
+                view.unwrap_or_else(|| self.default_depth(pc)).clamp(1, n)
+            } else {
+                n
+            };
+            for (k, inline) in chain.iter().enumerate().skip(n - depth) {
+                let level = n - 1 - k;
+                let shown = if i == 0 && k == n - depth {
+                    self.location_at(pc, depth)
+                        .map(|l| (Some(l.file), Some(l.line), l.column, l.function))
+                } else {
+                    None
+                };
+                let (file, line, column, function) = shown.unwrap_or_else(|| {
+                    (
+                        inline.file.clone(),
+                        inline.line.filter(|l| *l != 0),
+                        None,
+                        inline.function.clone(),
+                    )
+                });
+                push(
+                    &mut slots,
+                    StackFrame {
+                        index: 0,
+                        pc: frame.pc as u32,
+                        function,
+                        file,
+                        line,
+                        column,
+                        inlined: k + 1 < n,
+                    },
+                    Some(level),
+                );
+            }
+        }
+        slots.truncate(max_frames);
+        (physical, slots)
     }
 }
 

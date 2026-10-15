@@ -21,6 +21,11 @@ pub mod footprint;
 pub mod multi_image;
 pub mod source_map;
 pub mod source_step;
+pub mod unwind;
+pub mod variables;
+
+pub use unwind::{Abi, PhysicalFrame};
+pub use variables::{FrameContext, RegisterSet, TargetMemory, VariableValue};
 
 pub use footprint::{elf_section_totals_v1, ElfSectionTotals, FOOTPRINT_METHOD};
 
@@ -214,7 +219,20 @@ pub struct SymbolProvider {
     functions: Vec<(u64, u64, String)>,
     // Test-only locals: PC -> list of locals
     test_locals: HashMap<u64, Vec<LocalVariable>>,
+    // Call frame information for unwinding (empty when absent).
+    cfi: unwind::CfiSections,
 }
+
+/// Where a variable that [`SymbolProvider::walk_scope`] reports sits.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct VarScope {
+    /// How many inlined calls hold it: 0 is the physical function.
+    pub level: usize,
+    /// The physical function (`DW_TAG_subprogram`) that holds `pc`.
+    pub subprogram: gimli::UnitOffset<usize>,
+}
+
+pub(crate) type DwarfReader = gimli::EndianReader<gimli::RunTimeEndian, Arc<[u8]>>;
 
 impl SymbolProvider {
     pub fn new(path: &Path) -> Result<Self> {
@@ -310,6 +328,7 @@ impl SymbolProvider {
             gimli::Dwarf::load(&load_section).context("Failed to load DWARF for context")?;
         let context = addr2line::Context::from_dwarf(dwarf_for_context)
             .context("Failed to create context from dwarf")?;
+        let cfi = unwind::CfiSections::from_object(&object);
 
         Ok(Self {
             data,
@@ -320,6 +339,7 @@ impl SymbolProvider {
             symbol_map,
             functions,
             test_locals: HashMap::new(),
+            cfi,
         })
     }
 
@@ -474,6 +494,82 @@ impl SymbolProvider {
             }
         }
 
+        self.walk_scope(pc, |unit, entry, _| {
+            let name = entry
+                .attr_value(addr2line::gimli::DW_AT_name)
+                .ok()
+                .flatten()
+                .and_then(|attr| {
+                    let s = self.dwarf.attr_string(unit, attr).ok()?;
+                    s.to_string_lossy().ok().map(|c| c.into_owned())
+                });
+
+            let Some(n) = name else { return };
+            // A single expression, or (what optimised builds emit for nearly
+            // every local) a location list whose entry covering `pc` holds
+            // it. A list with no entry here means the value is gone at this
+            // point.
+            let expr = match entry
+                .attr_value(addr2line::gimli::DW_AT_location)
+                .ok()
+                .flatten()
+            {
+                Some(addr2line::gimli::AttributeValue::Exprloc(expr)) => Some(expr),
+                Some(addr2line::gimli::AttributeValue::LocationListsRef(offset)) => {
+                    let Ok(mut list) = self.dwarf.locations(unit, offset) else {
+                        return;
+                    };
+                    let mut found = None;
+                    while let Ok(Some(e)) = list.next() {
+                        if e.range.begin <= pc && pc < e.range.end {
+                            found = Some(e.data);
+                            break;
+                        }
+                    }
+                    if found.is_none() {
+                        locals.push(LocalVariable {
+                            name: n,
+                            location: DwarfLocation::Other("optimized out".into()),
+                        });
+                        return;
+                    }
+                    found
+                }
+                _ => None,
+            };
+            let Some(expr) = expr else { return };
+            let mut ops = expr.operations(unit.encoding());
+            if let Ok(Some(op)) = ops.next() {
+                let location = match op {
+                    addr2line::gimli::Operation::Register { register } => {
+                        DwarfLocation::Register(register.0)
+                    }
+                    addr2line::gimli::Operation::FrameOffset { offset } => {
+                        DwarfLocation::FrameRelative(offset)
+                    }
+                    addr2line::gimli::Operation::Address { address } => {
+                        DwarfLocation::Address(address)
+                    }
+                    _ => DwarfLocation::Other(format!("{:?}", op)),
+                };
+                locals.push(LocalVariable { name: n, location });
+            }
+        });
+        locals
+    }
+
+    /// Calls `f` for each variable and parameter in scope at `pc`: those of
+    /// the function holding `pc` and of the lexical blocks and inlined calls
+    /// inside it that hold `pc` too. The `let`s of an earlier `unsafe {}`
+    /// block are not live later on.
+    pub(crate) fn walk_scope<F>(&self, pc: u64, mut f: F)
+    where
+        F: FnMut(
+            &gimli::Unit<DwarfReader>,
+            &gimli::DebuggingInformationEntry<'_, '_, DwarfReader>,
+            VarScope,
+        ),
+    {
         let mut units = self.dwarf.units();
 
         while let Ok(Some(header)) = units.next() {
@@ -483,124 +579,73 @@ impl SymbolProvider {
             };
 
             // Whether `entry`'s address ranges (low/high_pc or DW_AT_ranges) hold `pc`.
-            let covers =
-                |entry: &addr2line::gimli::DebuggingInformationEntry<'_, '_, _, _>| -> bool {
-                    let Ok(mut ranges) = self.dwarf.die_ranges(&unit, entry) else {
-                        return false;
-                    };
-                    while let Ok(Some(r)) = ranges.next() {
-                        if r.begin <= pc && pc < r.end {
-                            return true;
-                        }
-                    }
-                    false
+            let covers = |entry: &gimli::DebuggingInformationEntry<'_, '_, DwarfReader>| -> bool {
+                let Ok(mut ranges) = self.dwarf.die_ranges(&unit, entry) else {
+                    return false;
                 };
+                while let Ok(Some(r)) = ranges.next() {
+                    if r.begin <= pc && pc < r.end {
+                        return true;
+                    }
+                }
+                false
+            };
 
             // `next_dfs` reports a depth change, not a depth: keep the sum.
             let mut depth: isize = 0;
-            // Depth of the subprogram that contains `pc`, while inside it.
-            let mut subprogram: Option<isize> = None;
-            // Lexical blocks and inlined calls inside it, with whether each
-            // holds `pc`. A variable is in scope only if all of them do: the
-            // `let`s of an earlier `unsafe {}` block are not live later on.
-            let mut scopes: Vec<(isize, bool)> = Vec::new();
+            // Depth and offset of the subprogram that contains `pc`, while inside it.
+            let mut subprogram: Option<(isize, gimli::UnitOffset<usize>)> = None;
+            // Lexical blocks and inlined calls inside it: depth, whether
+            // each holds `pc`, and whether it is an inlined call. A variable
+            // is in scope only if all of them hold `pc`.
+            let mut scopes: Vec<(isize, bool, bool)> = Vec::new();
             let mut entries = unit.entries();
 
             while let Ok(Some((delta, entry))) = entries.next_dfs() {
                 depth += delta;
-                while scopes.last().is_some_and(|(d, _)| *d >= depth) {
+                while scopes.last().is_some_and(|(d, _, _)| *d >= depth) {
                     scopes.pop();
                 }
-                if subprogram.is_some_and(|d| depth <= d) {
+                if subprogram.is_some_and(|(d, _)| depth <= d) {
                     subprogram = None;
                 }
-                let Some(_) = subprogram else {
-                    if entry.tag() == addr2line::gimli::DW_TAG_subprogram && covers(entry) {
-                        subprogram = Some(depth);
+                let Some((_, function)) = subprogram else {
+                    if entry.tag() == gimli::DW_TAG_subprogram && covers(entry) {
+                        subprogram = Some((depth, entry.offset()));
                     }
                     continue;
                 };
+                if matches!(
+                    entry.tag(),
+                    gimli::DW_TAG_lexical_block
+                        | gimli::DW_TAG_inlined_subroutine
+                        | gimli::DW_TAG_subprogram
+                ) {
+                    scopes.push((
+                        depth,
+                        covers(entry),
+                        entry.tag() == gimli::DW_TAG_inlined_subroutine,
+                    ));
+                    continue;
+                }
+                if !scopes.iter().all(|(_, live, _)| *live) {
+                    continue;
+                }
+                if entry.tag() == gimli::DW_TAG_variable
+                    || entry.tag() == gimli::DW_TAG_formal_parameter
                 {
-                    if matches!(
-                        entry.tag(),
-                        addr2line::gimli::DW_TAG_lexical_block
-                            | addr2line::gimli::DW_TAG_inlined_subroutine
-                            | addr2line::gimli::DW_TAG_subprogram
-                    ) {
-                        scopes.push((depth, covers(entry)));
-                        continue;
-                    }
-                    if !scopes.iter().all(|(_, live)| *live) {
-                        continue;
-                    }
-
-                    if entry.tag() == addr2line::gimli::DW_TAG_variable
-                        || entry.tag() == addr2line::gimli::DW_TAG_formal_parameter
-                    {
-                        let name = entry
-                            .attr_value(addr2line::gimli::DW_AT_name)
-                            .ok()
-                            .flatten()
-                            .and_then(|attr| {
-                                let s = self.dwarf.attr_string(&unit, attr).ok()?;
-                                s.to_string_lossy().ok().map(|c| c.into_owned())
-                            });
-
-                        let Some(n) = name else { continue };
-                        // A single expression, or (what optimised builds emit
-                        // for nearly every local) a location list whose entry
-                        // covering `pc` holds it. A list with no entry here
-                        // means the value is gone at this point.
-                        let expr = match entry
-                            .attr_value(addr2line::gimli::DW_AT_location)
-                            .ok()
-                            .flatten()
-                        {
-                            Some(addr2line::gimli::AttributeValue::Exprloc(expr)) => Some(expr),
-                            Some(addr2line::gimli::AttributeValue::LocationListsRef(offset)) => {
-                                let Ok(mut list) = self.dwarf.locations(&unit, offset) else {
-                                    continue;
-                                };
-                                let mut found = None;
-                                while let Ok(Some(e)) = list.next() {
-                                    if e.range.begin <= pc && pc < e.range.end {
-                                        found = Some(e.data);
-                                        break;
-                                    }
-                                }
-                                if found.is_none() {
-                                    locals.push(LocalVariable {
-                                        name: n,
-                                        location: DwarfLocation::Other("optimized out".into()),
-                                    });
-                                    continue;
-                                }
-                                found
-                            }
-                            _ => None,
-                        };
-                        let Some(expr) = expr else { continue };
-                        let mut ops = expr.operations(unit.encoding());
-                        if let Ok(Some(op)) = ops.next() {
-                            let location = match op {
-                                addr2line::gimli::Operation::Register { register } => {
-                                    DwarfLocation::Register(register.0)
-                                }
-                                addr2line::gimli::Operation::FrameOffset { offset } => {
-                                    DwarfLocation::FrameRelative(offset)
-                                }
-                                addr2line::gimli::Operation::Address { address } => {
-                                    DwarfLocation::Address(address)
-                                }
-                                _ => DwarfLocation::Other(format!("{:?}", op)),
-                            };
-                            locals.push(LocalVariable { name: n, location });
-                        }
-                    }
+                    let level = scopes.iter().filter(|(_, _, inlined)| *inlined).count();
+                    f(
+                        &unit,
+                        entry,
+                        VarScope {
+                            level,
+                            subprogram: function,
+                        },
+                    );
                 }
             }
         }
-        locals
     }
 
     /// Create an empty SymbolProvider for testing
@@ -628,6 +673,7 @@ impl SymbolProvider {
             symbol_map: HashMap::new(),
             functions: Vec::new(),
             test_locals: HashMap::new(),
+            cfi: unwind::CfiSections::default(),
         }
     }
 

@@ -215,6 +215,29 @@ impl WasmSimulator {
         Ok(locals)
     }
 
+    /// See [`WasmSimulator::call_stack`].
+    pub(crate) fn call_stack_s(
+        &self,
+        max_frames: u32,
+    ) -> Result<Vec<labwired_loader::source_step::StackFrame>, JsValue> {
+        let debug = self.source_debug_s().map_err(js)?;
+        let machine = self.machine_or_err()?;
+        let view = self.view_at(focused_cpu(machine).get_pc());
+        Ok(debug.call_stack(machine, self.arch, view, max_frames as usize))
+    }
+
+    /// See [`WasmSimulator::frame_variables`]; `None` for a frame that does
+    /// not exist.
+    pub(crate) fn frame_variables_s(
+        &self,
+        frame_index: u32,
+    ) -> Result<Option<Vec<labwired_loader::VariableValue>>, JsValue> {
+        let debug = self.source_debug_s().map_err(js)?;
+        let machine = self.machine_or_err()?;
+        let view = self.view_at(focused_cpu(machine).get_pc());
+        Ok(debug.frame_variables(machine, self.arch, view, frame_index as usize))
+    }
+
     /// The stack pointer's id for `get_register`.
     fn stack_register(&self) -> u8 {
         match self.arch {
@@ -633,6 +656,42 @@ impl WasmSimulator {
         to_js(&self.locals_s(pc)?)
     }
 
+    /// The call stack of the debugged core, innermost first, at most
+    /// `max_frames` (and never more than 32) frames:
+    /// `[{ index, pc, function, file, line, column, inlined }]`.
+    ///
+    /// A real function's activation shows as its inline chain: inlined calls
+    /// (`inlined: true`) first, then the function they were inlined into.
+    /// Frame 0 is the frame `source_location` shows (the inline frame the last
+    /// source step stopped in). A caller's `pc` is its return address and its
+    /// `line` the line of the call. Callers are unwound with the ELF's call
+    /// frame information on Cortex-M/A and RISC-V; Xtensa and AVR show frame 0
+    /// only. `function`, `file`, `line` and `column` may be null.
+    #[wasm_bindgen]
+    pub fn call_stack(&self, max_frames: u32) -> Result<JsValue, JsValue> {
+        to_js(&self.call_stack_s(max_frames)?)
+    }
+
+    /// The variables and parameters of call-stack frame `frame_index` (as
+    /// `call_stack` numbers them), with typed values:
+    /// `[{ name, type, value, available, address, children: [...] }]`.
+    ///
+    /// `value` is the display text (`42`, `true`, `0x20000010`,
+    /// `Game { paddle_x: 42, … }`, `[u8; 504]`, `Some(3)`); `available` is
+    /// false when the value is optimized out at this pc or a register or
+    /// memory it needs cannot be read (then `value` says which). `address`
+    /// is where the value lives in memory, or null. Structs, unions, arrays
+    /// (first 64 elements), Rust enums and pointers to aggregates have
+    /// `children` of the same shape, at most 4 levels deep. Throws for a
+    /// frame that does not exist.
+    #[wasm_bindgen]
+    pub fn frame_variables(&self, frame_index: u32) -> Result<JsValue, JsValue> {
+        match self.frame_variables_s(frame_index)? {
+            Some(vars) => to_js(&vars),
+            None => Err(js(format!("no call-stack frame {frame_index}"))),
+        }
+    }
+
     /// Make `step_batch` stop before executing any of `addresses` (Thumb bit
     /// ignored), replacing the previous set. The check runs inside the
     /// engine's own advance loop, so a run with breakpoints keeps its batch
@@ -985,6 +1044,67 @@ mod tests {
         assert_eq!(debug.map.line_to_pc("src/main.rs", 509).unwrap().line, 509);
     }
 
+    /// Nokia 5110 starter (Rust release build): typed variables and the
+    /// unwound call stack at `game.render(&mut FB)` (main.rs:508), then in
+    /// `render` after a step into it.
+    #[test]
+    fn rust_frame_variables_and_call_stack() {
+        let mut sim = build(
+            "examples/nokia5110-invaders-lab/system.yaml",
+            "tests/fixtures/nokia5110-invaders-lab.elf",
+        );
+        let render = line_pc(&sim, "src/main.rs", 508);
+        sim.set_breakpoints(vec![render]).unwrap();
+        for _ in 0..200 {
+            if sim.get_pc().unwrap() == render {
+                break;
+            }
+            sim.step_batch(1_000_000).unwrap();
+        }
+        assert_eq!(sim.get_pc().unwrap(), render);
+
+        let vars = sim.frame_variables_s(0).unwrap().unwrap();
+        let game = vars.iter().find(|v| v.name == "game").expect("game");
+        assert!(game.available, "{game:?}");
+        assert!(
+            game.value.starts_with("Game { paddle_x: "),
+            "{}",
+            game.value
+        );
+        let fields: Vec<&str> = game.children.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(fields, ["bricks", "paddle_x", "bx", "by", "vx", "vy"]);
+        // The JSON the browser gets.
+        let json = serde_json::to_value(game).unwrap();
+        assert_eq!(json["type"], "Game");
+        assert!(json["address"].is_u64());
+        assert_eq!(json["children"][1]["name"], "paddle_x");
+
+        let stack = sim.call_stack_s(32).unwrap();
+        let main = stack[0].function.clone().unwrap();
+        assert!(main.ends_with("::__cortex_m_rt_main"), "{stack:?}");
+        assert_eq!((stack[0].line, stack[0].inlined), (Some(508), false));
+        assert_eq!(stack[1].function.as_deref(), Some("main"));
+        assert!(sim.call_stack_s(1).unwrap().len() == 1);
+
+        // Into render: render <- main (on line 508), main's game readable.
+        let (reason, _, _) = sim.step_source_line_s(false, 2_000_000, &[]).unwrap();
+        assert_eq!(reason, "line_changed");
+        let stack = sim.call_stack_s(32).unwrap();
+        assert!(
+            stack[0]
+                .function
+                .as_deref()
+                .unwrap()
+                .ends_with("Game::render"),
+            "{stack:?}"
+        );
+        assert_eq!(stack[1].function.as_deref(), Some(main.as_str()));
+        assert_eq!(stack[1].line, Some(508));
+        let caller = sim.frame_variables_s(1).unwrap().unwrap();
+        let game = caller.iter().find(|v| v.name == "game").expect("game");
+        assert!(game.available && game.value.starts_with("Game {"));
+    }
+
     #[test]
     fn riscv_step_over_and_lookup() {
         let mut sim = build(
@@ -1003,6 +1123,24 @@ mod tests {
             .unwrap()
             .file
             .ends_with("ptr/mod.rs"));
+        // RISC-V unwinds with CFI: write_volatile (inlined) <- main <-
+        // _start_rust; write_volatile's `dst` is the UART register.
+        let stack = sim.call_stack_s(32).unwrap();
+        let names: Vec<(&str, bool)> = stack
+            .iter()
+            .map(|f| (f.function.as_deref().unwrap_or(""), f.inlined))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("core::ptr::write_volatile", true),
+                ("main", false),
+                ("_start_rust", false)
+            ]
+        );
+        let vars = sim.frame_variables_s(0).unwrap().unwrap();
+        let dst = vars.iter().find(|v| v.name == "dst").expect("dst");
+        assert_eq!((dst.value.as_str(), dst.available), ("0x4000c000", true));
 
         // Over runs the six writes inlined from core in one call and lands on
         // `loop {}`, back in main.rs.
@@ -1377,5 +1515,25 @@ mod esp32_tests {
         assert_eq!(v.value, Some(u32::from_le_bytes(ticks.try_into().unwrap())));
         let t = locals.iter().find(|l| l.name == "t").expect("local t");
         assert!(t.value.is_none());
+    }
+
+    /// Xtensa shows frame 0 only (no CFI unwinding of register windows),
+    /// with typed values read from the core the breakpoint stopped (core 1).
+    #[test]
+    fn esp32_frame_variables_of_bump() {
+        let mut sim = esp32();
+        sim.set_breakpoints(line_pcs(&sim, 15)).unwrap();
+        run_to_breakpoint(&mut sim, 200_000_000);
+        let stack = sim.call_stack_s(32).unwrap();
+        assert_eq!(stack.len(), 1, "{stack:?}");
+        assert_eq!(stack[0].function.as_deref(), Some("bump(int)"));
+        assert_eq!(stack[0].line, Some(15));
+        let vars = sim.frame_variables_s(0).unwrap().unwrap();
+        let v = vars.iter().find(|v| v.name == "v").expect("parameter v");
+        let ticks = sim.read_memory(0x3ffc_1c00, 4).unwrap();
+        let ticks = i32::from_le_bytes(ticks.try_into().unwrap());
+        assert_eq!(v.type_name.as_deref(), Some("int"));
+        assert_eq!((v.value.clone(), v.available), (ticks.to_string(), true));
+        assert!(sim.frame_variables_s(1).unwrap().is_none(), "no frame 1");
     }
 }
