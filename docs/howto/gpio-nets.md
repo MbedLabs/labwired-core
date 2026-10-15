@@ -219,8 +219,8 @@ drives and accept an external level. Every GPIO model in tree does:
 | `GpioPort`, every register family (STM32 `v2` and `f1`, nRF52/54, Kinetis, EFR32 series 2, SAM, RA, i.MX RT) | push: the port reports its own edges, idle fast-forward stays on | exercised end to end on STM32 `v2` (G0B1, F401) and `f1` (F103). The EXTI raises edge interrupts for net edges on G0 and U5 (port from `EXTI_EXTICRx`), F1 (port from `AFIO_EXTICRx`), F4 and L0 (port from `SYSCFG_EXTICRx`). Internal pulls on the net, and read by an input nothing outside drives: STM32 `v2` `PUPDR`, STM32 `f1` input-with-pull (`CNF = 10`, `ODR` picks the rail), nRF52 `PIN_CNF.PULL`, EFR32 `INPUTPULL`, SAM `PINCFG.PULLEN`, and, from the block that keeps them outside the GPIO port (the port's `pad_control:` in the chip yaml), Kinetis `PORTx_PCRn.PE/PS`, RA `PmnPFS.PCR` and i.MX RT IOMUXC `SW_PAD_CTL` `PKE/PUE/PUS`. |
 | `GpioPort` pads routed to a peripheral (AF) | as above | the peripheral says what its output stage does (driving, released, input) and reads the level the net delivers; see [Buses over nets](#buses-over-nets). STM32 SPI, modern I²C and legacy (F1/F2/F4) I²C; the RP2040 SIO does the same for SPI and I²C pads (`FUNCSEL`); the nRF52 `PSEL` pin selects (SPIM/SPIS/TWIM/TWIS) likewise. |
 | `avr_gpio` (ATmega328P `portb`/`portc`/`portd`) | push: the port reports its own edges, idle fast-forward stays on | INT0/INT1 and PCINT0..2 see external edges; a core parked in `SLEEP` is skipped until the next edge or Timer0 overflow. Exercised end to end on the Uno (`gpio-net-two-boards`). An input with its `PORTx` bit set is a pull-up on the net, unless firmware sets `MCUCR.PUD`, which takes every pull-up off. |
-| ESP32 classic `gpio` (member `peripheral: gpio`, pins 0..31) | push | Drive: `GPIO_ENABLE` and `GPIO_OUT`; `GPIO_PINn.PAD_DRIVER` open drain drives only a 0 and, holding a 1, reads the wire on `GPIO_IN`. Interrupts: `GPIO_PINn.INT_TYPE` edge and level types latch `GPIO_STATUS` and raise matrix source 22 for the CPU whose INT_ENA bit is set. GPIO32..39 cannot join a net. The IO_MUX pulls are not modelled on this part. |
-| ESP32-S3 `gpio` (`peripheral: gpio`, pins 0..31) | push | As classic; matrix source 16 (`GPIO_PCPU_INT`, INT_ENA bit 13). The IO_MUX `FUN_WPU` pull-up is on the net. GPIO32..48 cannot join a net. |
+| ESP32 classic `gpio` (member `peripheral: gpio`, pins 0..31) | push | Drive: `GPIO_ENABLE` and `GPIO_OUT`; `GPIO_PINn.PAD_DRIVER` open drain drives only a 0 and, holding a 1, reads the wire on `GPIO_IN`. Interrupts: `GPIO_PINn.INT_TYPE` edge and level types latch `GPIO_STATUS` and raise matrix source 22 for the CPU whose INT_ENA bit is set. GPIO32..39 cannot join a net. The IO_MUX pulls are not modelled on this part. Pads the GPIO matrix routes to VSPI, HSPI or I2C0 (`GPIO_FUNCn_OUT_SEL_CFG` out, `GPIO_FUNCn_IN_SEL_CFG` in) carry those peripherals' lines; see [Buses over nets](#buses-over-nets). |
+| ESP32-S3 `gpio` (`peripheral: gpio`, pins 0..31) | push | As classic; matrix source 16 (`GPIO_PCPU_INT`, INT_ENA bit 13). The IO_MUX `FUN_WPU` pull-up is on the net. GPIO32..48 cannot join a net. Pads the GPIO matrix routes to GP-SPI2 or I2C0 carry those peripherals' lines. |
 | ESP32-C3 / ESP32-C6 `gpio` (`peripheral: gpio`, pins 0..25) | push | As classic; matrix source 16 on the C3 and 30 on the C6. The IO_MUX `FUN_WPU` pull-up is on the net where the IO_MUX is wired. Edge types only (level types are not modelled on this block). Exercised end to end on the C6 (`env-esp32c6.yaml`). Pads the GPIO matrix routes to GP-SPI2 or I2C0 (`FUNCn_OUT_SEL_CFG` out, `FUNCn_IN_SEL_CFG` in, each chip's own signal numbers) carry those peripherals' lines; see [Buses over nets](#buses-over-nets). |
 | Declarative `GPIO` descriptor (`ENABLE` / `OUT` / `IN` registers) | poll | Drive from `ENABLE` and `OUT`; no pulls. |
 | RP2040 `sio` (`peripheral: sio`, pins 0..29 = GP0..GP29) | push | Drive: `GPIO_OE` and `GPIO_OUT` while IO_BANK0 selects SIO for the pad (or nothing yet); open drain is firmware toggling `GPIO_OE` with the latch at 0. Interrupts: IO_BANK0 `INTRn` / `PROC0_INTEn` edge and level bits raise `IO_IRQ_BANK0` (NVIC 13) from any change of `GPIO_IN`, the pad's own output included. Exercised end to end (`env-rp2040.yaml`). |
@@ -293,7 +293,8 @@ analyzer on either board and the timing all show the real waveform, and the
 bus behaves like wires. Runnable examples:
 [`examples/gpio-net-buses`](../../examples/gpio-net-buses) (STM32G071 pairs,
 STM32F401 pairs (one on the hardware NSS pads), STM32F103 / STM32F401 / STM32G071 mixed I²C, and an
-RP2040, an nRF52840, an ESP32-C3 and an ESP32-C6 against a G071 on SPI and on I²C).
+RP2040, an nRF52840, an ESP32-C3, an ESP32-C6, an ESP32-S3 and a classic ESP32
+against a G071 on SPI and on I²C).
 
 One net per wire, as for any other signal:
 
@@ -319,6 +320,10 @@ One net per wire, as for any other signal:
 | nRF52 I²C | TWIM / TWIS, EasyDMA | any pad, by `PSEL.SCL`/`SDA` | controller (`ENABLE = 6`), target (`ENABLE = 9`) |
 | ESP32-C3 / ESP32-C6 GP-SPI2 | Espressif GP-SPI (`SPI_CMD`/`SPI_USER`/`SPI_MS_DLEN`/`W0..W15`/`SPI_SLAVE`) | GPIO matrix: `FSPICLK`, `FSPID`, `FSPIQ`, `FSPICS0` (63/65/64/68 on both), any pad | master, slave |
 | ESP32-C3 / ESP32-C6 I²C0 | Espressif command list (`CTR`/`COMD0..7`/`DATA` FIFOs/`SLAVE_ADDR`) | GPIO matrix: `I2CEXT0_SCL`/`SDA` (53/54 on the C3, 45/46 on the C6), any pad, out and back in | master, slave |
+| ESP32-S3 GP-SPI2 | Espressif GP-SPI, as the C3 | GPIO matrix: `FSPICLK`, `FSPID`, `FSPIQ`, `FSPICS0` (101/103/102/110), pads 0..31 | master, slave |
+| ESP32-S3 I²C0 | Espressif command list, as the C3 | GPIO matrix: `I2CEXT0_SCL`/`SDA` (89/90), pads 0..31, out and back in | master, slave |
+| ESP32 (classic) VSPI / HSPI | classic SPI (`SPI_CMD.USR` bit 18, `SPI_USER`, `SPI_MOSI_DLEN`/`MISO_DLEN`, `SPI_PIN`, `SPI_SLAVE`, `W0..W15` at 0x80) | GPIO matrix: VSPI `VSPICLK`/`VSPID`/`VSPIQ`/`VSPICS0` (63/65/64/68, `spi3`), HSPI `HSPICLK`/`HSPID`/`HSPIQ`/`HSPICS0` (8/10/9/11, `spi2`), pads 0..31 | master, slave |
+| ESP32 (classic) I²C0 | Espressif command list, classic opcodes (`COMD0..15`) | GPIO matrix: `I2CEXT0_SCL`/`SDA` (29/30), pads 0..31, out and back in | master, slave (no stretching) |
 
 **SPI** (STM32 classic/FIFO SPI): SCK, MOSI, MISO and NSS are push-pull
 nets. A master (`MSTR=1`, `SPE=1`) drives SCK and MOSI and samples the level
@@ -521,6 +526,33 @@ SCL, and with esp-hal 1.1's blocking master driver on the C3. Not on a net:
 10-bit addressing, the general call, `SLAVE_BYTE_ACK_CTL`, the FIFO-address
 and non-FIFO modes, filters and timeouts.
 
+**ESP32-S3 and classic ESP32.** The S3 GP-SPI2 and I2C0 are the C3's
+register files and run the same two engines, with the S3's matrix numbers
+(`FUNCn_IN_SEL_CFG`: pad [5:0], `SEL` bit 7) and its I²C timing
+(`CLK_CONF` source clock, 240 MHz core). The classic part's SPI is the older
+IP: the same fields at other offsets and bits (`SPI_CMD.USR` 18, `SPI_USER`
+`CS_HOLD` 4 / `CS_SETUP` 5 / `CK_OUT_EDGE` 7, `SPI_CTRL2` setup and hold
+times, `SPI_MOSI_DLEN` / `SPI_MISO_DLEN`, `SPI_PIN` `CK_IDLE_EDGE` /
+`CS0_DIS` / `CS_KEEP_ACTIVE`, `W0` at 0x80); it answers the GP-SPI engine
+through a translated register view. A classic slave is `SPI_SLAVE.SLAVE_MODE`
+(bit 30) with CPHA from `SPI_USER.CK_I_EDGE` as esp-idf's
+`spi_ll_slave_set_mode` sets it (mode 0: `CK_I_EDGE` = 1); its bit count
+lands in `SPI_SLV_RD_BIT`, and master and slave both report done in
+`SPI_SLAVE.TRANS_DONE` (bit 4). VSPI (`spi3`, 0x3FF6_5000) and HSPI
+(`spi2`, 0x3FF6_4000, now on the bus) each have their own matrix signals.
+The classic I2C0 runs the command-list engine with the classic opcodes
+(RSTART 0, WRITE 1, READ 2, STOP 3, END 4) and `SCL_LOW/HIGH_PERIOD` and
+`SDA_HOLD` in APB cycles; it has no `SCL_STRETCH_CONF`, so a classic target
+whose TX FIFO is empty sends 0xFF instead of stretching: firmware keeps the
+TX FIFO loaded ahead of a read, as the example does. A TX byte written
+through the classic AHB FIFO alias (0x6001_301C) reaches a master `WRITE`
+waiting for it only with the next APB register write. Tested against an
+STM32G071 both ways round on each part (`env-spi-esp32s3*.yaml`,
+`env-spi-esp32*.yaml`, `env-i2c-esp32s3*.yaml`, `env-i2c-esp32*.yaml`;
+hand-written Xtensa assembly, see the example's `build.sh`), including an
+address NACK, a slow G071 target holding either controller, and a slow S3
+target stretching the G071's clock.
+
 The ESP matrix routes follow firmware: a line becomes a net line the first
 time firmware routes it (in or out) to a pad on a net. IO_MUX direct
 functions (`MCU_SEL` other than GPIO) and `IN_INV_SEL`/`INV_SEL` are not
@@ -531,7 +563,8 @@ Clock stretching is tested on every target: an STM32G071 (modern), an
 STM32F401 (legacy), an RP2040 and an ESP32-C3 slave whose firmware answers
 several SCL low periods late each hold the controller, and the bytes and
 clock count come out the same; a slow G071 target holds an ESP32-C3
-controller (register level and esp-hal) the same way. A target that ends a stretch with a new bit on SDA releases
+controller (register level and esp-hal), an ESP32-S3 and a classic ESP32
+controller the same way, and a slow ESP32-S3 target holds the G071. A target that ends a stretch with a new bit on SDA releases
 SCL a data setup time later (`SDADEL`-style, one quarter of its own SCL low
 period on the legacy and RP2040 engines, 250 ns on the nRF52 TWIS), so the
 change is never read as START or STOP.
@@ -562,8 +595,8 @@ The results do not depend on node order or on the world's round size; each
 example's tests run every exchange three ways (as written, nodes swapped,
 37 ns rounds) and compare what every pad saw, cycle by cycle.
 
-Not modelled on a net yet: other SPI/I²C families (ESP32-S3 and classic ESP32
-SPI/I²C, the H5 SPI v3), the hardware NSS pad of the L4/G4/WB SPI, legacy-I²C
+Not modelled on a net yet: other SPI/I²C families (the S3's SPI3 and I2C1,
+the classic I2C1, the H5 SPI v3), ESP pads 32 and up, the hardware NSS pad of the L4/G4/WB SPI, legacy-I²C
 10-bit addressing, SMBus/PEC, modern-I²C slave byte control (`SBC`), the I²C
 filters and timeouts, SPI CRC, TI mode, the SPI mode fault (`MODF`) and DMA on
 either side (`LDMA_TX`/`LDMA_RX` are stored, no STM32 SPI DMA request is

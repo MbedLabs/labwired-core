@@ -187,72 +187,73 @@ impl SystemBus {
         }
     }
 
-    /// Bind the classic-ESP32 **VSPI** master's SCK/MOSI/CS wire to the pads its
-    /// output matrix can route them to, so a probe on GPIO18 shows the shifted
-    /// bytes rather than the GPIO output latch.
+    /// Bind the classic-ESP32 **VSPI** (`spi3`) and **HSPI** (`spi2`) wires to
+    /// the pads their output matrix can route them to, so a probe on GPIO18
+    /// shows the shifted bytes rather than the GPIO output latch, and a pad on
+    /// a world `gpio_net` carries the controller's lines both ways.
     ///
-    /// # Why VSPI, and only VSPI
+    /// # Why VSPI and HSPI, and not SPI0/SPI1
     ///
     /// Classic ESP32 has FOUR SPI controllers and three matrix signal groups
     /// (ESP32 datasheet v5.3 §4.8.2 p36 and Appendix A p61): SPI0/SPI1 drive the
     /// `SPI*` group and are the flash path, SPI2 drives `HSPI*`, SPI3 drives
     /// `VSPI*`. Arduino's `SPI` object is VSPI on this part
-    /// (`libraries/SPI/src/SPI.cpp` :348 `SPIClass SPI(VSPI);`), which is what
-    /// every classic lab in this repo actually drives, and `spi3`
-    /// (`0x3FF6_5000`) is the instance this engine registers for it.
+    /// (`libraries/SPI/src/SPI.cpp` :348 `SPIClass SPI(VSPI);`), and `spi3`
+    /// (`0x3FF6_5000`) is the instance this engine registers for it; `spi2`
+    /// (`0x3FF6_4000`) is HSPI. SPI0/1 carry flash traffic on the bonded flash
+    /// pins, which no board routes to a probe, and stay on the latch fallback.
     ///
-    /// The other instances are left on the latch fallback deliberately. SPI0/1
-    /// carry flash traffic on the bonded flash pins, which no board routes to a
-    /// probe, and binding them here would need the `SPI*` group's indices
-    /// (`SPICLK_OUT_IDX` = 0, …), not VSPI's — the same wire on three different
-    /// index sets. SPI2/HSPI is not registered on this bus at all. Both join
-    /// when something drives them, not before.
+    /// Resolution is by NAME, and only by name. Several `Esp32Spi` instances
+    /// sit on a classic bus and they are indistinguishable by type, so "the
+    /// first one found" would bind VSPI's signals onto whichever flash
+    /// controller happened to be registered first. Both production builders
+    /// spell the instances `spi2`/`spi3` (`ESP32_PERIPHERALS`); anything else is
+    /// a no-op, deliberately.
     ///
-    /// Resolution is by NAME, and only by name. Three `Esp32Spi` instances sit
-    /// on a classic bus and they are indistinguishable by type, so "the first
-    /// one found" would bind VSPI's signals onto whichever flash controller
-    /// happened to be registered first — a wire published under a signal that
-    /// controller never drives. Both production builders spell the VSPI
-    /// instance `spi3` (`ESP32_PERIPHERALS` and `configs/chips/esp32.yaml`);
-    /// anything else is a no-op, deliberately.
-    ///
-    /// MISO (`VSPIQ`) is unbound; see [`crate::peripherals::esp_gpspi_wire`].
+    /// Each cell carries MISO as well (`VSPIQ` / `HSPIQ`, an input line until a
+    /// slave on a net drives it); see [`crate::peripherals::esp_gpspi_net`].
     pub(crate) fn wire_esp32_spi_pads(&mut self) {
-        use crate::peripherals::esp32::gpio::Esp32Gpio;
+        use crate::peripherals::esp32::gpio::{Esp32Gpio, HSPI_SIGNALS, VSPI_SIGNALS};
         use crate::peripherals::esp32::spi::Esp32Spi;
 
         let gpio_idx = self
             .peripherals
             .iter()
             .position(|p| p.dev.as_any().map(|a| a.is::<Esp32Gpio>()).unwrap_or(false));
-        let spi_idx = self.find_peripheral_index_by_name("spi3").filter(|&i| {
-            self.peripherals[i]
+        let Some(gpio_idx) = gpio_idx else {
+            return;
+        };
+        // VSPI is `spi3`; HSPI is `spi2` where the bus carries it.
+        for (name, signals) in [("spi3", VSPI_SIGNALS), ("spi2", HSPI_SIGNALS)] {
+            let spi_idx = self.find_peripheral_index_by_name(name).filter(|&i| {
+                self.peripherals[i]
+                    .dev
+                    .as_any()
+                    .map(|a| a.is::<Esp32Spi>())
+                    .unwrap_or(false)
+            });
+            // ⚠️ Resolve BOTH before touching either: `pad_lines_arc` CREATES
+            // the wire cell, and a controller that owns a cell no route
+            // reaches still buffers every launched transaction, arms a wakeup
+            // per burst, and narrates into a wire nothing reads.
+            let Some(spi_idx) = spi_idx else {
+                continue;
+            };
+            let Some(lines) = self.peripherals[spi_idx]
                 .dev
-                .as_any()
-                .map(|a| a.is::<Esp32Spi>())
-                .unwrap_or(false)
-        });
-        // ⚠️ Resolve BOTH before touching either: `pad_lines_arc` CREATES the
-        // wire cell, and a controller that owns a cell no route reaches still
-        // buffers every launched transaction, arms a wakeup per burst, and
-        // narrates into a wire nothing reads.
-        let (Some(spi_idx), Some(gpio_idx)) = (spi_idx, gpio_idx) else {
-            return;
-        };
-        let Some(lines) = self.peripherals[spi_idx]
-            .dev
-            .as_any_mut()
-            .and_then(|a| a.downcast_mut::<Esp32Spi>())
-            .map(Esp32Spi::pad_lines_arc)
-        else {
-            return;
-        };
-        if let Some(gpio) = self.peripherals[gpio_idx]
-            .dev
-            .as_any_mut()
-            .and_then(|a| a.downcast_mut::<Esp32Gpio>())
-        {
-            gpio.bind_spi_lines(&lines);
+                .as_any_mut()
+                .and_then(|a| a.downcast_mut::<Esp32Spi>())
+                .map(Esp32Spi::pad_lines_arc)
+            else {
+                continue;
+            };
+            if let Some(gpio) = self.peripherals[gpio_idx]
+                .dev
+                .as_any_mut()
+                .and_then(|a| a.downcast_mut::<Esp32Gpio>())
+            {
+                gpio.bind_spi_lines(&lines, signals);
+            }
         }
     }
 
@@ -669,12 +670,20 @@ impl SystemBus {
         use crate::peripherals::esp32s3::gpio::Esp32s3Gpio;
         use crate::peripherals::esp32s3::i2c::Esp32s3I2c;
 
-        let i2c_idx = self.peripherals.iter().position(|p| {
+        let is_i2c = |p: &crate::bus::PeripheralEntry| {
             p.dev
                 .as_any()
                 .map(|a| a.is::<Esp32s3I2c>())
                 .unwrap_or(false)
-        });
+        };
+        // I2C0 by name: the S3 bus carries I2C1 (signals 91/92, not bound
+        // here) as the same model, registered BEFORE i2c0 by the programmatic
+        // builder, so "the first one found" bound I2C1's wire to I2C0's
+        // signals. A hand-built bus with one unnamed controller still wires.
+        let i2c_idx = self
+            .find_peripheral_index_by_name("i2c0")
+            .filter(|&i| is_i2c(&self.peripherals[i]))
+            .or_else(|| self.peripherals.iter().position(is_i2c));
         let gpio_idx = self.peripherals.iter().position(|p| {
             p.dev
                 .as_any()

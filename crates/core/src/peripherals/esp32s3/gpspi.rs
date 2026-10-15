@@ -221,7 +221,16 @@ pub struct Esp32s3Spi {
     /// this same IP.
     wire: EspSpiWire,
     external_can_poll_scheduled: bool,
+    /// The bit-level engine that runs instead of the transaction path while a
+    /// line is on a world `gpio_net` ([`crate::peripherals::esp_gpspi_net`]).
+    net: crate::peripherals::esp_gpspi_net::GpSpiNet,
+    /// Interrupt level last reported through a scheduler event in net mode.
+    net_irq: crate::peripherals::esp_gpio_net::IrqLevelWatch,
 }
+
+/// Scheduler token whose firing makes the interrupt matrix re-derive this
+/// controller's level after a net edge latched an interrupt bit.
+const NET_IRQ_TOKEN: u32 = u32::MAX - 1;
 
 impl std::fmt::Debug for Esp32s3Spi {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -260,6 +269,8 @@ impl Esp32s3Spi {
             clock: None,
             wire: EspSpiWire::default(),
             external_can_poll_scheduled: false,
+            net: Default::default(),
+            net_irq: Default::default(),
         }
     }
 
@@ -274,7 +285,51 @@ impl Esp32s3Spi {
         &mut self,
     ) -> std::sync::Arc<crate::peripherals::pad_lines::PadLines> {
         let cpol = crate::peripherals::esp_gpspi_wire::framing(self.reg(MISC), self.reg(USER)).cpol;
-        self.wire.pad_lines_arc(cpol)
+        // With a MISO line: this controller can be a master or a slave on a
+        // world `gpio_net` (`esp_gpspi_net`).
+        self.wire.pad_lines_arc_with_miso(cpol)
+    }
+
+    /// `true` while the GPIO matrix routes one of this controller's lines to
+    /// a pad on a world `gpio_net`: the bit engine owns the wire.
+    fn net_mode(&self) -> bool {
+        self.wire
+            .wire_lines()
+            .is_some_and(crate::peripherals::pad_lines::PadLines::any_on_net)
+    }
+
+    fn net_now(&self) -> u64 {
+        self.clock.as_ref().map_or(0, CycleClock::now)
+    }
+
+    /// Run `f` with the net engine, this model as its register host, and the
+    /// wire, stamping the wire's reports with `now`.
+    fn with_net<R>(
+        &mut self,
+        now: u64,
+        f: impl FnOnce(
+            &mut crate::peripherals::esp_gpspi_net::GpSpiNet,
+            &mut Self,
+            &crate::peripherals::pad_lines::PadLines,
+        ) -> R,
+    ) -> Option<R> {
+        let pads = self.wire.lines_arc()?;
+        let mut net = std::mem::take(&mut self.net);
+        pads.set_stamp(Some(now));
+        let r = f(&mut net, self, &pads);
+        pads.set_stamp(None);
+        self.net = net;
+        Some(r)
+    }
+
+    /// Master transactions this controller has completed on a net.
+    pub fn net_master_transactions(&self) -> u64 {
+        self.net.master_transactions()
+    }
+
+    /// Slave transactions this controller has completed on a net.
+    pub fn net_slave_transactions(&self) -> u64 {
+        self.net.slave_transactions()
     }
 
     /// Engine cycles per SCK period, from this controller's own `SPI_CLOCK`.
@@ -498,6 +553,24 @@ impl Esp32s3Spi {
     }
 }
 
+impl crate::peripherals::esp_gpspi_net::GpSpiHost for Esp32s3Spi {
+    fn reg(&self, off: u64) -> u32 {
+        Esp32s3Spi::reg(self, off)
+    }
+
+    fn set_reg(&mut self, off: u64, value: u32) {
+        self.set_reg_raw(off, value);
+    }
+
+    fn raise(&mut self, bits: u32) {
+        self.int_raw |= bits & INT_MASK;
+    }
+
+    fn bit_time(&self) -> Option<u64> {
+        self.bit_time_cycles()
+    }
+}
+
 impl Peripheral for Esp32s3Spi {
     fn spi_attached_devices(&self) -> Option<&Vec<Box<dyn crate::peripherals::device::SpiDevice>>> {
         Some(&self.attached_devices)
@@ -535,7 +608,19 @@ impl Peripheral for Esp32s3Spi {
     }
 
     fn line_names(&self) -> &'static [&'static str] {
-        crate::peripherals::esp_gpspi_wire::SPI_LINES
+        crate::peripherals::esp_gpspi_wire::SPI_NET_LINES
+    }
+
+    fn wire_input_edge(&mut self, line: usize, level: bool, cycle: u64) -> bool {
+        if !self.net_mode() {
+            return false;
+        }
+        let changed = self
+            .with_net(cycle, |net, host, pads| {
+                net.on_edge(host, line, level, pads)
+            })
+            .unwrap_or(false);
+        changed || self.net.deadline().is_some()
     }
 
     fn wire_lines(&self) -> Option<&crate::peripherals::pad_lines::PadLines> {
@@ -593,7 +678,15 @@ impl Peripheral for Esp32s3Spi {
                 let cmd = self.reg(CMD) & !UPDATE_BIT;
                 self.set_reg_raw(CMD, cmd);
                 if value & USR_BIT != 0 {
-                    self.launch_transaction();
+                    if self.net_mode() {
+                        // On a net the bit engine runs the transaction on the
+                        // wire (a master), or the slave waits for the
+                        // master's clock with USR set.
+                        let now = self.net_now();
+                        self.with_net(now, |net, host, pads| net.launch(host, now, pads));
+                    } else {
+                        self.launch_transaction();
+                    }
                 }
             }
             DMA_CONF => {
@@ -623,6 +716,10 @@ impl Peripheral for Esp32s3Spi {
             // holes ignore writes entirely.
             o => self.set_reg_masked(o, value),
         }
+        if self.net_mode() {
+            let now = self.net_now();
+            self.with_net(now, |net, host, pads| net.apply_drive(host, pads));
+        }
         Ok(())
     }
 
@@ -632,6 +729,10 @@ impl Peripheral for Esp32s3Spi {
         // the feature this is where a held burst reaches the pads. Inert — one
         // `is_empty` — on every bus that never routed an SPI pad.
         self.wire_flush(false);
+        if self.net.deadline().is_some_and(|d| d <= self.net_now()) {
+            let now = self.net_now();
+            self.with_net(now, |net, host, pads| net.step(host, now, pads));
+        }
         for device in &mut self.attached_devices {
             device.poll_external_bus();
         }
@@ -673,6 +774,17 @@ impl Peripheral for Esp32s3Spi {
             return Vec::new();
         }
         let mut events = Vec::new();
+        if self.net_mode() {
+            let now = self.net_now();
+            if let Some(ev) = self.net.take_event(now) {
+                events.push(ev);
+            }
+            // An interrupt bit latched by a net edge: one event per change of
+            // the level, so the interrupt matrix re-derives its sources.
+            if self.net_irq.take(self.int_st() != 0).is_some() {
+                events.push((0, NET_IRQ_TOKEN));
+            }
+        }
         if self.wire.is_pending() && !self.wire.scheduled {
             let now = self.clock.as_ref().map_or(0, |c| c.now());
             self.wire.arm_seq = self.wire.arm_seq.wrapping_add(1);
@@ -700,6 +812,19 @@ impl Peripheral for Esp32s3Spi {
         _bus: &mut dyn crate::Bus,
     ) -> crate::sched::EventResult {
         const EXTERNAL_CAN_POLL_EVENT: u32 = u32::MAX;
+        if event_token == crate::peripherals::esp_gpspi_net::NET_TOKEN {
+            let now = _sched.now();
+            let next = self
+                .with_net(now, |net, host, pads| net.on_event(host, now, pads))
+                .flatten();
+            return crate::sched::EventResult {
+                reschedule_delay: next,
+                ..Default::default()
+            };
+        }
+        if event_token == NET_IRQ_TOKEN {
+            return crate::sched::EventResult::default();
+        }
         if event_token == EXTERNAL_CAN_POLL_EVENT {
             for device in &mut self.attached_devices {
                 device.poll_external_bus();

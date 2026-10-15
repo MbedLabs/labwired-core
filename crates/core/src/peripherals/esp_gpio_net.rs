@@ -95,6 +95,8 @@ impl IrqLevelWatch {
 /// |---|---|---|---|
 /// | ESP32-C3 | [4:0] | bit 6 | esp32c3 PAC `gpio::func_in_sel_cfg` |
 /// | ESP32-C6 | [5:0] | bit 7 | esp32c6 PAC `gpio::func_in_sel_cfg` |
+/// | ESP32-S3 | [5:0] | bit 7 | esp32s3 PAC `gpio::func_in_sel_cfg` |
+/// | ESP32 (classic) | [5:0] | bit 7 (`SIG_IN_SEL`) | esp-idf `soc/esp32/include/soc/gpio_reg.h` |
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct InSelLayout {
     pub(crate) pad_mask: u32,
