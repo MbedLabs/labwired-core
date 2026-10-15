@@ -144,9 +144,10 @@ pub enum SpiSignal {
     Sck,
     Mosi,
     Miso,
-    /// Hardware slave select. Only a part whose AF table routes it (the G0
-    /// and F4 tables) puts it on a pad, and only a controller on a world `gpio_net` drives
-    /// or reads it (see `spi_net`).
+    /// Hardware slave select. Only a part whose AF table routes it (the G0,
+    /// F4, L4, G4, WB and L0 tables) puts it on a pad, and only a controller
+    /// on a world `gpio_net` drives or reads it (see `spi_net`). On the nRF52
+    /// SPIM3 this line is the hardware `CSN` (see `spi_nrf_net`).
     Nss,
 }
 
@@ -170,12 +171,30 @@ pub struct SpiLineLevels {
 /// pinned by `spi_line_order_matches_signal_discriminants`.
 const SPI_LINES: &[&str] = &["SCK", "MOSI", "MISO", "NSS"];
 
+/// Line order of an nRF52 SPIM's wire: [`SPI_LINES`] with the select spelled
+/// `CSN`, as Nordic does, plus SPIM3's data/command line. Only SPIM3 drives
+/// the last two, and only on a world `gpio_net` (`spi_nrf_net`).
+const NRF_SPIM_LINES: &[&str] = &["SCK", "MOSI", "MISO", "CSN", "DCX"];
+
+/// [`NRF_SPIM_LINES`] index of the SPIM3 D/CX line.
+pub(crate) const NRF_SPIM_LINE_DCX: usize = 4;
+
 impl SpiLineLevels {
     fn new(sck_idle: bool) -> Self {
         Self {
             // MOSI/MISO idle low; SCK idles at CPOL.
             // NSS idles high (deselected).
             lines: std::sync::Arc::new(PadLines::new(SPI_LINES, &[sck_idle, false, false, true])),
+        }
+    }
+
+    /// An nRF52 SPIM's wire ([`NRF_SPIM_LINES`]): CSN and DCX idle high.
+    fn new_nrf(sck_idle: bool) -> Self {
+        Self {
+            lines: std::sync::Arc::new(PadLines::new(
+                NRF_SPIM_LINES,
+                &[sck_idle, false, false, true, true],
+            )),
         }
     }
 
@@ -205,8 +224,15 @@ impl SpiLineLevels {
     }
 
     fn set(&self, sck: bool, mosi: bool, miso: bool) {
-        let nss = self.lines.level(SpiSignal::Nss as usize);
-        self.lines.set(&[sck, mosi, miso, nss]);
+        // Every line but the three data/clock ones keeps its level (NSS on
+        // an STM32; CSN and DCX on an nRF SPIM). No allocation: this runs
+        // per half bit on the STM32 bit engine.
+        let n = self.lines.names().len();
+        let mut levels = [sck, mosi, miso, false, false];
+        for (line, level) in levels.iter_mut().enumerate().take(n).skip(3) {
+            *level = self.lines.level(line);
+        }
+        self.lines.set(&levels[..n]);
     }
 }
 
@@ -787,19 +813,25 @@ struct Nrf52SpiRegs {
     /// PRESCALER.DIVISOR (0x52C, reset 0x40). A real core-clock divisor, not
     /// the nRF52 FREQUENCY enumeration.
     prescaler: u32,
-    /// PSEL.DCX (0x60C) — the data/command line the SPIM drives ITSELF. A
-    /// disconnected select (bit 31 set) leaves D/C to a plain GPIO, which is
-    /// how the nRF52-era boards wire a display.
+    /// PSEL.DCX (nRF54L 0x60C, nRF52 `PSELDCX` 0x56C) — the data/command
+    /// line the SPIM drives ITSELF. A disconnected select (bit 31 set) leaves
+    /// D/C to a plain GPIO, which is how the nRF52-era boards wire a display.
     psel_dcx: u32,
-    /// DCXCNT (0x5B4) — "the number of command bytes preceding the data
-    /// bytes. The PSEL.DCX line will be low during transmission of command
-    /// bytes" (SVD GLOBAL_SPIM00.DCXCNT). 0 means the whole transfer is data.
+    /// DCXCNT (nRF54L 0x5B4, nRF52 0x570) — "the number of command bytes
+    /// preceding the data bytes. The PSEL.DCX line will be low during
+    /// transmission of command bytes" (SVD GLOBAL_SPIM00.DCXCNT). 0 means the
+    /// whole transfer is data; on the nRF52 SPIM3 0xF means all of it is
+    /// command.
     dcxcnt: u32,
-    /// CSNPOL (0x5B8) — polarity of the hardware CSN output.
+    /// CSNPOL (nRF54L 0x5B8, nRF52 0x568) — polarity of the hardware CSN
+    /// output: 0 active low, 1 active high.
     csnpol: u32,
-    /// IFTIMING.CSNDUR (0x5B0) — CSN hold duration, stored for readback.
+    /// IFTIMING.CSNDUR (nRF54L 0x5B0, nRF52 0x564, reset 2) — CSN to SCK and
+    /// CSN-high time in 64 MHz cycles. Timed on a world `gpio_net` by the
+    /// nRF52 SPIM3 net engine (`spi_nrf_net`), stored for readback otherwise.
     csndur: u32,
-    /// IFTIMING.RXDELAY (0x5AC) — stored for readback.
+    /// IFTIMING.RXDELAY (nRF54L 0x5AC, nRF52 0x560, reset 2) — stored for
+    /// readback.
     rxdelay: u32,
 }
 
@@ -857,6 +889,23 @@ const NRF54L_INTEN_DMA_RX_END: u32 = 1 << 19;
 const NRF54L_INTEN_DMA_TX_END: u32 = 1 << 26;
 
 impl Nrf52SpiRegs {
+    /// A reset-state register file on the nRF52 offset map.
+    ///
+    /// The SPIM3-era registers take their SVD reset values
+    /// (`configs/peripherals/nrf52840/spim3.yaml`): `PSEL.CSN` and
+    /// `PSELDCX` DISCONNECTED, `IFTIMING.RXDELAY` and `IFTIMING.CSNDUR` 2. A
+    /// zero `PSEL.CSN` would name P0.00, which the SPIM3 net engine would
+    /// then drive as a chip select nobody asked for.
+    fn new_nrf52() -> Self {
+        Self {
+            psel_csn: 0xFFFF_FFFF,
+            psel_dcx: 0xFFFF_FFFF,
+            rxdelay: 2,
+            csndur: 2,
+            ..Self::default()
+        }
+    }
+
     /// A reset-state register file on the nRF54L offset map.
     ///
     /// Not `Default`: PRESCALER resets to 0x40 (SVD GLOBAL_SPIM00.PRESCALER)
@@ -913,6 +962,13 @@ impl Nrf52SpiRegs {
             0x51C => 0,               // legacy SPI TXD (write-only on silicon)
             0x524 => self.frequency,
             0x554 => self.config,
+            // SPIM3's hardware chip select and D/CX (PS v1.x §6.25.7; the
+            // SVD lists them on every SPIM instance).
+            0x560 => self.rxdelay & 0x7,
+            0x564 => self.csndur & 0xFF,
+            0x568 => self.csnpol & 0x1,
+            0x56C => self.psel_dcx,
+            0x570 => self.dcxcnt & 0xF,
             // EasyDMA descriptors
             0x534 => self.rxd_ptr,
             0x538 => self.rxd_maxcnt,
@@ -967,6 +1023,11 @@ impl Nrf52SpiRegs {
             0x514 => self.psel_csn = value,
             0x524 => self.frequency = value,
             0x554 => self.config = value,
+            0x560 => self.rxdelay = value & 0x7,
+            0x564 => self.csndur = value & 0xFF,
+            0x568 => self.csnpol = value & 0x1,
+            0x56C => self.psel_dcx = value,
+            0x570 => self.dcxcnt = value & 0xF,
 
             // EasyDMA descriptors (AMOUNT registers are HW-written; firmware
             // should not write them, but the model accepts writes so firmware
@@ -1207,6 +1268,19 @@ pub enum SpiPadMap {
     /// PB14 MISO / PB15 MOSI, NSS included: on a world `gpio_net` the
     /// hardware slave select is a real wire.
     Stm32G0,
+    /// STM32G4 map — STM32G47x (ST open pin data
+    /// `GPIO-STM32G47x_gpio_v1_0_Modes.xml`): SPI1/SPI2 on AF5, SPI3 on AF6,
+    /// NSS included. Not the L4 table: PE12-PE15/AF5 are SPI4 on a G4.
+    Stm32G4,
+    /// STM32WB map — STM32WB55 (ST open pin data
+    /// `GPIO-STM32WB55x_gpio_v1_0_Modes.xml`): SPI1/SPI2 on AF5 (PC1 and PD3
+    /// at AF3), NSS included.
+    Stm32Wb,
+    /// STM32L0 map — STM32L07x (ST open pin data
+    /// `GPIO-STM32L071_gpio_v1_0_Modes.xml`): SPI1 on AF0 (PE12-PE15 on
+    /// AF2), SPI2 on AF0/AF1/AF2/AF5 by pad, NSS included. A classic-layout
+    /// part, which without this falls through to the F4 AF5 table.
+    Stm32L0,
     /// The F4 AF5 table, declared explicitly. A classic-layout part gets it
     /// by default; a FIFO-layout part would otherwise get the L4 table, so an
     /// F7 (FIFO SPI, F4 pinout) names this one.
@@ -1223,9 +1297,12 @@ impl FromStr for SpiPadMap {
             "stm32u5" | "u5" => Ok(Self::Stm32U5),
             "stm32g0" | "g0" => Ok(Self::Stm32G0),
             "stm32f4" | "f4" => Ok(Self::Stm32F4),
+            "stm32g4" | "g4" => Ok(Self::Stm32G4),
+            "stm32wb" | "wb" => Ok(Self::Stm32Wb),
+            "stm32l0" | "l0" => Ok(Self::Stm32L0),
             "none" => Ok(Self::None),
             other => Err(anyhow::anyhow!(
-                "unsupported SPI pad_map '{other}'; supported: stm32h5, stm32wba, stm32u5, stm32g0, stm32f4, none"
+                "unsupported SPI pad_map '{other}'; supported: stm32h5, stm32wba, stm32u5, stm32g0, stm32f4, stm32g4, stm32wb, stm32l0, none"
             )),
         }
     }
@@ -1525,6 +1602,18 @@ pub struct Spi {
     /// (`spi_nrf_net`).
     #[serde(skip)]
     nrf52_claim_miso: crate::peripherals::nrf52::pin_select::NrfPinClaim,
+    /// nRF52 SPIM3 only: `PSEL.CSN`'s and `PSELDCX`'s claims, the hardware
+    /// chip select and data/command lines this SPIM drives itself on a world
+    /// `gpio_net` (`spi_nrf_net`). Installed by the wiring pass for the SPIM3
+    /// instance alone ([`Self::nrf52_hw_select`]); SPIM0-2 have no hardware
+    /// select, so their `PSEL.CSN` stays a stored register.
+    #[serde(skip)]
+    nrf52_claim_csn: crate::peripherals::nrf52::pin_select::NrfPinClaim,
+    #[serde(skip)]
+    nrf52_claim_dcx: crate::peripherals::nrf52::pin_select::NrfPinClaim,
+    /// This SPIM drives `CSN` and `DCX` (SPIM3, nRF52840 PS v1.x §6.25).
+    #[serde(skip)]
+    nrf52_hw_select: bool,
     /// The nRF52 SPIM's bit engine on a world `gpio_net` (`spi_nrf_net`).
     #[serde(skip)]
     nrf_net: nrf_net::SpimNet,
@@ -1700,7 +1789,7 @@ impl Spi {
                 ..Default::default()
             }),
             SpiRegisterLayout::Stm32H5 => SpiRegs::Stm32H5(Stm32H5SpiRegs::reset()),
-            SpiRegisterLayout::Nrf52Spim => SpiRegs::Nrf52(Nrf52SpiRegs::default()),
+            SpiRegisterLayout::Nrf52Spim => SpiRegs::Nrf52(Nrf52SpiRegs::new_nrf52()),
             SpiRegisterLayout::Nrf54lSpim => SpiRegs::Nrf52(Nrf52SpiRegs::new_nrf54l()),
             SpiRegisterLayout::KinetisDspi => SpiRegs::KinetisDspi(KinetisDspiRegs::default()),
             SpiRegisterLayout::Efr32s2Usart => SpiRegs::Efr32s2Usart(Efr32s2SpiRegs::default()),
@@ -1786,6 +1875,31 @@ impl Spi {
         self.sync_nrf_pin_claims();
     }
 
+    /// SPIM3: also claim the pads `PSEL.CSN` and `PSELDCX` name, which this
+    /// instance drives itself (see `spi_nrf_net`). Config-build time only,
+    /// after [`Self::install_nrf_pin_claims`].
+    pub(crate) fn install_nrf_hw_select_claims(
+        &mut self,
+        claims: &std::sync::Arc<crate::peripherals::nrf52::pin_select::NrfPinClaims>,
+        csn_token: u32,
+        dcx_token: u32,
+    ) {
+        if !self.is_nrf() {
+            return;
+        }
+        self.nrf52_hw_select = true;
+        self.nrf52_claim_csn.install(claims.clone(), csn_token);
+        self.nrf52_claim_dcx.install(claims.clone(), dcx_token);
+        // Driven by the net engine only, and only while their claim is live.
+        let lines = self.line_levels_arc();
+        for line in [SpiSignal::Nss as usize, NRF_SPIM_LINE_DCX] {
+            lines
+                .pad_lines()
+                .set_mode(line, crate::peripherals::pad_lines::LineDrive::Input);
+        }
+        self.sync_nrf_pin_claims();
+    }
+
     /// Republish both claims from the live registers, after any write that can
     /// move a pad — `PSEL.SCK`, `PSEL.MOSI` and `ENABLE`.
     ///
@@ -1802,6 +1916,14 @@ impl Spi {
         self.nrf52_claim_sck.update(psel_sck, live);
         self.nrf52_claim_mosi.update(psel_mosi, live);
         self.nrf52_claim_miso.update(psel_miso, live);
+        if self.nrf52_hw_select {
+            let (psel_csn, psel_dcx) = match &self.regs {
+                SpiRegs::Nrf52(r) => (r.psel_csn, r.psel_dcx),
+                _ => return,
+            };
+            self.nrf52_claim_csn.update(psel_csn, live);
+            self.nrf52_claim_dcx.update(psel_dcx, live);
+        }
     }
 
     /// One SCK period in engine cycles, from `FREQUENCY`.
@@ -2994,7 +3116,11 @@ impl Spi {
                 SpiRegs::Efr32s2Usart(r) => r.ctrl & EFR_USART_CTRL_CLKPOL != 0,
                 _ => false,
             };
-            let levels = SpiLineLevels::new(cpol);
+            let levels = if matches!(self.regs, SpiRegs::Nrf52(_)) {
+                SpiLineLevels::new_nrf(cpol)
+            } else {
+                SpiLineLevels::new(cpol)
+            };
             // On a world net the STM32 engine states its drive per line
             // (`spi_net`); until it has, it drives nothing.
             if matches!(self.regs, SpiRegs::Stm32(_)) {
@@ -3971,7 +4097,11 @@ impl crate::Peripheral for Spi {
     /// nRF52 SPIM EasyDMA needs bus access to read/write RAM buffers.
     fn needs_bus_tick(&self) -> bool {
         self.nrf52_pending_start
-            || self.nrf_net_needs_bus()
+            // The whole net transfer, not just its EasyDMA moments: the walk
+            // re-derives this set on MMIO writes, and a SPIM3 transfer can
+            // reach its `Finishing` step from a timed CSN hold with no write
+            // (or net edge) to refresh it.
+            || self.nrf_net_busy()
             || self.has_external_bus_device()
             || self.selected_devices.iter().any(|selected| *selected)
     }

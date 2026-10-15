@@ -23,11 +23,34 @@
 //! * `TASKS_STOP` ends the transfer after the byte on the wire:
 //!   `EVENTS_STOPPED`, with the amounts of what crossed.
 //!
-//! Chip select is the firmware's GPIO, as on SPIM0..2 (`PSEL.CSN`, the
-//! SPIM3-only hardware CSN, is stored and not driven). SCK and MOSI are
-//! driven push-pull while the SPIM is enabled; MISO is an input.
+//! SCK and MOSI are driven push-pull while the SPIM is enabled; MISO is an
+//! input. On SPIM0..2 chip select is the firmware's GPIO.
+//!
+//! SPIM3 (nRF52840 PS v1.x §6.25, registers in the SVD at 0x514/0x564-0x570)
+//! also drives its own select and data/command lines when the wiring pass
+//! gave it their claims ([`Spi::install_nrf_hw_select_claims`]):
+//!
+//! * `PSEL.CSN` connected: CSN is driven at its inactive level while the
+//!   SPIM is enabled (`CSNPOL` = 0: active low, idle high; 1: active high).
+//!   A transfer asserts it once the TX buffer is read, waits
+//!   `IFTIMING.CSNDUR` cycles of the 64 MHz clock, then clocks the first
+//!   byte (so the first SCK edge is `CSNDUR` + half an SCK period after the
+//!   CSN edge). After the last SCK edge it waits `CSNDUR` again, releases
+//!   CSN, and only then is the transfer over (`END`). The next assertion
+//!   waits until CSN has been inactive for `CSNDUR` ("minimum duration CSN
+//!   must stay high between transactions").
+//! * `PSELDCX` connected: D/CX idles high while enabled; it is low for the
+//!   first `DCXCNT` bytes of a transfer (all of them at 0xF) and high for the
+//!   rest. It falls with CSN (with the first byte without a CSN), rises at
+//!   the last SCK edge of the last command byte, and returns high when CSN
+//!   is released (at the end of the transfer without one).
+//!
+//! `IFTIMING.RXDELAY` is stored, not modelled: MISO is sampled at the SCK
+//! edge itself.
 
-use super::{Spi, SpiRegs, SpiSignal, INTEN_END, INTEN_ENDRX, INTEN_ENDTX, INTEN_STOPPED};
+use super::{
+    Spi, SpiRegs, SpiSignal, INTEN_END, INTEN_ENDRX, INTEN_ENDTX, INTEN_STOPPED, NRF_SPIM_LINE_DCX,
+};
 use crate::peripherals::pad_lines::{LineDrive, PadLines};
 use crate::peripherals::spi_bitbus::{SpiBitBus, SpiEvent, SpiLines, SpiShape};
 
@@ -42,6 +65,12 @@ const LINES: SpiLines = SpiLines {
     mosi: SpiSignal::Mosi as usize,
     miso: SpiSignal::Miso as usize,
 };
+/// SPIM3's hardware chip select line.
+const LINE_CSN: usize = SpiSignal::Nss as usize;
+/// SPIM3's data/command line.
+const LINE_DCX: usize = NRF_SPIM_LINE_DCX;
+/// `DCXCNT` value meaning "every byte is a command byte".
+const DCXCNT_ALL: u32 = 0xF;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 enum Phase {
@@ -49,8 +78,15 @@ enum Phase {
     Idle,
     /// `TASKS_START` was written: EasyDMA reads the TX buffer next.
     Starting,
+    /// SPIM3: waiting for CSN to have been inactive for `CSNDUR` before
+    /// asserting it again.
+    Selecting,
+    /// SPIM3: CSN asserted, `CSNDUR` to wait before the first byte.
+    Setup,
     /// Bytes are on the wire.
     Running,
+    /// SPIM3: the last byte is out, `CSNDUR` to wait before CSN is released.
+    Holding,
     /// The last byte is in: EasyDMA writes the RX buffer next.
     Finishing,
 }
@@ -66,6 +102,14 @@ pub(super) struct SpimNet {
     stop: bool,
     armed: Vec<u64>,
     irq_armed: bool,
+    /// SPIM3: the end of the current CSN timing wait (`Selecting`, `Setup`,
+    /// `Holding`).
+    wait: Option<u64>,
+    /// SPIM3: CSN may be asserted again from this cycle (`CSNDUR` after its
+    /// release).
+    csn_free_at: u64,
+    /// SPIM3: `DCXCNT` latched at the start of the transfer.
+    dcx_cmd: u32,
 }
 
 impl Spi {
@@ -79,7 +123,131 @@ impl Spi {
         matches!(&self.regs, SpiRegs::Nrf52(r) if r.map == super::NrfSpimMap::Nrf52)
             && (self.nrf52_claim_sck.on_net()
                 || self.nrf52_claim_mosi.on_net()
-                || self.nrf52_claim_miso.on_net())
+                || self.nrf52_claim_miso.on_net()
+                || self.nrf52_claim_csn.on_net()
+                || self.nrf52_claim_dcx.on_net())
+    }
+
+    /// SPIM3 with `PSEL.CSN` connected and the SPIM enabled: `Some(active
+    /// level)` (`CSNPOL`), else `None`.
+    fn nrf_net_csn(&self) -> Option<bool> {
+        match &self.regs {
+            SpiRegs::Nrf52(r)
+                if self.nrf52_hw_select
+                    && r.enable & 0xF == super::NRF52_ENABLE_SPIM
+                    && r.psel_csn & 0x8000_0000 == 0 =>
+            {
+                Some(r.csnpol & 1 != 0)
+            }
+            _ => None,
+        }
+    }
+
+    /// SPIM3 with `PSELDCX` connected and the SPIM enabled.
+    fn nrf_net_dcx(&self) -> bool {
+        matches!(&self.regs, SpiRegs::Nrf52(r)
+            if self.nrf52_hw_select
+                && r.enable & 0xF == super::NRF52_ENABLE_SPIM
+                && r.psel_dcx & 0x8000_0000 == 0)
+    }
+
+    /// `IFTIMING.CSNDUR` in engine cycles (the 64 MHz clock).
+    fn nrf_net_csndur(&self) -> u64 {
+        match &self.regs {
+            SpiRegs::Nrf52(r) => u64::from(r.csndur & 0xFF),
+            _ => 0,
+        }
+    }
+
+    /// The next timed step: a bit-engine edge or the end of a CSN wait.
+    fn nrf_net_deadline(&self) -> Option<u64> {
+        match (self.nrf_net.bus.deadline(), self.nrf_net.wait) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    /// D/CX for byte `index` of the transfer: low while it is a command byte.
+    fn nrf_net_drive_dcx(&self, index: usize, pads: &PadLines) {
+        if !self.nrf_net_dcx() {
+            return;
+        }
+        let cmd = self.nrf_net.dcx_cmd;
+        let command = cmd == DCXCNT_ALL || (index as u32) < cmd;
+        pads.drive_line(LINE_DCX, LineDrive::PushPull, !command);
+    }
+
+    /// Assert CSN (SPIM3) and set D/CX for the first byte at `now`, then
+    /// clock the first byte after `CSNDUR`, or now without a CSN.
+    fn nrf_net_select(&mut self, now: u64, pads: &PadLines) {
+        pads.set_stamp(Some(now));
+        let csn = self.nrf_net_csn();
+        if let Some(active) = csn {
+            pads.drive_line(LINE_CSN, LineDrive::PushPull, active);
+        }
+        self.nrf_net_drive_dcx(0, pads);
+        let dur = if csn.is_some() {
+            self.nrf_net_csndur()
+        } else {
+            0
+        };
+        if dur == 0 {
+            self.nrf_net_first_byte(now, pads);
+        } else {
+            self.nrf_net.phase = Phase::Setup;
+            self.nrf_net.wait = Some(now + dur);
+        }
+    }
+
+    fn nrf_net_first_byte(&mut self, now: u64, pads: &PadLines) {
+        if self.nrf_net.stop {
+            self.nrf_net_bytes_done(now, pads);
+            return;
+        }
+        self.nrf_net.phase = Phase::Running;
+        pads.set_stamp(Some(now));
+        let first = u16::from(self.nrf_net.tx[0]);
+        self.nrf_net.bus.m_begin(first, now, LINES, pads);
+    }
+
+    /// The last byte is out (or the transfer was stopped): hold CSN for
+    /// `CSNDUR`, or end now.
+    fn nrf_net_bytes_done(&mut self, now: u64, pads: &PadLines) {
+        let dur = if self.nrf_net_csn().is_some() {
+            self.nrf_net_csndur()
+        } else {
+            0
+        };
+        if dur == 0 {
+            self.nrf_net_release(now, pads);
+        } else {
+            self.nrf_net.phase = Phase::Holding;
+            self.nrf_net.wait = Some(now + dur);
+        }
+    }
+
+    /// Release CSN and return D/CX to its idle high; EasyDMA writes the RX
+    /// buffer next.
+    fn nrf_net_release(&mut self, now: u64, pads: &PadLines) {
+        pads.set_stamp(Some(now));
+        if let Some(active) = self.nrf_net_csn() {
+            pads.drive_line(LINE_CSN, LineDrive::PushPull, !active);
+            self.nrf_net.csn_free_at = now + self.nrf_net_csndur();
+        }
+        if self.nrf_net_dcx() {
+            pads.drive_line(LINE_DCX, LineDrive::PushPull, true);
+        }
+        self.nrf_net.phase = Phase::Finishing;
+    }
+
+    /// A CSN wait ended at `now`.
+    fn nrf_net_wait_done(&mut self, now: u64, pads: &PadLines) {
+        match self.nrf_net.phase {
+            Phase::Selecting => self.nrf_net_select(now, pads),
+            Phase::Setup => self.nrf_net_first_byte(now, pads),
+            Phase::Holding => self.nrf_net_release(now, pads),
+            _ => {}
+        }
     }
 
     fn nrf_net_now(&self) -> u64 {
@@ -116,6 +284,19 @@ impl Spi {
         }
         pads.set_stamp(Some(self.nrf_net_now()));
         self.nrf_net.bus.m_idle_drive(LINES, &pads);
+        // SPIM3's select and D/CX: between transfers at their idle levels
+        // (CSN inactive, D/CX high), driven only while their PSEL is live.
+        if matches!(self.nrf_net.phase, Phase::Idle | Phase::Starting) {
+            match self.nrf_net_csn() {
+                Some(active) => pads.drive_line(LINE_CSN, LineDrive::PushPull, !active),
+                None => pads.set_mode(LINE_CSN, LineDrive::Input),
+            }
+            if self.nrf_net_dcx() {
+                pads.drive_line(LINE_DCX, LineDrive::PushPull, true);
+            } else {
+                pads.set_mode(LINE_DCX, LineDrive::Input);
+            }
+        }
         pads.set_stamp(None);
     }
 
@@ -135,13 +316,16 @@ impl Spi {
                     r.events_stopped = 1;
                 }
             }
-            Phase::Starting => {
+            Phase::Starting | Phase::Selecting => {
                 self.nrf_net.phase = Phase::Idle;
+                self.nrf_net.wait = None;
                 if let SpiRegs::Nrf52(r) = &mut self.regs {
                     r.events_stopped = 1;
                 }
             }
-            Phase::Running | Phase::Finishing => self.nrf_net.stop = true,
+            Phase::Setup | Phase::Running | Phase::Holding | Phase::Finishing => {
+                self.nrf_net.stop = true
+            }
         }
     }
 
@@ -201,6 +385,7 @@ impl Spi {
                 self.nrf_net.rx.clear();
                 if let SpiRegs::Nrf52(r) = &mut self.regs {
                     r.events_started = 1;
+                    self.nrf_net.dcx_cmd = r.dcxcnt & 0xF;
                 }
                 let (shape, half) = self.nrf_net_shape();
                 self.nrf_net.bus.shape = shape;
@@ -210,10 +395,18 @@ impl Spi {
                     self.nrf_net_dma(bus);
                     return;
                 }
-                self.nrf_net.phase = Phase::Running;
-                pads.set_stamp(Some(now));
-                let first = u16::from(self.nrf_net.tx[0]);
-                self.nrf_net.bus.m_begin(first, now, LINES, &pads);
+                // SPIM3: CSN may have to stay inactive a while longer.
+                let at = if self.nrf_net_csn().is_some() {
+                    now.max(self.nrf_net.csn_free_at)
+                } else {
+                    now
+                };
+                if at > now {
+                    self.nrf_net.phase = Phase::Selecting;
+                    self.nrf_net.wait = Some(at);
+                } else {
+                    self.nrf_net_select(now, &pads);
+                }
                 pads.set_stamp(None);
             }
             Phase::Finishing => {
@@ -249,9 +442,14 @@ impl Spi {
         let Some(pads) = self.nrf_net_pads() else {
             return;
         };
-        while let Some(due) = self.nrf_net.bus.deadline() {
+        while let Some(due) = self.nrf_net_deadline() {
             if due > now {
                 break;
+            }
+            if self.nrf_net.wait == Some(due) {
+                self.nrf_net.wait = None;
+                self.nrf_net_wait_done(due, &pads);
+                continue;
             }
             self.nrf_net.bus.step(due, LINES, &pads);
             for event in self.nrf_net.bus.take_events() {
@@ -261,10 +459,11 @@ impl Spi {
                 self.nrf_net.rx.push(word as u8);
                 let next = self.nrf_net.rx.len();
                 if next < self.nrf_net.tx.len() && !self.nrf_net.stop {
+                    self.nrf_net_drive_dcx(next, &pads);
                     let byte = u16::from(self.nrf_net.tx[next]);
                     self.nrf_net.bus.m_begin(byte, due, LINES, &pads);
                 } else {
-                    self.nrf_net.phase = Phase::Finishing;
+                    self.nrf_net_bytes_done(due, &pads);
                 }
             }
         }
@@ -274,7 +473,7 @@ impl Spi {
     /// Walk path: one tick.
     pub(super) fn nrf_net_tick(&mut self) {
         let now = self.nrf_net_now();
-        if self.nrf_net.bus.deadline().is_some_and(|d| d <= now) {
+        if self.nrf_net_deadline().is_some_and(|d| d <= now) {
             self.nrf_net_step(now);
         }
     }
@@ -285,7 +484,7 @@ impl Spi {
         let due = if self.nrf_net_needs_bus() {
             Some(now + 1)
         } else {
-            self.nrf_net.bus.deadline()
+            self.nrf_net_deadline()
         };
         let mut events = Vec::new();
         if let Some(due) = due {
@@ -321,7 +520,7 @@ impl Spi {
         let next = if self.nrf_net_needs_bus() {
             Some(now + 1)
         } else {
-            self.nrf_net.bus.deadline()
+            self.nrf_net_deadline()
         };
         match next {
             Some(due) => {
@@ -346,8 +545,13 @@ impl Spi {
         self.nrf_net.bus.reset();
         self.nrf_net.phase = Phase::Idle;
         self.nrf_net.stop = false;
+        self.nrf_net.wait = None;
         if let Some(pads) = self.nrf_net_pads() {
-            for line in [LINES.sck, LINES.mosi, LINES.miso] {
+            let lines = pads.names().len();
+            for line in [LINES.sck, LINES.mosi, LINES.miso, LINE_CSN, LINE_DCX] {
+                if line >= lines {
+                    continue;
+                }
                 pads.set_mode(line, LineDrive::Input);
             }
         }

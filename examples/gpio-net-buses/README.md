@@ -15,12 +15,14 @@ pull-up reading 1.
 | `env-i2c.yaml` | G071 I2C1 controller (PB6/PB7, open drain) | G071 I2C1 target at 0x42, interrupt driven | `scl`, `sda` (pull-up) |
 | `env-spi16.yaml` | STM32F401 SPI1 master, 16-bit frames | F401 SPI1 slave, software select | `sck`, `miso`, `mosi` |
 | `env-spi16-nss.yaml` | F401 SPI1 master, 16-bit frames, NSS driven by the SPI (`SSOE=1`, PA4 AF5) | F401 SPI1 slave, hardware NSS (`SSM=0`, PA4 AF5) | `nss` (pull-up), `sck`, `miso`, `mosi` |
+| `env-spi-l4-nss.yaml` | STM32L476 SPI1 master, NSS driven by the SPI (`SSOE=1`, PA4 AF5; `l4-spi-nss-master-nssp.elf`: `NSSP` pulse mode); the tests swap in the STM32G474 (`system-g474.yaml`) | L476 (or G474) SPI1 slave, hardware NSS (`SSM=0`, PA4 AF5) | `nss` (pull-up), `sck`, `miso`, `mosi` |
 | `env-i2c-legacy.yaml` | STM32F103 legacy I2C1 master (PB6/PB7) | F401 legacy I2C1 slave at 0x42 | `scl`, `sda` (pull-up) |
 | `env-spi-rp2040.yaml` | RP2040 SPI0 master (GP2-GP5, hardware CSn) | G071 SPI1 slave | `cs`, `sck`, `miso`, `mosi` |
 | `env-spi-rp2040-slave.yaml` | G071 SPI1 master, mode 3 | RP2040 SPI0 slave | `cs`, `sck`, `miso`, `mosi` |
 | `env-i2c-rp2040.yaml` | RP2040 I2C0 controller (GP4 SDA, GP5 SCL) | G071 I2C1 target at 0x42 | `scl`, `sda` (pull-up) |
 | `env-i2c-rp2040-target.yaml` | G071 I2C1 controller | RP2040 I2C0 target at 0x42 | `scl`, `sda` (pull-up) |
 | `env-spi-nrf52.yaml` | nRF52840 SPIM0 master (P0.03 SCK, P0.04 MOSI, P0.05 MISO, CS on GPIO P0.02), EasyDMA, END interrupt | G071 SPI1 slave | `cs`, `sck`, `miso`, `mosi` |
+| `env-spi-nrf52-spim3.yaml` | nRF52840 SPIM3 master with its hardware CSN (P0.02, `CSNPOL`, `IFTIMING.CSNDUR` = 64) and D/CX (P0.06, `DCXCNT` = 1); `nrf-spim3-master-csnpol.elf`: active-high CSN | G071 SPI1 slave, hardware NSS; PA8 reads D/CX | `cs`, `dcx` (pull-up), `sck`, `miso`, `mosi` |
 | `env-spi-nrf52-slave.yaml` | G071 SPI1 master, mode 0 | nRF52840 SPIS0 slave (CSN P0.02), semaphore + EasyDMA | `cs`, `sck`, `miso`, `mosi` |
 | `env-i2c-nrf52.yaml` | nRF52840 TWIM0 controller (P0.27 SCL, P0.26 SDA), K250, shortcuts | G071 I2C1 target at 0x42 | `scl`, `sda` (pull-up) |
 | `env-i2c-nrf52-target.yaml` | G071 I2C1 controller | nRF52840 TWIS0 target at 0x42 (polled `WRITE`/`READ`, `PREPARERX`/`TX`) | `scl`, `sda` (pull-up) |
