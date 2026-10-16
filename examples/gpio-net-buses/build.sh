@@ -106,7 +106,9 @@ done
 # (--defsym PADS_HI=1, GPIO32 and up): S3 GP-SPI3 and I2C1, classic I2C1; and
 # the classic VSPI master / HSPI slave on bank-1 pads (the slave's SCK, MOSI
 # and CS0 on the input-only GPIO34..36). Plus plain GPIO on bank-1 pads
-# between a classic ESP32 and an ESP32-S3 (src/esp32x_gpio_hi.S).
+# between a classic ESP32 and an ESP32-S3 (src/esp32x_gpio_hi.S), and RTC
+# GPIO on pads the RTC IO MUX owns, with a hand-off back to the digital side
+# (src/esp32x_rtc_gpio.S).
 for build in "esp32s3 spi3-master spi_master INST1 PADS_HI" \
              "esp32s3 spi3-slave spi_slave INST1 PADS_HI" \
              "esp32s3 i2c1-controller i2c_controller INST1 PADS_HI" \
@@ -117,7 +119,9 @@ for build in "esp32s3 spi3-master spi_master INST1 PADS_HI" \
              "esp32 spi-hi-master spi_master PADS_HI" \
              "esp32 spi-hi-slave spi_slave PADS_HI" \
              "esp32 gpio-hi gpio_hi" \
-             "esp32s3 gpio-hi gpio_hi"; do
+             "esp32s3 gpio-hi gpio_hi" \
+             "esp32 rtc-gpio rtc_gpio" \
+             "esp32s3 rtc-gpio rtc_gpio"; do
     read -r chip out src syms <<<"$build"
     read -ra syms <<<"$syms"
     if [ "$chip" = esp32 ]; then base=0x40080000; defs=(--defsym CHIP_ESP32=1); else base=0x40378000; defs=(); fi

@@ -219,8 +219,8 @@ drives and accept an external level. Every GPIO model in tree does:
 | `GpioPort`, every register family (STM32 `v2` and `f1`, nRF52/54, Kinetis, EFR32 series 2, SAM, RA, i.MX RT) | push: the port reports its own edges, idle fast-forward stays on | exercised end to end on STM32 `v2` (G0B1, F401) and `f1` (F103). The EXTI raises edge interrupts for net edges on G0 and U5 (port from `EXTI_EXTICRx`), F1 (port from `AFIO_EXTICRx`), F4 and L0 (port from `SYSCFG_EXTICRx`). Internal pulls on the net, and read by an input nothing outside drives: STM32 `v2` `PUPDR`, STM32 `f1` input-with-pull (`CNF = 10`, `ODR` picks the rail), nRF52 `PIN_CNF.PULL`, EFR32 `INPUTPULL`, SAM `PINCFG.PULLEN`, and, from the block that keeps them outside the GPIO port (the port's `pad_control:` in the chip yaml), Kinetis `PORTx_PCRn.PE/PS`, RA `PmnPFS.PCR` and i.MX RT IOMUXC `SW_PAD_CTL` `PKE/PUE/PUS`. |
 | `GpioPort` pads routed to a peripheral (AF) | as above | the peripheral says what its output stage does (driving, released, input) and reads the level the net delivers; see [Buses over nets](#buses-over-nets). STM32 SPI, modern I²C and legacy (F1/F2/F4) I²C; the RP2040 SIO does the same for SPI and I²C pads (`FUNCSEL`); the nRF52 `PSEL` pin selects (SPIM/SPIS/TWIM/TWIS) likewise. |
 | `avr_gpio` (ATmega328P `portb`/`portc`/`portd`) | push: the port reports its own edges, idle fast-forward stays on | INT0/INT1 and PCINT0..2 see external edges; a core parked in `SLEEP` is skipped until the next edge or Timer0 overflow. Exercised end to end on the Uno (`gpio-net-two-boards`). An input with its `PORTx` bit set is a pull-up on the net, unless firmware sets `MCUCR.PUD`, which takes every pull-up off. |
-| ESP32 classic `gpio` (member `peripheral: gpio`, pins 0..39) | push | Drive: `GPIO_ENABLE` and `GPIO_OUT` (GPIO0..31), `GPIO_ENABLE1` and `GPIO_OUT1` at bit `pin - 32` (GPIO32..39); `GPIO_PINn.PAD_DRIVER` open drain drives only a 0 and, holding a 1, reads the wire on `GPIO_IN` / `GPIO_IN1`. GPIO34..39 are input-only, as on silicon: their `ENABLE1` bits store but never drive, and the matrix never routes an output to them; they take input and feed matrix input signals. Interrupts: `GPIO_PINn.INT_TYPE` edge and level types latch `GPIO_STATUS` / `GPIO_STATUS1` and raise matrix source 22 for the CPU whose INT_ENA bit is set (`GPIO_ACPU_INT(1)`, `GPIO_PCPU_INT(1)`). The IO_MUX pulls are not modelled on this part. Pads the GPIO matrix routes to VSPI, HSPI, I2C0 or I2C1 (`GPIO_FUNCn_OUT_SEL_CFG` out, `GPIO_FUNCn_IN_SEL_CFG` in, both indexed by the pad number in either bank) carry those peripherals' lines; see [Buses over nets](#buses-over-nets). |
-| ESP32-S3 `gpio` (`peripheral: gpio`, pins 0..48) | push | As classic, both banks (`GPIO_OUT1` / `GPIO_ENABLE1` / `GPIO_IN1` / `GPIO_STATUS1` at bit `pin - 32`); matrix source 16 (`GPIO_PCPU_INT` / `GPIO_PCPU_INT1`, INT_ENA bit 13). The IO_MUX `FUN_WPU` pull-up is on the net. GPIO49..53 have registers but no pad, and cannot join a net. Pads the GPIO matrix routes to GP-SPI2, GP-SPI3, I2C0 or I2C1 carry those peripherals' lines. |
+| ESP32 classic `gpio` (member `peripheral: gpio`, pins 0..39) | push | Drive: `GPIO_ENABLE` and `GPIO_OUT` (GPIO0..31), `GPIO_ENABLE1` and `GPIO_OUT1` at bit `pin - 32` (GPIO32..39); `GPIO_PINn.PAD_DRIVER` open drain drives only a 0 and, holding a 1, reads the wire on `GPIO_IN` / `GPIO_IN1`. GPIO34..39 are input-only, as on silicon: their `ENABLE1` bits store but never drive, and the matrix never routes an output to them; they take input and feed matrix input signals. Interrupts: `GPIO_PINn.INT_TYPE` edge and level types latch `GPIO_STATUS` / `GPIO_STATUS1` and raise matrix source 22 for the CPU whose INT_ENA bit is set (`GPIO_ACPU_INT(1)`, `GPIO_PCPU_INT(1)`). The IO_MUX pulls are not modelled on this part; the RTC-capable pads (GPIO0, 2, 4, 12..15, 25..27, 32, 33) take their pull from RTC_IO `RUE` / `RDE` in either domain (errata 3.6), reset values included (GPIO0, 14, 15 pulled up, GPIO2, 4, 12, 13 down). A pad whose RTC_IO `MUX_SEL` is set is driven by the RTC GPIO instead; see [RTC IO](#rtc-io-esp32-and-esp32-s3). Pads the GPIO matrix routes to VSPI, HSPI, I2C0 or I2C1 (`GPIO_FUNCn_OUT_SEL_CFG` out, `GPIO_FUNCn_IN_SEL_CFG` in, both indexed by the pad number in either bank) carry those peripherals' lines; see [Buses over nets](#buses-over-nets). |
+| ESP32-S3 `gpio` (`peripheral: gpio`, pins 0..48) | push | As classic, both banks (`GPIO_OUT1` / `GPIO_ENABLE1` / `GPIO_IN1` / `GPIO_STATUS1` at bit `pin - 32`); matrix source 16 (`GPIO_PCPU_INT` / `GPIO_PCPU_INT1`, INT_ENA bit 13). The IO_MUX `FUN_WPU` pull-up is on the net. GPIO49..53 have registers but no pad, and cannot join a net. Pads the GPIO matrix routes to GP-SPI2, GP-SPI3, I2C0 or I2C1 carry those peripherals' lines. GPIO0..21 with RTC_IO `MUX_SEL` set are driven by the RTC GPIO; see [RTC IO](#rtc-io-esp32-and-esp32-s3). |
 | ESP32-C3 / ESP32-C6 `gpio` (`peripheral: gpio`, pins 0..25) | push | As classic; matrix source 16 on the C3 and 30 on the C6. The IO_MUX `FUN_WPU` pull-up is on the net where the IO_MUX is wired. Edge types only (level types are not modelled on this block). Exercised end to end on the C6 (`env-esp32c6.yaml`). Pads the GPIO matrix routes to GP-SPI2 or I2C0 (`FUNCn_OUT_SEL_CFG` out, `FUNCn_IN_SEL_CFG` in, each chip's own signal numbers) carry those peripherals' lines; see [Buses over nets](#buses-over-nets). |
 | Declarative `GPIO` descriptor (`ENABLE` / `OUT` / `IN` registers) | poll | Drive from `ENABLE` and `OUT`; no pulls. |
 | RP2040 `sio` (`peripheral: sio`, pins 0..29 = GP0..GP29) | push | Drive: `GPIO_OE` and `GPIO_OUT` while IO_BANK0 selects SIO for the pad (or nothing yet); open drain is firmware toggling `GPIO_OE` with the latch at 0. Interrupts: IO_BANK0 `INTRn` / `PROC0_INTEn` edge and level bits raise `IO_IRQ_BANK0` (NVIC 13) from any change of `GPIO_IN`, the pad's own output included. Exercised end to end (`env-rp2040.yaml`). |
@@ -232,6 +232,40 @@ so a pad does not interrupt on its own output there.
 
 A peripheral that owns no pins, or a pad whose drive is unknown, is refused
 when the world is built, naming the pad.
+
+### RTC IO (ESP32 and ESP32-S3)
+
+The RTC-capable pads (classic GPIO0, 2, 4, 12..15, 25..27, 32..39 =
+RTC_GPIO0..17; S3 GPIO0..21 = RTC_GPIO0..21) have a second owner, the RTC
+IO MUX (`rtcio` at 0x3FF4_8400 on the classic part, `rtc_io` at 0x6000_8400
+on the S3). Its pad register's `MUX_SEL` picks the side: with it set the pad
+is driven by `RTC_GPIO_OUT` / `RTC_GPIO_ENABLE` (and their `_W1TS` /
+`_W1TC`), `RTC_GPIO_PINn.PAD_DRIVER` makes it open drain, and `RUE` / `RDE`
+pull it; `GPIO_OUT`, `GPIO_ENABLE` and the matrix no longer reach it (a
+routed peripheral line goes dark until `MUX_SEL` clears). The net member is
+still the GPIO port (`peripheral: gpio`, the GPIO number). Mind the
+numbering on the classic part: RTC GPIO numbers are not GPIO numbers
+(GPIO0 is RTC_GPIO11, GPIO25 RTC_GPIO6, GPIO32 RTC_GPIO9), and RTC GPIO n
+sits at bit `14 + n` of the RTC GPIO registers (`10 + n` on the S3).
+
+The input side follows the TRM: the pad's input reaches both the RTC GPIO
+(`RTC_GPIO_IN`) and the digital side (`GPIO_IN`, matrix inputs), through
+the input enable `MUX_SEL` selects (`FUN_IE` in the pad register: with it
+clear both read 0). `RTC_GPIO_PINn.INT_TYPE` latches `RTC_GPIO_STATUS` (edge
+and level types; `_W1TC` clears). That latch reaches no CPU interrupt on
+either part (`RTC_CNTL_INT_ENA` has no RTC GPIO bit; RTC_CORE, source 46 /
+39, is `RTC_CNTL_INT_ST`), so firmware polls it. On the classic part a pad
+register's `HOLD` freezes the RTC output stage; the S3 keeps its holds in
+RTC_CNTL, which is not modelled, nor is a hold on a digital-domain pad.
+Every `MUX_SEL` resets to 0. Firmware that uses an RTC-capable pad
+digitally clears it first, as ESP-IDF's `gpio_config()` does
+(`rtc_gpio_deinit`), and the example's Xtensa firmware does too
+(`RTC_DIGITAL` in `src/esp32x.inc`). `env-rtc-gpio-esp32-esp32s3.yaml`
+runs RTC GPIO across three nets between a classic ESP32 and an ESP32-S3
+(an open-drain RTC output released to the peer's `RUE`, edges counted from
+`RTC_GPIO_STATUS`) and hands GPIO27 from the RTC domain back to the digital
+output it set up from the start: the net sees the digital 1 only once
+`MUX_SEL` clears.
 
 Limits worth knowing:
 

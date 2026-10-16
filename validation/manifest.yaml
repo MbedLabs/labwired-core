@@ -1514,7 +1514,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: 322ccb005623434e69ebbf692c5071056746142419e05dbf67ad86b36e181d44
+    drift_ack_digest: 3cbbbf08343b65651542080fd4458621b3ff81f7da1065475bf50f9db3cdaf5f
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -1994,6 +1994,10 @@ boards:
     # classic/FIFO STM32 SPI gains TXDMAEN/RXDMAEN requests and LDMA_TX/LDMA_RX
     # (not the H5 layout). No register map or reset value changed. No physical
     # probe connected. Approved by the maintainer. ACK, NOT A CAPTURE.
+    # 2026-10-15 (fork F0 RCC profile): watched rcc.rs gained a separate
+    # RccRegisterLayout::Stm32F0 / F0Rcc used only by a chip yaml that selects
+    # profile stm32f0; this board's RCC family code and register behaviour are
+    # unchanged. Digest re-stamped. ACK, NOT A CAPTURE (owner confirmation pending).
     # 2026-10-16 (DMA arbitration / errors): watched gpdma.rs. The controller
     # moves one unit per arbitration slot, to the channel with the highest
     # CCR.PRIO then the lowest number (was one unit per channel per cycle); a
@@ -3356,7 +3360,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: 9f4d7a0be77708e6b3a193d42544f1539079552dbefece4306ed2002a61d9ce2
+    drift_ack_digest: 1f4e4aa683db872d95c3bc62acc6384edeb22f9397521e3b06a70087e9dca609
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -3808,6 +3812,10 @@ boards:
     # dropping reads, and fire only on request; a word store to a DMA register
     # is one write. No register map or reset value changed. No physical probe
     # connected. Approved by the maintainer. ACK, NOT A CAPTURE.
+    # 2026-10-15 (fork F0 RCC profile): watched rcc.rs gained a separate
+    # RccRegisterLayout::Stm32F0 / F0Rcc used only by a chip yaml that selects
+    # profile stm32f0; this board's RCC family code and register behaviour are
+    # unchanged. Digest re-stamped. ACK, NOT A CAPTURE (owner confirmation pending).
     # 2026-10-16 (DMA arbitration / errors): watched dma.rs and exti.rs. One item per
     # arbitration slot per controller, to the channel with the highest CCR.PL
     # then the lowest number, a request that loses the slot kept latched (was
@@ -4210,7 +4218,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: 37b21d7908f3d997c238e2d05d04a4699cf278037a4b96474e029c181cba4a7b
+    drift_ack_digest: ecbde914d193f548a2bb715c4ec96047ad8d33d6c5ae6c1b59476f39b8a02e7e
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -4608,6 +4616,10 @@ boards:
     # dropping reads, and fire only on request; a word store to a DMA register
     # is one write. No register map or reset value changed. No physical probe
     # connected. Approved by the maintainer. ACK, NOT A CAPTURE.
+    # 2026-10-15 (fork F0 RCC profile): watched rcc.rs gained a separate
+    # RccRegisterLayout::Stm32F0 / F0Rcc used only by a chip yaml that selects
+    # profile stm32f0; this board's RCC family code and register behaviour are
+    # unchanged. Digest re-stamped. ACK, NOT A CAPTURE (owner confirmation pending).
     # 2026-10-16 (DMA arbitration / errors): watched dma.rs. One item per
     # arbitration slot per controller, to the channel with the highest CCR.PL
     # then the lowest number, a request that loses the slot kept latched (was
@@ -5062,7 +5074,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: 17d911edd7933eae636807c159e5859d9684df0baa07fe867629f24a5874f3ef
+    drift_ack_digest: b8d9cd8e6cca1063685c01f44bb89783fbe3411fb734f67ab4822b2f9768e702
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -5531,6 +5543,10 @@ boards:
     # dropping reads, and fire only on request; a word store to a DMA register
     # is one write. No register map or reset value changed. No physical probe
     # connected. Approved by the maintainer. ACK, NOT A CAPTURE.
+    # 2026-10-15 (fork F0 RCC profile): watched rcc.rs gained a separate
+    # RccRegisterLayout::Stm32F0 / F0Rcc used only by a chip yaml that selects
+    # profile stm32f0; this board's RCC family code and register behaviour are
+    # unchanged. Digest re-stamped. ACK, NOT A CAPTURE (owner confirmation pending).
     # 2026-10-16 (DMA arbitration / errors): watched dma.rs and exti.rs. One item per
     # arbitration slot per controller, to the channel with the highest CCR.PL
     # then the lowest number, a request that loses the slot kept latched (was
@@ -5950,7 +5966,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: ef8939adc93884d86d3edd4f2a70cf374dbf1f38601eedbb6aff2194b447e4ab
+    drift_ack_digest: 99cc6f9826c45bb7f5cc3d2b89e495ed94bd43673fb224603aa7933ad585f96a
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -6358,6 +6374,10 @@ boards:
     # dropping reads, and fire only on request; a word store to a DMA register
     # is one write. No register map or reset value changed. No physical probe
     # connected. Approved by the maintainer. ACK, NOT A CAPTURE.
+    # 2026-10-15 (fork F0 RCC profile): watched rcc.rs gained a separate
+    # RccRegisterLayout::Stm32F0 / F0Rcc used only by a chip yaml that selects
+    # profile stm32f0; this board's RCC family code and register behaviour are
+    # unchanged. Digest re-stamped. ACK, NOT A CAPTURE (owner confirmation pending).
     # 2026-10-16 (DMA arbitration / FIFO / errors): watched dma.rs /
     # stm32f4_dma.rs. Streams are arbitrated one per slot by SxCR.PL then
     # stream number; SxFCR is behavioural (FIFO with FTH, live FS, PBURST /
@@ -7009,6 +7029,9 @@ boards:
       # UART register map lived outside its own watch list from that date.
       - crates/core/src/peripherals/esp_uart.rs
       - crates/core/src/peripherals/esp_systimer.rs
+      # The RTC IO MUX / RTC GPIO model (`rtc_io` at 0x6000_8400), shared with
+      # the classic part. Added 2026-10-16 with the model.
+      - crates/core/src/peripherals/esp_rtc_io.rs
       - crates/core/src/cpu/xtensa_jit
       # The S3's peripheral registration itself. The models above can be
       # perfectly correct and still not be on the bus: this file decides which
@@ -7021,6 +7044,22 @@ boards:
       # Declarative descriptors the chip yaml wires; the 9-reg reset-state
       # anchor is asserted against their reset_values.
       - configs/peripherals/esp32s3
+    # 2026-10-16 (RTC_IO model): new watched esp_rtc_io.rs; esp32s3/gpio.rs and
+    # system/xtensa/esp32s3.rs moved. RTC_IO (0x6000_8400..0x6000_8800) is now
+    # a model instead of the RTC_CNTL catch-all's round-trip storage: the SVD
+    # register map and reset values (TOUCH_PADn / XTAL_32P/N / PAD_DACn /
+    # RTC_PAD19..21 = 0x4000_0000..0x5000_0000, DATE 0x0210_1180; pinned by
+    # esp_rtc_io::tests::registers_match_the_svd), so reads there change from
+    # 0 to the SVD reset values and the write-only W1TS/W1TC views read 0. A
+    # pad whose MUX_SEL is set is driven by RTC_GPIO_OUT / ENABLE instead of
+    # GPIO_OUT / ENABLE and the matrix; MUX_SEL resets to 0 on every pad, so a
+    # firmware that never sets it sees GPIO behave as before. RTC_IO is not
+    # in the nine captured windows and no register or reset value in them
+    # changed (RTC_CNTL keeps 0x6000_8000..0x6000_8400). Ran:
+    # world_gpio_net_buses (RTC GPIO between a classic ESP32 and an S3, and
+    # every existing S3 net test with the firmware now clearing MUX_SEL), the
+    # lib suites (default and event-scheduler). No physical probe connected.
+    # Approved by the maintainer. ACK, NOT A CAPTURE.
     # 2026-09-30: Xtensa store-spin loops collapse into one plain-memory write,
     # and the shared ESP UART repeats a stable status poll without taking the
     # lock. The recommended scheduler interval is 1024. No register map or
@@ -7130,7 +7169,7 @@ boards:
     # esp32s3_irq_cache_differential, esp32s3_walk_differential, xtensa_exec,
     # xtensa_lx7. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-16
-    drift_ack_digest: 2a3c0381dedaefeab6362f0aa9aaea44ed83dcc63aebf0d8154011c2043a6aa8
+    drift_ack_digest: 2325b6779bfd12d97255ce7dd4f51ed36d1a141b66fe4367ecdf37bd8bf2a754
 
   - id: esp32s3-zero
     # Board variant of esp32s3: same silicon (LX7), 4 MiB flash / 480 KiB RAM.
@@ -7156,6 +7195,7 @@ boards:
       - crates/core/src/system/xtensa/esp32s3.rs
       - crates/core/src/peripherals/esp_uart.rs
       - crates/core/src/peripherals/esp_systimer.rs
+      - crates/core/src/peripherals/esp_rtc_io.rs
       - crates/core/src/cpu/xtensa_jit
       - configs/chips/esp32s3-zero.yaml
       - configs/peripherals/esp32s3
@@ -7834,6 +7874,9 @@ boards:
       - crates/core/src/peripherals/esp32/timg.rs
       - crates/core/src/peripherals/esp32/twai.rs
       - crates/core/src/peripherals/esp32/uart.rs
+      # 2026-10-16: the RTC IO MUX / RTC GPIO model (`rtcio`, was a round-trip
+      # stub), shared with the S3. No silicon capture on this board.
+      - crates/core/src/peripherals/esp_rtc_io.rs
       - crates/core/src/peripherals/stub.rs
       - crates/core/src/peripherals/timer.rs
       - crates/core/src/peripherals/uart.rs

@@ -2578,6 +2578,53 @@ mod esp32_xtensa {
         }
         assert_order_and_round_independent(ENV, |s| s, ["esp", "esps3"], 400, 8);
     }
+
+    /// RTC GPIO across nets, classic ESP32 against ESP32-S3
+    /// (`env-rtc-gpio-esp32-esp32s3.yaml`, `src/esp32x_rtc_gpio.S`): pads the
+    /// RTC IO MUX owns (`MUX_SEL` = 1) driven by `RTC_GPIO_OUT` / `ENABLE`
+    /// and read in `RTC_GPIO_IN`, every edge latched in `RTC_GPIO_STATUS` by
+    /// `RTC_GPIO_PINn.INT_TYPE`; the classic open drain released to the S3's
+    /// `RUE` pull-up. Then the hand-off: a digital output on GPIO27 that the
+    /// RTC IO MUX owns does not reach the net until `MUX_SEL` clears.
+    #[test]
+    fn rtc_gpio_pads_hand_a_level_between_a_classic_esp32_and_an_esp32s3() {
+        const ENV: &str = "env-rtc-gpio-esp32-esp32s3.yaml";
+        let mut world = build(ENV, |s| s);
+        run_us(&mut world, 400);
+        let esp = result(&world, "esp", 8);
+        let s3 = result(&world, "esps3", 8);
+        for (node, r) in [("esp", &esp), ("esps3", &s3)] {
+            assert_eq!(r[7], 1, "{node} finished: {r:x?}");
+            assert_eq!(r[0], 4, "{node}: four rounds");
+            // Four rounds and the hand-off round: ten waits, each on an
+            // edge its RTC_GPIO_STATUS bit latched.
+            assert_eq!(r[1], 10, "{node}: every edge latched: {r:x?}");
+            assert_eq!(r[2], 0, "{node}: STATUS clear when armed");
+        }
+        // The classic part: GPIO27 reads 0 in GPIO_IN while the RTC IO MUX
+        // owns it (TOUCH_PAD7.FUN_IE clear), its own driven 1 once digital.
+        assert_eq!((esp[4], esp[3]), (0, 1), "classic GPIO_IN bit 27: {esp:x?}");
+        // The S3 sampled the hand-off net low, then high, and its GPIO6
+        // latched the rising edge (INT_TYPE 1).
+        assert_eq!((s3[3], s3[4], s3[5]), (0, 1, 1), "S3 hand-off: {s3:x?}");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        // a2b: high on the S3's reset pull-up, low once the classic open
+        // drain holds 0, then a release and a drive per round (5 rounds).
+        // b2a: the same, from the S3's digital pull-up to its RTC output.
+        for name in ["a2b", "b2a"] {
+            let n = net(&reports, name);
+            assert_eq!(n.edges, 1 + 2 * 5, "{n:#?}");
+            assert!(!n.level, "{name} low at the end");
+        }
+        // handoff: the S3's reset pull-up, its RDE, then the classic digital
+        // 1 once MUX_SEL cleared: the pad never carried it before.
+        let h = net(&reports, "handoff");
+        assert_eq!(h.edges, 2, "{h:#?}");
+        assert!(h.level, "the digital output carried at the end");
+        assert_order_and_round_independent(ENV, |s| s, ["esp", "esps3"], 400, 8);
+    }
 }
 
 /// The ESP32-C3 / C6 GP-SPI2 moving its data by GDMA (`src/esp32c_spi_dma_*.c`)

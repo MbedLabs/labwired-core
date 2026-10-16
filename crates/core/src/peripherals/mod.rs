@@ -36,6 +36,7 @@ pub(crate) mod esp_gpspi_net;
 pub mod esp_gpspi_wire;
 pub mod esp_i2c_core;
 pub(crate) mod esp_i2c_net;
+pub mod esp_rtc_io;
 pub mod esp_systimer;
 pub mod esp_uart;
 pub mod esp_xtensa_common;
