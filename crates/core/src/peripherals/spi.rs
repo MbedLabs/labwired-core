@@ -90,6 +90,13 @@ const SPI_DONE_TOKEN: u32 = 0;
 const SPI_NRF52_EASYDMA_TOKEN: u32 = 1;
 /// Event token delivering an interrupt a world `gpio_net` edge raised.
 const SPI_NET_IRQ_TOKEN: u32 = 2;
+/// Scheduler token: raise the STM32 SPI's due DMA requests (CR2.TXDMAEN /
+/// RXDMAEN). See [`Spi::stm32_take_dma_signals`]. (3 is `spi_nrf_net`'s.)
+const SPI_DMA_TOKEN: u32 = 4;
+/// Cycles between re-checks of the DMA request lines while requests are
+/// being answered — long enough for the routed DMA channel to move the item
+/// (its event fires the cycle after the request), short against a frame.
+const SPI_DMA_RECHECK: u64 = 2;
 
 /// High bit marks an H5 wire-narration wakeup. The low 31 bits carry the arm
 /// sequence, so a stale wakeup from a superseded arm is recognisable — and
@@ -470,6 +477,14 @@ const FIFO_BYTES: u8 = 4;
 const FIFO_CR2_NSSP: u16 = 1 << 3;
 /// CR2.FRXTH — RXNE threshold: 0 = 16 bit (2 bytes), 1 = 8 bit (1 byte).
 const FIFO_CR2_FRXTH: u16 = 1 << 12;
+/// CR2.LDMA_RX / LDMA_TX — the last DMA transfer of an odd-length packed
+/// transfer moves ONE frame, not two (RM0444 §35.5.10, "Data packing with
+/// DMA").
+const FIFO_CR2_LDMA_RX: u16 = 1 << 13;
+const FIFO_CR2_LDMA_TX: u16 = 1 << 14;
+/// CR2.RXDMAEN / TXDMAEN (bits 0/1 on the classic and FIFO ports alike).
+const CR2_RXDMAEN: u16 = 1 << 0;
+const CR2_TXDMAEN: u16 = 1 << 1;
 /// SR.FRLVL[1:0] (bits 10:9) and SR.FTLVL[1:0] (bits 12:11).
 const FIFO_SR_FRLVL_SHIFT: u16 = 9;
 const FIFO_SR_FTLVL_SHIFT: u16 = 11;
@@ -1645,6 +1660,34 @@ pub struct Spi {
     /// between two).
     #[serde(skip)]
     net_nss_high: bool,
+
+    // ── STM32 DMA handshake (CR2.TXDMAEN / RXDMAEN) ─────────────────────────
+    //
+    // A request line is a level (TXE / RXNE with the enable bit), and the DMA
+    // answers each request with one DR access. The model raises a request as
+    // a `dma_signals` id ([`crate::DMA_SIGNAL_TX`] / `RX`) and then holds it
+    // OUTSTANDING until the DR access that answers it: a TX request until a
+    // DR write, an RX request until a DR read. That is the request/acknowledge
+    // pairing of the STM32 DMA (RM0444 §11.4.3): without it the line, still
+    // high in the cycles before the DMA's item lands, would be counted again
+    // and the DMA would push two items for one free slot.
+    /// A TX request is outstanding (cleared by a DR write).
+    #[serde(skip)]
+    dma_tx_req: bool,
+    /// An RX request is outstanding (cleared by a DR read, a `&self` access).
+    #[serde(skip)]
+    dma_rx_req: Cell<bool>,
+    /// The DMA's end-of-transfer notice: the DR write now arriving is the
+    /// transfer's last (`LDMA_TX`).
+    #[serde(skip)]
+    dma_tx_last: bool,
+    /// The next RX DMA read is the transfer's last (`LDMA_RX`): with FRXTH=0
+    /// its request is raised for a single byte.
+    #[serde(skip)]
+    dma_rx_last: bool,
+    /// The [`SPI_DMA_TOKEN`] chain is armed.
+    #[serde(skip)]
+    dma_scheduled: bool,
 }
 
 impl core::fmt::Debug for Spi {
@@ -2337,6 +2380,14 @@ impl Spi {
                     // A new FRXTH moves the RXNE threshold at once.
                     self.fifo_sync_rxne();
                 }
+                // A request line that is switched off drops its request.
+                if value & CR2_TXDMAEN == 0 {
+                    self.dma_tx_req = false;
+                }
+                if value & CR2_RXDMAEN == 0 {
+                    self.dma_rx_req.set(false);
+                    self.dma_rx_last = false;
+                }
                 self.net_apply_drive();
             }
             0x08 => {
@@ -2371,6 +2422,9 @@ impl Spi {
                     SpiRegs::Stm32(r) => r.cr1,
                     _ => 0,
                 };
+                // Any DR write answers an outstanding TX DMA request.
+                self.dma_tx_req = false;
+                self.dma_tx_last = false;
                 if self.net_slave_owns_dr() {
                     // A slave on a net shifts on the master's clock.
                     self.net_slave_write_dr(value);
@@ -3455,6 +3509,79 @@ impl Spi {
             .map(|f| f.ticks_left.max(1) as u64)
             .unwrap_or(0)
     }
+
+    // ── STM32 DMA requests (CR2.TXDMAEN / RXDMAEN, LDMA_TX / LDMA_RX) ───────
+
+    /// The DMA request lines that are high and not yet raised: `(tx, rx)`.
+    ///
+    /// * **TX** (RM0444 §35.5.10, RM0090 §28.3.9): "a DMA request is issued
+    ///   each time TXE is set to 1" — the classic port's one-word buffer is
+    ///   empty, the FIFO port's TX FIFO is at or below half full. Raised only
+    ///   while SPE=1: the model does not latch a DR write into a disabled
+    ///   master, and every driver (HAL included) enables SPE before TXDMAEN.
+    /// * **RX**: "each time RXNE is set to 1" — on the FIFO port RXNE follows
+    ///   CR2.FRXTH. With LDMA_RX=1 and FRXTH=0, once the DMA has said the next
+    ///   item is its last (see [`crate::Peripheral::dma_access_notice`]), the
+    ///   request is raised for a single byte: the odd frame of a packed
+    ///   transfer.
+    fn stm32_dma_due(&self) -> (bool, bool) {
+        let SpiRegs::Stm32(r) = &self.regs else {
+            return (false, false);
+        };
+        if r.cr2 & (CR2_TXDMAEN | CR2_RXDMAEN) == 0 {
+            return (false, false);
+        }
+        let tx = r.cr2 & CR2_TXDMAEN != 0
+            && !self.dma_tx_req
+            && r.cr1 & (1 << 6) != 0
+            && self.stm32_txe();
+        let rx_level = self.stm32_rxne.get()
+            || (r.fifo
+                && r.cr2 & FIFO_CR2_LDMA_RX != 0
+                && r.cr2 & FIFO_CR2_FRXTH == 0
+                && self.dma_rx_last
+                && self.fifo_rx.get().len >= 1);
+        let rx = r.cr2 & CR2_RXDMAEN != 0 && !self.dma_rx_req.get() && rx_level;
+        (tx, rx)
+    }
+
+    /// Raise every due DMA request: the `dma_signals` the bus routes to the
+    /// DMA channel(s) the chip's routing registers select. Each request stays
+    /// outstanding until the DR access that answers it.
+    pub(crate) fn stm32_take_dma_signals(&mut self) -> Vec<u32> {
+        let (tx, rx) = self.stm32_dma_due();
+        let mut out = Vec::new();
+        if rx {
+            self.dma_rx_req.set(true);
+            out.push(crate::DMA_SIGNAL_RX);
+        }
+        if tx {
+            self.dma_tx_req = true;
+            out.push(crate::DMA_SIGNAL_TX);
+        }
+        out
+    }
+
+    /// The `SPI_DONE_TOKEN` event with no frame on the wire: raise the due DMA
+    /// requests and keep re-checking (on this same token) while any were
+    /// raised. `scheduled` stays set while the re-check is in flight, so a
+    /// frame started meanwhile is caught by that event's early-wakeup path.
+    fn dma_recheck_result(&mut self) -> crate::sched::EventResult {
+        let dma_signals = self.stm32_take_dma_signals();
+        let again = !dma_signals.is_empty();
+        self.scheduled = again;
+        crate::sched::EventResult {
+            dma_signals,
+            reschedule_delay: again.then_some(SPI_DMA_RECHECK),
+            ..Default::default()
+        }
+    }
+
+    /// `true` when a DMA request is due (one branch while no DMA is enabled).
+    fn stm32_dma_pending(&self) -> bool {
+        let (tx, rx) = self.stm32_dma_due();
+        tx || rx
+    }
 }
 
 impl crate::Peripheral for Spi {
@@ -3524,7 +3651,22 @@ impl crate::Peripheral for Spi {
         self.stm32_set_stamp(Some(cycle));
         let wake = self.net_slave_edge(line, level);
         self.stm32_set_stamp(None);
-        wake
+        // A frame the edge completed (or a transmit word it took) may raise a
+        // DMA request: the bus then harvests the request event.
+        wake || (!self.dma_scheduled && self.stm32_dma_pending())
+    }
+
+    fn dma_access_notice(&mut self, offset: u64, read: bool, remaining: u32) {
+        if offset & !3 != 0x0C || !matches!(self.regs, SpiRegs::Stm32(_)) {
+            return;
+        }
+        if read {
+            // `remaining == 1`: the read after this one ends the transfer.
+            self.dma_rx_last = remaining == 1;
+        } else {
+            // This write ends the transfer.
+            self.dma_tx_last = remaining == 0;
+        }
     }
 
     fn read(&self, offset: u64) -> SimResult<u8> {
@@ -3541,7 +3683,10 @@ impl crate::Peripheral for Spi {
             SpiRegs::Stm32(r) if r.fifo => match reg_offset {
                 // DR, 8-bit access: pops one byte of the RX FIFO. The upper
                 // byte lane alone pops nothing.
-                0x0C if byte_offset == 0 => return Ok(self.fifo_rx_pop(1) as u8),
+                0x0C if byte_offset == 0 => {
+                    self.dma_rx_req.set(false);
+                    return Ok(self.fifo_rx_pop(1) as u8);
+                }
                 0x0C => return Ok(0),
                 0x08 => {
                     let v = self.fifo_sr(r.sr);
@@ -3559,6 +3704,7 @@ impl crate::Peripheral for Spi {
                 // access size that drains RX, including the byte path HAL uses.
                 if reg_offset == 0x0C {
                     self.stm32_rxne.set(false);
+                    self.dma_rx_req.set(false);
                 }
                 let mut v = r.read_reg(reg_offset) as u32;
                 if reg_offset == 0x08 {
@@ -3738,6 +3884,7 @@ impl crate::Peripheral for Spi {
     /// byte-wise default would pop the low byte and read 0 for the high one.
     fn read_u16(&self, offset: u64) -> SimResult<u16> {
         if offset == 0x0C && self.is_fifo_layout() {
+            self.dma_rx_req.set(false);
             return Ok(self.fifo_rx_pop(2));
         }
         let b0 = self.read(offset)? as u16;
@@ -3749,6 +3896,7 @@ impl crate::Peripheral for Spi {
     /// one halfword-sized pop (bits 31:16 read 0).
     fn read_u32(&self, offset: u64) -> SimResult<u32> {
         if offset == 0x0C && self.is_fifo_layout() {
+            self.dma_rx_req.set(false);
             return Ok(u32::from(self.fifo_rx_pop(2)));
         }
         let b0 = self.read(offset)? as u32;
@@ -3784,7 +3932,13 @@ impl crate::Peripheral for Spi {
                 SpiRegs::Stm32(r) => (r.fifo, (r.cr2 >> 8) & 0xF),
                 _ => (false, 0),
             };
-            if fifo && ds <= 0b0111 {
+            let ldma_tx = matches!(&self.regs, SpiRegs::Stm32(r) if r.cr2 & FIFO_CR2_LDMA_TX != 0);
+            if fifo && ds <= 0b0111 && ldma_tx && self.dma_tx_last {
+                // LDMA_TX: the last DMA item of an odd-length packed transfer
+                // carries one frame (RM0444 §35.5.10); its upper byte is not
+                // data.
+                self.write_stm32_reg(0x0C, value & 0xFF);
+            } else if fifo && ds <= 0b0111 {
                 // FIFO data packing (RM0351 §40.4.9): a 16-bit DR access at
                 // DS≤8 enqueues TWO frames (low byte, then high byte).
                 self.write_stm32_reg(0x0C, value & 0xFF);
@@ -3844,6 +3998,10 @@ impl crate::Peripheral for Spi {
             self.net_irq_scheduled = true;
             events.push((0, SPI_NET_IRQ_TOKEN));
         }
+        if !self.dma_scheduled && self.stm32_dma_pending() {
+            self.dma_scheduled = true;
+            events.push((0, SPI_DMA_TOKEN));
+        }
         if self.frame.is_some() && !self.scheduled {
             self.scheduled = true;
             events.push((
@@ -3898,6 +4056,21 @@ impl crate::Peripheral for Spi {
             let raise = std::mem::take(&mut self.net_irq_pending);
             return crate::sched::EventResult {
                 raise_own_irq: raise,
+                dma_signals: self.stm32_take_dma_signals(),
+                ..Default::default()
+            };
+        }
+        if event_token == SPI_DMA_TOKEN {
+            // Raise the due requests, then look again shortly while they
+            // are being answered: an answered request whose line is still
+            // high (a FIFO with room for more, or still holding a frame) is
+            // raised again. The chain ends once nothing new is due.
+            let dma_signals = self.stm32_take_dma_signals();
+            let again = !dma_signals.is_empty();
+            self.dma_scheduled = again;
+            return crate::sched::EventResult {
+                dma_signals,
+                reschedule_delay: again.then_some(SPI_DMA_RECHECK),
                 ..Default::default()
             };
         }
@@ -3938,7 +4111,7 @@ impl crate::Peripheral for Spi {
 
         self.scheduled = false;
         let Some(f) = &self.frame else {
-            return crate::sched::EventResult::default();
+            return self.dma_recheck_result();
         };
         let mut res = crate::sched::EventResult::default();
         let now = sched.now();
@@ -3964,6 +4137,13 @@ impl crate::Peripheral for Spi {
         if self.frame.is_some() {
             res.reschedule_delay = Some(self.stm32_next_transition_ticks());
             self.scheduled = true;
+            res.dma_signals = self.stm32_take_dma_signals();
+        } else {
+            // The last frame is out: its RXNE / TXE may raise DMA requests,
+            // re-checked like the `SPI_DMA_TOKEN` chain.
+            let dma = self.dma_recheck_result();
+            res.dma_signals = dma.dma_signals;
+            res.reschedule_delay = dma.reschedule_delay;
         }
         res
     }
@@ -4073,6 +4253,8 @@ impl crate::Peripheral for Spi {
         if std::mem::take(&mut self.net_irq_pending) {
             irq = true;
         }
+        // ── STM32 DMA requests (TXDMAEN / RXDMAEN) ───────────────────────────
+        let dma_signals = self.stm32_take_dma_signals();
 
         // ── H5 "SPI v3": publish any buffered narration burst ────────────────
         // Under `event-scheduler` the walk skips this model and the event chain
@@ -4100,6 +4282,7 @@ impl crate::Peripheral for Spi {
         crate::PeripheralTickResult {
             irq,
             cycles: 0,
+            dma_signals: (!dma_signals.is_empty()).then_some(dma_signals),
             ..Default::default()
         }
     }
@@ -4381,3 +4564,7 @@ mod tests;
 #[cfg(test)]
 #[path = "spi_efr32s2_spi_tests.rs"]
 mod efr32s2_spi_tests;
+
+#[cfg(test)]
+#[path = "spi_dma_tests.rs"]
+mod dma_tests;

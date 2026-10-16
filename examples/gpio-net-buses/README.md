@@ -26,6 +26,9 @@ pull-up reading 1.
 | `env-i2c-nrf52-target.yaml` | G071 I2C1 controller | nRF52840 TWIS0 target at 0x42 (polled `WRITE`/`READ`, `PREPARERX`/`TX`) | `scl`, `sda` (pull-up) |
 | `env-spi-esp32c3.yaml` | ESP32-C3 GP-SPI2 master (GPIO4 SCK, GPIO5 MOSI, GPIO3 MISO, GPIO1 CS0 through the GPIO matrix), mode 0, 100 kHz | G071 SPI1 slave | `cs`, `sck`, `miso`, `mosi` |
 | `env-spi-esp32c3-slave.yaml` | ESP32-C3 GP-SPI2 slave (W buffer) | G071 SPI1 master | `cs`, `sck`, `miso`, `mosi` |
+| `env-spi-dma.yaml` | G071 SPI1 master, both directions by DMA (DMAMUX → DMA1) | G071 SPI1 slave, both directions by DMA | `cs`, `sck`, `miso`, `mosi` |
+| `env-spi-esp32c3-dma.yaml` | ESP32-C3 GP-SPI2 master, full duplex by GDMA | G071 SPI1 slave by DMA | `cs`, `sck`, `miso`, `mosi` |
+| `env-spi-esp32c3-dma-slave.yaml` | ESP32-C3 GP-SPI2 slave by GDMA | G071 SPI1 master by DMA | `cs`, `sck`, `miso`, `mosi` |
 | `env-i2c-esp32c3.yaml` | ESP32-C3 I2C0 controller (GPIO8 SDA, GPIO9 SCL), 100 kHz | G071 I2C1 target at 0x42 | `scl`, `sda` (pull-up) |
 | `env-i2c-esp32c3-target.yaml` | ESP32-C3 I2C0 target at 0x42, stretching SCL until its firmware answers | G071 I2C1 controller | `scl`, `sda` (pull-up) |
 
@@ -37,6 +40,11 @@ chip as master in turn), a slave that feeds every answer from its TXE
 interrupt (`spi-slave-txe`), one that underruns (`spi-slave-underrun`) and a
 master that leaves `CR2.FRXTH` at reset (`spi-master-nofrxth`), which the
 G0's FIFO SPI stalls after one 8-bit frame as silicon does.
+
+SPI by DMA: the DMA pairs exchange eight bytes, `A5 3C 5A C3 0F F0 81 7E`
+one way and `81 82 .. 88` the other, with no CPU access to `DR` or the W
+buffer (`src/spi_dma_*.c` on the G071, `src/esp32c_spi_dma_*.c` on the C3
+and the C6, the same sources built with `-DCHIP_C6`).
 
 I²C: the controller writes `10 DE AD` to 0x42 (register pointer 0x10, then two
 bytes), writes the pointer again and reads two bytes back through a repeated

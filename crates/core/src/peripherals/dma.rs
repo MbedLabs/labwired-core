@@ -4,7 +4,10 @@
 // This software is released under the MIT License.
 // See the LICENSE file in the project root for full license information.
 
-use crate::{CycleClock, DmaDirection, DmaRequest, Peripheral, PeripheralTickResult, SimResult};
+use crate::{
+    CycleClock, DmaDirection, DmaRequest, DmaRoute, DmaUnitTransform, Peripheral,
+    PeripheralTickResult, SimResult,
+};
 use std::any::Any;
 
 #[derive(Debug, Default, serde::Serialize)]
@@ -80,16 +83,20 @@ struct DmaChannel {
 /// ### Preserved semantics (differentially pinned — including the model's
 /// known quirks, kept so the two drive modes are byte-identical)
 ///
-/// - **Sticky `active`**: CCR.EN 0→1 sets `active` and snapshots the pointers /
-///   initial CNDTR; CCR.EN 1→0 does NOT clear `active`, so a mem2mem transfer
+/// - **Sticky `active`**: CCR.EN 0→1 snapshots the pointers / initial CNDTR
+///   and sets `active` on a mem2mem channel (a peripheral channel waits for its
+///   first request); CCR.EN 1→0 does NOT clear `active`, so a mem2mem transfer
 ///   in flight runs to completion even if firmware clears EN mid-way. The event
 ///   chain reads live `active`/`cndtr`, reproducing this exactly.
 /// - **One element per active tick**: a non-mem2mem channel transfers a single
 ///   element then clears `active` (peripheral-request paced); a mem2mem channel
 ///   stays `active` and drains one element per tick.
-/// - **Byte-granular copy with width-strided pointers**: each element moves one
-///   byte through [`DmaRequest`] while PINC/MINC advance CPAR/CMAR internal
-///   pointers by the PSIZE/MSIZE width — the historical model detail, preserved.
+/// - **One data item per element, at its programmed widths**: each element is
+///   a [`DmaRequest`] copy reading PSIZE/MSIZE bytes from the source side and
+///   writing the other width to the destination (zero-padded / truncated as
+///   [`DmaUnitTransform`] describes), while PINC/MINC advance the internal
+///   pointers by the same widths. A peripheral element carries the CNDTR left
+///   after it ([`DmaRequest::remaining`]) — the DMA's end-of-transfer signal.
 /// - **HTIF at the half-way crossing, TCIF at completion, GIF tracks the OR** —
 ///   set on the exact element the walk sets them.
 ///
@@ -114,6 +121,16 @@ pub struct Dma1 {
     cselr: u32,
     channels: [DmaChannel; 7],
 
+    /// Peripheral request lines this controller's channels are hard-wired to,
+    /// from the chip yaml (`config: { requests: { spi1_tx: 3, ... } }`):
+    /// `(request, channel 1..7, CSELR selector)`. F1 parts wire each request
+    /// to a fixed channel (RM0008 Table 78); L4 parts route it only while the
+    /// channel's `CSELR` nibble holds the selector (RM0351 Table 41). Parts
+    /// with a DMAMUX (G0/G4/WB) leave this empty and route through
+    /// [`crate::peripherals::dmamux::Dmamux`].
+    #[serde(skip)]
+    routes: Vec<(String, u32, Option<u32>)>,
+
     /// Bus-published cycle clock (walk-free plan Part 1). `Some` once the bus
     /// registration choke attaches it; `None` keeps the model on the legacy
     /// walk path.
@@ -127,6 +144,14 @@ impl Dma1 {
     }
 
     crate::cycle_clock::scheduler_mode!();
+
+    /// Hard-wire the peripheral request `request` (`spi1_tx`, ...) to channel
+    /// `channel` (1..7); with `cselr`, only while that channel's `CSELR`
+    /// nibble selects it (L4).
+    pub fn with_request_route(mut self, request: &str, channel: u32, cselr: Option<u32>) -> Self {
+        self.routes.push((request.to_string(), channel, cselr));
+        self
+    }
 
     fn tick_channels_once(&mut self) -> PeripheralTickResult {
         let mut dma_requests: Option<Vec<DmaRequest>> = None;
@@ -219,7 +244,12 @@ impl Dma1 {
                             let new_en = (value & 1) != 0;
                             if !old_en && new_en {
                                 let chan = &mut self.channels[chan_idx];
-                                chan.active = true;
+                                // Only a memory-to-memory channel starts on
+                                // its own; a peripheral channel waits for its
+                                // peripheral's request (RM0008 §13.3.1:
+                                // "the DMA controller performs a transfer on
+                                // a request from a peripheral").
+                                chan.active = (value >> 14) & 1 != 0;
                                 chan.cpar_ptr = chan.cpar;
                                 chan.cmar_ptr = chan.cmar;
                                 chan.cndtr_initial = chan.cndtr;
@@ -257,52 +287,52 @@ impl Dma1 {
 
         let dir_bit = (chan.ccr >> 4) & 1;
         let mem2mem = (chan.ccr >> 14) & 1;
+        // PSIZE (bits 9:8) / MSIZE (bits 11:10): 00 byte, 01 half-word,
+        // 10 word (RM0008 §13.4.3; 11 reserved, treated as word).
+        let psize = 1u32 << ((chan.ccr >> 8) & 3).min(2);
+        let msize = 1u32 << ((chan.ccr >> 10) & 3).min(2);
 
         // Use internal pointers for the actual transfer; leave the
         // user-facing CPAR / CMAR registers untouched so firmware reads
         // them at the configured base, matching real STM32 hardware.
-        let (src, dst, direction) = if mem2mem == 1 {
+        //
+        // Every direction is a real copy of one data item, PSIZE wide on the
+        // peripheral side and MSIZE wide on the memory side (RM0008 §13.3.4,
+        // "programmable data width"): the bus reads the source and writes
+        // the destination with accesses of those widths, so a half-word item
+        // to an SPI DR is ONE 16-bit access.
+        let (src, dst, src_w, dst_w) = if mem2mem == 1 {
             // STM32 mem-to-mem mode (RM0351 §11.4.7): MEM2MEM=1 requires
             // DIR=1, and the data flows CMAR -> CPAR. CMAR is "memory side"
             // (source), CPAR is "peripheral side" (destination).
-            (chan.cmar_ptr, chan.cpar_ptr, DmaDirection::Copy)
+            (chan.cmar_ptr, chan.cpar_ptr, msize, psize)
         } else if dir_bit == 1 {
             // Memory -> peripheral: read from CMAR, write to CPAR.
-            (chan.cmar_ptr, chan.cpar_ptr, DmaDirection::Write)
+            (chan.cmar_ptr, chan.cpar_ptr, msize, psize)
         } else {
             // Peripheral -> memory: read from CPAR, write to CMAR.
-            (chan.cpar_ptr, chan.cmar_ptr, DmaDirection::Read)
+            (chan.cpar_ptr, chan.cmar_ptr, psize, msize)
         };
 
         let request = DmaRequest {
             src_addr: src as u64,
             addr: dst as u64,
             val: 0,
-            direction,
-            transform: None,
+            direction: DmaDirection::Copy,
+            transform: Some(DmaUnitTransform {
+                src_width: src_w as u8,
+                dst_width: dst_w as u8,
+                ..Default::default()
+            }),
+            remaining: (mem2mem == 0).then(|| chan.cndtr - 1),
         };
 
         chan.cndtr -= 1;
-        // Increment internal memory/peripheral pointers if MINC/PINC is set.
-        // The CCR PSIZE/MSIZE bits select 1/2/4 byte width; we treat each
-        // tick as one element so the increment matches.
         if (chan.ccr & (1 << 7)) != 0 {
-            chan.cmar_ptr = chan.cmar_ptr.wrapping_add(if (chan.ccr & (1 << 10)) != 0 {
-                4
-            } else if (chan.ccr & (1 << 8)) != 0 {
-                2
-            } else {
-                1
-            });
+            chan.cmar_ptr = chan.cmar_ptr.wrapping_add(msize);
         }
         if (chan.ccr & (1 << 6)) != 0 {
-            chan.cpar_ptr = chan.cpar_ptr.wrapping_add(if (chan.ccr & (1 << 11)) != 0 {
-                4
-            } else if (chan.ccr & (1 << 8)) != 0 {
-                2
-            } else {
-                1
-            });
+            chan.cpar_ptr = chan.cpar_ptr.wrapping_add(psize);
         }
 
         let cndtr_after = chan.cndtr;
@@ -340,6 +370,22 @@ impl Dma1 {
 }
 
 impl Peripheral for Dma1 {
+    /// A word store is ONE register write: split into bytes, a CCR value
+    /// with EN in byte 0 and (say) MEM2MEM in byte 1 would enable the
+    /// channel before its mode bits are written.
+    fn write_u32(&mut self, offset: u64, value: u32) -> SimResult<()> {
+        self.write_reg(offset & !3, value);
+        Ok(())
+    }
+
+    fn write_u16(&mut self, offset: u64, value: u16) -> SimResult<()> {
+        let reg = offset & !3;
+        let shift = (offset & 2) * 8;
+        let v = (self.read_reg(reg) & !(0xFFFF << shift)) | (u32::from(value) << shift);
+        self.write_reg(reg, v);
+        Ok(())
+    }
+
     fn read(&self, offset: u64) -> SimResult<u8> {
         let reg_offset = offset & !3;
         let byte_offset = (offset % 4) as u32;
@@ -358,6 +404,24 @@ impl Peripheral for Dma1 {
 
         self.write_reg(reg_offset, reg_val);
         Ok(())
+    }
+
+    fn dma_route_request(&self, request: &str, out: &mut Vec<DmaRoute>) {
+        for (name, channel, sel) in &self.routes {
+            if name != request || !(1..=7).contains(channel) {
+                continue;
+            }
+            let idx = (*channel - 1) as usize;
+            if let Some(sel) = sel {
+                if (self.cselr >> (4 * idx)) & 0xF != *sel {
+                    continue;
+                }
+            }
+            out.push(DmaRoute {
+                controller: None,
+                channel: *channel,
+            });
+        }
     }
 
     fn dma_request(&mut self, request_id: u32) {
@@ -487,6 +551,46 @@ impl Peripheral for Dma1 {
 mod tests {
     use super::*;
 
+    fn routes(d: &Dma1, request: &str) -> Vec<u32> {
+        let mut out = Vec::new();
+        d.dma_route_request(request, &mut out);
+        out.iter().map(|r| r.channel).collect()
+    }
+
+    /// F1: a request is hard-wired to its channel. L4: only while the
+    /// channel's CSELR nibble selects it.
+    #[test]
+    fn requests_route_to_fixed_channels_or_by_cselr() {
+        let f1 = Dma1::new().with_request_route("spi1_tx", 3, None);
+        assert_eq!(routes(&f1, "spi1_tx"), vec![3]);
+        assert!(routes(&f1, "spi1_rx").is_empty());
+        let mut l4 = Dma1::new().with_request_route("spi1_tx", 3, Some(1));
+        assert!(routes(&l4, "spi1_tx").is_empty(), "C3S = 0");
+        l4.write_reg(0xA8, 1 << 8);
+        assert_eq!(routes(&l4, "spi1_tx"), vec![3]);
+    }
+
+    /// Each item copies at its programmed widths: PSIZE half-word on the
+    /// peripheral side, MSIZE byte on the memory side, pointers strided by
+    /// the same widths.
+    #[test]
+    fn a_peripheral_item_copies_at_psize_and_msize() {
+        let mut dma = Dma1::new();
+        dma.write_reg(0x0C, 2); // CNDTR1
+        dma.write_reg(0x10, 0x4001_300C); // CPAR1
+        dma.write_reg(0x14, 0x2000_0000); // CMAR1
+                                          // EN | MINC | PINC | PSIZE = 16 bit, peripheral → memory.
+        dma.write_reg(0x08, 1 | (1 << 7) | (1 << 6) | (1 << 8));
+        dma.dma_request(1);
+        let r = dma.tick().dma_requests.unwrap()[0];
+        let t = r.transform.unwrap();
+        assert_eq!((r.src_addr, r.addr), (0x4001_300C, 0x2000_0000));
+        assert_eq!((t.src_width, t.dst_width), (2, 1));
+        dma.dma_request(1);
+        let r = dma.tick().dma_requests.unwrap()[0];
+        assert_eq!((r.src_addr, r.addr), (0x4001_300E, 0x2000_0001));
+    }
+
     #[test]
     fn test_cselr_round_trips_l4_channel_selection() {
         let mut dma = Dma1::new();
@@ -506,12 +610,16 @@ mod tests {
         dma.write_reg(0x14, 0x2000_0020); // CH1 CMAR
         dma.write_reg(0x08, (1 << 0) | (1 << 1) | (1 << 4) | (1 << 6) | (1 << 7));
 
+        // A peripheral channel waits for its peripheral's request.
+        assert!(dma.tick().dma_requests.is_none());
+        dma.dma_request(1);
         let res = dma.tick();
         assert!(res.irq);
         assert!(res.dma_requests.is_some());
         let reqs = res.dma_requests.unwrap();
         assert_eq!(reqs.len(), 1);
-        assert_eq!(reqs[0].direction, DmaDirection::Write);
+        assert_eq!(reqs[0].direction, DmaDirection::Copy);
+        assert_eq!(reqs[0].remaining, Some(0), "the last item");
         assert_eq!(reqs[0].src_addr, 0x2000_0020);
         assert_eq!(reqs[0].addr, 0x2000_0010);
         // CH1 TCIF is bit 1.

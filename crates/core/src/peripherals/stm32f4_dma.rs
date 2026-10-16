@@ -75,8 +75,8 @@
 //!   bus never reports a bus/FIFO error).
 
 use crate::{
-    CycleClock, DmaDirection, DmaRequest, DmaUnitTransform, Peripheral, PeripheralTickResult,
-    SimResult,
+    CycleClock, DmaDirection, DmaRequest, DmaRoute, DmaUnitTransform, Peripheral,
+    PeripheralTickResult, SimResult,
 };
 use std::any::Any;
 
@@ -219,6 +219,12 @@ pub struct StreamDma {
     /// Per-stream NVIC vector numbers (RM0090 / stm32f407xx.h). Stream `s` pends
     /// `stream_irqs[s]`. Empty → fall back to the block's single configured line.
     stream_irqs: Vec<u32>,
+    /// Peripheral request lines, from the chip yaml (`config: { requests: {
+    /// spi1_tx: [[3, 3], [5, 3]], ... } }`): `(request, stream 0..7, channel)`.
+    /// A request drives a stream only while the stream is enabled with
+    /// `SxCR.CHSEL` = that channel (RM0368 Tables 27/28).
+    #[serde(skip)]
+    routes: Vec<(String, u32, u32)>,
     /// Bus-published cycle clock (walk-free machinery). `Some` once the bus
     /// registration choke attaches it; `None` keeps the model on the legacy walk.
     #[serde(skip)]
@@ -243,6 +249,13 @@ impl StreamDma {
     /// Set the per-stream NVIC vector numbers (stream `s` → `irqs[s]`).
     pub fn with_stream_irqs(mut self, irqs: Vec<u32>) -> Self {
         self.stream_irqs = irqs;
+        self
+    }
+
+    /// Wire peripheral request `request` (`spi1_tx`, ...) to `stream` (0..7)
+    /// on channel `chsel` (`SxCR.CHSEL`).
+    pub fn with_request_route(mut self, request: &str, stream: u32, chsel: u32) -> Self {
+        self.routes.push((request.to_string(), stream, chsel));
         self
     }
 
@@ -344,7 +357,9 @@ impl StreamDma {
             if dir == 0b10 && !self.is_dma2 {
                 return;
             }
-            st.active = true;
+            // Only memory-to-memory starts on its own; a peripheral stream
+            // waits for its peripheral's request (RM0090 §10.3.5).
+            st.active = dir == 0b10;
             st.par_ptr = st.par;
             st.mem_ptr = st.active_mem_base();
             st.ndtr_initial = st.ndtr;
@@ -369,11 +384,14 @@ impl StreamDma {
         let mem2mem = dir == 0b10;
 
         // SxPAR is always the peripheral side, SxM0AR/M1AR the memory side.
-        let (src, dst, direction) = match dir {
-            0b01 => (st.mem_ptr, st.par_ptr, DmaDirection::Write), // memory → peripheral
-            0b10 => (st.par_ptr, st.mem_ptr, DmaDirection::Copy),  // memory → memory
-            _ => (st.par_ptr, st.mem_ptr, DmaDirection::Read),     // peripheral → memory
+        // Every direction is a real copy of one data item (the bus reads the
+        // source and writes the destination at the widths below).
+        let (src, dst) = match dir {
+            0b01 => (st.mem_ptr, st.par_ptr), // memory → peripheral
+            0b10 => (st.par_ptr, st.mem_ptr), // memory → memory
+            _ => (st.par_ptr, st.mem_ptr),    // peripheral → memory
         };
+        let direction = DmaDirection::Copy;
         // PSIZE/MSIZE (RM0090 §10.3.10) can each be byte/half-word/word and need
         // not match: a genuine width-converting copy is required, not a
         // byte-at-a-time transfer that silently drops the upper bytes of a
@@ -399,6 +417,7 @@ impl StreamDma {
                 dbx: false,
                 dhx: false,
             }),
+            remaining: (!mem2mem).then(|| st.ndtr - 1),
         };
 
         st.ndtr -= 1;
@@ -446,6 +465,9 @@ impl StreamDma {
                 st.active = mem2mem;
             } else {
                 st.active = false;
+                // RM0090 §10.3.17: EN is cleared by hardware at the end of a
+                // non-circular transfer.
+                st.cr &= !CR_EN;
             }
         } else if !mem2mem {
             // Peripheral-request paced: one item per request, then inert.
@@ -491,6 +513,22 @@ impl StreamDma {
 }
 
 impl Peripheral for StreamDma {
+    /// A word store is ONE register write: split into bytes, a CCR value
+    /// with EN in byte 0 and (say) MEM2MEM in byte 1 would enable the
+    /// channel before its mode bits are written.
+    fn write_u32(&mut self, offset: u64, value: u32) -> SimResult<()> {
+        self.write_reg(offset & !3, value);
+        Ok(())
+    }
+
+    fn write_u16(&mut self, offset: u64, value: u16) -> SimResult<()> {
+        let reg = offset & !3;
+        let shift = (offset & 2) * 8;
+        let v = (self.read_reg(reg) & !(0xFFFF << shift)) | (u32::from(value) << shift);
+        self.write_reg(reg, v);
+        Ok(())
+    }
+
     fn read(&self, offset: u64) -> SimResult<u8> {
         let reg_offset = offset & !3;
         let byte_offset = (offset % 4) as u32;
@@ -507,6 +545,20 @@ impl Peripheral for StreamDma {
         reg_val |= (value as u32) << (byte_offset * 8);
         self.write_reg(reg_offset, reg_val);
         Ok(())
+    }
+
+    fn dma_route_request(&self, request: &str, out: &mut Vec<DmaRoute>) {
+        for (name, stream, chsel) in &self.routes {
+            let Some(st) = self.streams.get(*stream as usize) else {
+                continue;
+            };
+            if name == request && st.cr & CR_EN != 0 && (st.cr >> 25) & 0x7 == *chsel {
+                out.push(DmaRoute {
+                    controller: None,
+                    channel: stream + 1,
+                });
+            }
+        }
     }
 
     fn dma_request(&mut self, request_id: u32) {
@@ -617,6 +669,45 @@ mod tests {
     }
     fn m0ar(s: u64) -> u64 {
         cr(s) + 0x0C
+    }
+
+    fn routes(d: &StreamDma, request: &str) -> Vec<u32> {
+        let mut out = Vec::new();
+        d.dma_route_request(request, &mut out);
+        out.iter().map(|r| r.channel).collect()
+    }
+
+    /// A request reaches a stream only while it is enabled on the request's
+    /// channel (SxCR.CHSEL), and a peripheral stream moves nothing until a
+    /// request comes: one copy item per request, carrying the NDTR left.
+    #[test]
+    fn requests_route_by_chsel_and_pace_a_peripheral_stream() {
+        let mut d = StreamDma::new()
+            .as_dma2()
+            .with_request_route("spi1_tx", 3, 3)
+            .with_request_route("spi1_tx", 5, 3);
+        assert!(routes(&d, "spi1_tx").is_empty(), "no stream enabled");
+        d.write_reg(ndtr(3), 2);
+        d.write_reg(par(3), 0x4001_300C);
+        d.write_reg(m0ar(3), 0x2000_0000);
+        // EN | DIR = memory-to-peripheral | MINC, CHSEL = 2: the wrong channel.
+        d.write_reg(cr(3), CR_EN | (0b01 << CR_DIR_SHIFT) | CR_MINC | (2 << 25));
+        assert!(routes(&d, "spi1_tx").is_empty(), "CHSEL selects channel 2");
+        d.write_reg(cr(3), 0);
+        d.write_reg(cr(3), CR_EN | (0b01 << CR_DIR_SHIFT) | CR_MINC | (3 << 25));
+        assert_eq!(routes(&d, "spi1_tx"), vec![4], "stream 3 is request id 4");
+        assert!(d.tick().dma_requests.is_none(), "waits for its request");
+        d.dma_request(4);
+        let r = d.tick().dma_requests.unwrap();
+        assert_eq!(
+            (r[0].src_addr, r[0].addr, r[0].direction, r[0].remaining),
+            (0x2000_0000, 0x4001_300C, DmaDirection::Copy, Some(1))
+        );
+        assert!(d.tick().dma_requests.is_none(), "one item per request");
+        d.dma_request(4);
+        let r = d.tick().dma_requests.unwrap();
+        assert_eq!((r[0].src_addr, r[0].remaining), (0x2000_0001, Some(0)));
+        assert_eq!(d.read_reg(cr(3)) & CR_EN, 0, "EN clears at the end");
     }
 
     #[test]

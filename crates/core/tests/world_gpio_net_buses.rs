@@ -374,6 +374,67 @@ mod spi {
     }
 }
 
+/// SPI with DMA on both ends (`src/spi_dma_master.c`, `src/spi_dma_slave.c`):
+/// SPI1's TXDMAEN / RXDMAEN requests reach DMA1 through the G0's DMAMUX, and
+/// neither CPU touches DR. The bytes still cross bit by bit at the pads.
+mod spi_dma {
+    use super::*;
+
+    pub(super) const MASTER_TX: [u8; 8] = [0xA5, 0x3C, 0x5A, 0xC3, 0x0F, 0xF0, 0x81, 0x7E];
+    pub(super) const SLAVE_TX: [u8; 8] = [0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88];
+    /// DMA1_ISR with channels 1 and 2 complete: GIF | TCIF | HTIF on each.
+    pub(super) const ISR_BOTH_DONE: u32 = 0x77;
+
+    #[test]
+    fn a_dma_master_and_a_dma_slave_exchange_a_buffer_bit_by_bit() {
+        let mut world = build("env-spi-dma.yaml", |s| s);
+        run_us(&mut world, 1500);
+
+        let a = result(&world, "a", 16);
+        assert_eq!(a[15], 1, "master finished: {a:x?}");
+        assert_eq!(
+            &a[..8],
+            SLAVE_TX.map(u32::from).as_slice(),
+            "the master's RX channel moved what the slave put on MISO"
+        );
+        assert_eq!(a[8], ISR_BOTH_DONE, "both channels complete");
+        assert_eq!((a[9], a[10]), (0, 0), "CNDTR drained");
+        assert_eq!(
+            a[11] & 0x1FFF,
+            0x0002,
+            "SR: TXE, FIFOs empty, no OVR, not busy"
+        );
+
+        let b = result(&world, "b", 16);
+        assert_eq!(b[15], 1, "slave finished: {b:x?}");
+        assert_eq!(
+            &b[..8],
+            MASTER_TX.map(u32::from).as_slice(),
+            "the slave's RX channel moved what the master put on MOSI"
+        );
+        assert_eq!(b[8], ISR_BOTH_DONE);
+        assert_eq!((b[9], b[10]), (0, 0));
+        assert_eq!(b[11] & (1 << 6), 0, "no OVR");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        // 8 frames x 8 bits x 2 SCK edges, back to back.
+        assert_eq!(net(&reports, "sck").edges, 128);
+        assert_eq!(net(&reports, "cs").edges, 2);
+        assert!(net(&reports, "cs").level, "deselected at the end");
+        assert_eq!(net(&reports, "mosi").edges, data_edges(&MASTER_TX, false));
+        // MISO: the eight answers. After the last one the slave's FIFO is
+        // empty and it shifts its last received bit pattern (MSB of 0x7E,
+        // a 0), then the pull-down: no further edge, as 0x88 ends in 0.
+        assert_eq!(net(&reports, "miso").edges, data_edges(&SLAVE_TX, false));
+    }
+
+    #[test]
+    fn the_dma_exchange_does_not_depend_on_node_order_or_round_size() {
+        assert_order_and_round_independent("env-spi-dma.yaml", |s| s, ["a", "b"], 1500, 16);
+    }
+}
+
 /// SPI frame shapes (modes 1-3, LSB first) and the slave's transmit side
 /// (TXE interrupt, underrun), each a pair of firmware variants built from
 /// `src/spi_master.c` / `src/spi_slave.c` (`build.sh`).
@@ -1816,5 +1877,105 @@ mod esp32c3 {
             3000,
             8,
         );
+    }
+}
+
+/// The ESP32-C3 / C6 GP-SPI2 moving its data by GDMA (`src/esp32c_spi_dma_*.c`)
+/// against a G071 moving its own by DMA (`src/spi_dma_*.c`), both roles.
+mod esp32c3_dma {
+    use super::esp32c3::c6;
+    use super::spi_dma::{ISR_BOTH_DONE, MASTER_TX, SLAVE_TX};
+    use super::*;
+
+    /// `SPI_DMA_INT_RAW.TRANS_DONE`.
+    const TRANS_DONE: u32 = 1 << 12;
+    /// The IN descriptor after the transfer: back with the CPU (owner 0),
+    /// `suc_eof`, 8 bytes received into its 8-byte buffer.
+    const IN_DESC_DONE: u32 = (1 << 30) | (8 << 12) | 8;
+
+    fn same(yaml: String) -> String {
+        yaml
+    }
+
+    fn spi_dma_master(chip: fn(String) -> String) {
+        let mut world = build("env-spi-esp32c3-dma.yaml", chip);
+        run_us(&mut world, 1500);
+        let esp = result(&world, "esp", 16);
+        assert_eq!(esp[15], 1, "master finished: {esp:x?}");
+        assert_eq!(
+            &esp[..8],
+            SLAVE_TX.map(u32::from).as_slice(),
+            "the IN descriptor's buffer holds what the slave put on MISO"
+        );
+        assert_ne!(esp[8] & TRANS_DONE, 0, "TRANS_DONE");
+        assert_eq!(esp[9], IN_DESC_DONE, "IN descriptor written back");
+        let b = result(&world, "b", 16);
+        assert_eq!(b[15], 1, "slave finished: {b:x?}");
+        assert_eq!(&b[..8], MASTER_TX.map(u32::from).as_slice());
+        assert_eq!(b[8], ISR_BOTH_DONE);
+        assert_eq!((b[9], b[10]), (0, 0));
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        assert_eq!(net(&reports, "sck").edges, 128);
+        // CS0 frames the whole transaction.
+        assert_eq!(net(&reports, "cs").edges, 2);
+        assert!(net(&reports, "cs").level, "deselected at the end");
+        assert_eq!(net(&reports, "mosi").edges, data_edges(&MASTER_TX, false));
+        // The G071's eight answers; its FIFO is then empty and it shifts the
+        // MSB of the last byte it received (0x7E: 0), then the pull-down.
+        assert_eq!(net(&reports, "miso").edges, data_edges(&SLAVE_TX, false));
+    }
+
+    fn spi_dma_slave(chip: fn(String) -> String) {
+        let mut world = build("env-spi-esp32c3-dma-slave.yaml", chip);
+        run_us(&mut world, 1500);
+        let b = result(&world, "b", 16);
+        assert_eq!(b[15], 1, "master finished: {b:x?}");
+        assert_eq!(&b[..8], SLAVE_TX.map(u32::from).as_slice());
+        assert_eq!(b[8], ISR_BOTH_DONE);
+        let esp = result(&world, "esp", 16);
+        assert_eq!(esp[15], 1, "slave finished: {esp:x?}");
+        assert_eq!(&esp[..8], MASTER_TX.map(u32::from).as_slice());
+        assert_eq!(esp[8], 64, "SLAVE1.DATA_BITLEN");
+        assert_ne!(esp[9] & TRANS_DONE, 0, "TRANS_DONE when CS rose");
+        assert_eq!(esp[10], IN_DESC_DONE);
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        assert_eq!(net(&reports, "sck").edges, 128);
+        assert_eq!(net(&reports, "cs").edges, 2);
+        assert_eq!(net(&reports, "mosi").edges, data_edges(&MASTER_TX, false));
+        // The slave drives MISO only while selected: its eight answers (0x88
+        // ends in 0), then the pull-down when it lets go.
+        assert_eq!(net(&reports, "miso").edges, data_edges(&SLAVE_TX, false));
+    }
+
+    #[test]
+    fn an_esp32c3_gdma_master_exchanges_a_buffer_with_a_g071_dma_slave() {
+        spi_dma_master(same);
+    }
+
+    #[test]
+    fn a_g071_dma_master_exchanges_a_buffer_with_an_esp32c3_gdma_slave() {
+        spi_dma_slave(same);
+    }
+
+    #[test]
+    fn an_esp32c6_gdma_master_exchanges_a_buffer_with_a_g071_dma_slave() {
+        spi_dma_master(c6);
+    }
+
+    #[test]
+    fn a_g071_dma_master_exchanges_a_buffer_with_an_esp32c6_gdma_slave() {
+        spi_dma_slave(c6);
+    }
+
+    #[test]
+    fn gdma_exchanges_do_not_depend_on_node_order_or_round_size() {
+        for env in ["env-spi-esp32c3-dma.yaml", "env-spi-esp32c3-dma-slave.yaml"] {
+            assert_order_and_round_independent(env, same, ["esp", "b"], 1500, 16);
+        }
+        assert_order_and_round_independent("env-spi-esp32c3-dma.yaml", c6, ["esp", "b"], 1500, 16);
     }
 }

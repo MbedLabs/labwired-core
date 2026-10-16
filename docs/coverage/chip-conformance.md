@@ -47,7 +47,7 @@ Reg match = verifiable cold-reset registers reproduced. "Excluded" = registers a
 | ra4m1 | **L1** | ✓ | 7 | — | — | firmware_survival::test_ra4m1_uno_r4_smoke_survival |
 | imxrt1064 | **L1** | ✓ | 6 | — | — | firmware_survival::test_imxrt1064_teensy41_smoke_survival |
 | stm32f746 | **L1** | ✓ | 17 | — | — | firmware_survival::test_stm32f746_discovery_smoke_survival |
-| stm32g071 | **L1** | ✓ | 40 | — | — | firmware_survival::test_nucleo_g071rb_smoke_survival |
+| stm32g071 | **L1** | ✓ | 41 | — | — | firmware_survival::test_nucleo_g071rb_smoke_survival |
 
 ## Declared platforms without a model
 
