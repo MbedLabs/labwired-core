@@ -409,6 +409,9 @@ const LCD_BYTES_PER_TICK: usize = 4096;
 /// write the pump cannot observe, so it re-polls instead of sleeping forever.
 const CAM_IDLE_POLL_CYCLES: u64 = 2_400;
 
+/// Event token for the camera pump's scheduler wake-ups.
+const CAM_WAKE_TOKEN: u32 = 1;
+
 /// Maximum bytes transferred per `tick_with_bus` call for a coupled channel.
 ///
 /// Bounds latency per tick to a realistic burst size. 64 bytes matches the
@@ -558,6 +561,8 @@ pub struct Esp32s3Gdma {
     /// Earliest cycle at which the camera pump has bytes to move; lets the
     /// pump skip the peripheral swap on ticks where nothing has arrived.
     cam_next_poll: u64,
+    /// A camera-pump wake-up is armed with the scheduler.
+    cam_scheduled: bool,
 
     /// Bus-published cycle clock (walk-free level export).
     clock: Option<CycleClock>,
@@ -574,6 +579,7 @@ impl Esp32s3Gdma {
             dma_in_ch0_source,
             cam_rx_armed: false,
             cam_next_poll: 0,
+            cam_scheduled: false,
 
             clock: None,
         }
@@ -1419,29 +1425,38 @@ impl Esp32s3Gdma {
     /// both directions auto-complete as they did before LCD_CAM coupling
     /// existed, so firmware cannot hang waiting for a peripheral that was never
     /// wired.
-    fn pump_lcd_cam(&mut self, bus: &mut dyn Bus) {
+    ///
+    /// `with_tx` / `with_cam` select the directions this call services: the
+    /// bus-tick pass drives TX (and, in a non-scheduler build, the camera);
+    /// under the event scheduler the camera is driven from this model's own
+    /// wake-ups instead (see [`Self::cam_rx_pending`]).
+    fn pump_lcd_cam(&mut self, bus: &mut dyn Bus, with_tx: bool, with_cam: bool) {
         use crate::bus::SystemBus;
         use crate::peripherals::esp32s3::lcd_cam::Esp32s3LcdCam;
         use crate::peripherals::stub::StubPeripheral;
 
-        let tx_idx = self.channels.iter().position(|c| {
-            c.tx.pending_coupled && DmaPeripheral::from_sel(c.tx.peri_sel) == DmaPeripheral::LcdCam
-        });
-        let rx_idx = self.channels.iter().position(|c| {
-            c.rx.pending_coupled && DmaPeripheral::from_sel(c.rx.peri_sel) == DmaPeripheral::LcdCam
-        });
+        let tx_idx = if with_tx {
+            self.channels.iter().position(|c| {
+                c.tx.pending_coupled
+                    && DmaPeripheral::from_sel(c.tx.peri_sel) == DmaPeripheral::LcdCam
+            })
+        } else {
+            None
+        };
+        let rx_idx = self.cam_rx_index();
         // The camera side is visited to arm, to disarm after a stop, and
         // whenever bytes can have arrived — not on every tick in between, which
         // would cost a lend per CPU cycle for a stream that delivers a byte
         // every dozen.
-        let cam_due = match rx_idx {
-            None => self.cam_rx_armed,
-            Some(i) => {
-                let now = self.clock.as_ref().map_or(0, CycleClock::now);
-                !self.cam_rx_armed
-                    || (!Self::eof_unacked(&self.channels[i].rx) && now >= self.cam_next_poll)
-            }
-        };
+        let cam_due = with_cam
+            && match rx_idx {
+                None => self.cam_rx_armed,
+                Some(i) => {
+                    let now = self.clock.as_ref().map_or(0, CycleClock::now);
+                    !self.cam_rx_armed
+                        || (!Self::eof_unacked(&self.channels[i].rx) && now >= self.cam_next_poll)
+                }
+            };
         if tx_idx.is_none() && !cam_due {
             return;
         }
@@ -1547,6 +1562,44 @@ impl Esp32s3Gdma {
             tx.pending_coupled = false;
             tx.coupled_buf_offset = 0;
         }
+    }
+
+    /// The channel whose IN direction is receiving from LCD_CAM, if any.
+    fn cam_rx_index(&self) -> Option<usize> {
+        self.channels.iter().position(|c| {
+            c.rx.pending_coupled && DmaPeripheral::from_sel(c.rx.peri_sel) == DmaPeripheral::LcdCam
+        })
+    }
+
+    /// The camera receive needs servicing: a link is started, or the pump
+    /// still has to tell LCD_CAM that capture stopped.
+    ///
+    /// Under the event scheduler this is deliberately NOT part of
+    /// `needs_bus_tick`. A camera link stays started for as long as the driver
+    /// captures, and a bus-tick member is visited at every machine boundary,
+    /// which keeps the CPU from batching at all: the ESP32-S3 ran about five
+    /// times slower per instruction the moment frames started flowing. The
+    /// stream's next byte burst has a known cycle, so the pump runs from this
+    /// model's own wake-up at that cycle instead (`take_scheduled_events` /
+    /// `on_event`).
+    fn cam_rx_pending(&self) -> bool {
+        self.cam_rx_armed || self.cam_rx_index().is_some()
+    }
+
+    /// Cycles until the camera pump should run again, or `None` when it has
+    /// nothing to do until a register write wakes it (an unacknowledged EOF
+    /// waits for the ISR's `INT_CLR`; a stopped link for the next start).
+    fn cam_next_wake(&self) -> Option<u64> {
+        if !self.cam_rx_pending() {
+            return None;
+        }
+        if let Some(i) = self.cam_rx_index() {
+            if self.cam_rx_armed && Self::eof_unacked(&self.channels[i].rx) {
+                return None;
+            }
+        }
+        let now = self.clock.as_ref().map_or(0, CycleClock::now);
+        Some(self.cam_next_poll.saturating_sub(now).max(1))
     }
 
     /// `IN_SUC_EOF` latched and enabled: the CPU has an EOF to acknowledge.
@@ -1668,7 +1721,8 @@ impl Esp32s3Gdma {
         self.pump_spi(bus, DmaPeripheral::Spi3, SPI3_S3_NAME);
         self.pump_i2s(bus, DmaPeripheral::I2s0, I2S0_S3_NAME);
         self.pump_i2s(bus, DmaPeripheral::I2s1, I2S1_S3_NAME);
-        self.pump_lcd_cam(bus);
+        let cam_from_bus_tick = !self.uses_scheduler();
+        self.pump_lcd_cam(bus, true, cam_from_bus_tick);
 
         for (ch_idx, c) in self.channels.iter_mut().enumerate() {
             // ── UHCI0 (UART) coupled OUT (TX) ────────────────────────────
@@ -1781,17 +1835,61 @@ impl Peripheral for Esp32s3Gdma {
     /// `tick_with_bus` so the peripheral pumps (UART, SPI2/3, I2S0/1) can
     /// make progress. Cleared per-direction when the transfer completes.
     fn needs_bus_tick(&self) -> bool {
-        // `cam_rx_armed` keeps one more pass alive after a camera link stop,
-        // so the pump can tell LCD_CAM nobody is capturing any more.
-        self.cam_rx_armed
-            || self
-                .channels
-                .iter()
-                .any(|c| c.pending_m2m || c.rx.pending_coupled || c.tx.pending_coupled)
+        // The camera receive is event-driven under the scheduler (see
+        // `cam_rx_pending`); without one it rides this pass, and
+        // `cam_rx_armed` keeps one more pass alive after a link stop so the
+        // pump can tell LCD_CAM nobody is capturing any more.
+        let cam_on_bus_tick = !self.uses_scheduler();
+        (cam_on_bus_tick && self.cam_rx_armed)
+            || self.channels.iter().any(|c| {
+                let cam_rx = c.rx.pending_coupled
+                    && DmaPeripheral::from_sel(c.rx.peri_sel) == DmaPeripheral::LcdCam;
+                c.pending_m2m
+                    || c.tx.pending_coupled
+                    || (c.rx.pending_coupled && (cam_on_bus_tick || !cam_rx))
+            })
     }
 
     fn tick_with_bus(&mut self, bus: &mut dyn Bus) {
         Esp32s3Gdma::do_tick_with_bus(self, bus);
+    }
+
+    /// Arms the camera pump's wake-up. Harvested after every MMIO write to
+    /// this block, which covers each moment the camera can become due: the
+    /// link start and stop, and the ISR's `INT_CLR` that releases an EOF.
+    fn take_scheduled_events(&mut self) -> Vec<(u64, u32)> {
+        if !self.uses_scheduler() || self.cam_scheduled {
+            return Vec::new();
+        }
+        match self.cam_next_wake() {
+            Some(delay) => {
+                self.cam_scheduled = true;
+                vec![(delay, CAM_WAKE_TOKEN)]
+            }
+            None => Vec::new(),
+        }
+    }
+
+    fn on_event(
+        &mut self,
+        event_token: u32,
+        _sched: &mut crate::sched::EventScheduler,
+        bus: &mut dyn Bus,
+    ) -> crate::sched::EventResult {
+        if event_token != CAM_WAKE_TOKEN {
+            return crate::sched::EventResult::default();
+        }
+        self.cam_scheduled = false;
+        self.pump_lcd_cam(bus, false, true);
+        let reschedule = self.cam_next_wake();
+        self.cam_scheduled = reschedule.is_some();
+        let mut explicit_irqs = Vec::new();
+        self.matrix_irq_sources_into(&mut explicit_irqs);
+        crate::sched::EventResult {
+            explicit_irqs,
+            reschedule_delay: reschedule,
+            ..Default::default()
+        }
     }
 
     /// Walk-free: once the bus attaches a cycle clock under `event-scheduler`,

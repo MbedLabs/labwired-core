@@ -25,7 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   follow the window and format the driver programs (RGB565, YUV422, Y8);
   the scene is synthetic and stimulus-driven (`pattern`, `brightness`,
   `motion`). Espressif's `take_picture` example runs unmodified apart from
-  board pins. JPEG is not modelled (no frames). Tested in
+  board pins. JPEG is not modelled (no frames). Under the event scheduler
+  the camera's GDMA pump runs from its own wake-ups rather than the
+  per-boundary bus-tick pass, so the CPU keeps batching while frames flow
+  (camera-to-ST7789 preview: ~3x faster per frame). Tested in
   `tests/esp32s3_camera_dvp.rs`.
 
 - Hardware chip select on `gpio_net`s for more parts. The STM32L476 SPI pad
@@ -201,7 +204,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ESP32-S3 / C3 GP-SPI logic-analyzer narration no longer re-narrates a held
   burst on every cycle while it cannot fit (`LevelsOnly`); it waits for the
   cycles it was short. A large `SPI.writeBytes` (a camera frame to a
-  display at 40 MHz) made the run quadratic in the burst length.
+  display at 40 MHz) made the run quadratic in the burst length. A wire
+  nobody records (no logic-capture tap, no `gpio_net`) now narrates only a
+  burst's last byte, which leaves the lines exactly where the whole burst
+  would; a tap or a net still gets every edge.
 - STM32 DMA peripheral transfers move data. The channel (`dma`) and stream
   (`stm32f4_dma`) models emitted a memory-to-peripheral item as a write of 0
   and a peripheral-to-memory item as a read whose value was dropped; every

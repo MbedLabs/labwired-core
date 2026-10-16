@@ -7307,13 +7307,16 @@ boards:
     # IN direction couples to LCD_CAM (PERI_SEL 5) and honours IN_CHECK_OWNER;
     # IN_LINK.STOP ends a camera receive. LCD_CAM is not in the 2026-08-09
     # asserted windows; GDMA is, and no GDMA reset value or register readback
-    # changed (new state is internal to the coupled pump).
+    # changed (new state is internal to the coupled pump; under the event
+    # scheduler the camera pump runs from GDMA's own wake-ups instead of the
+    # per-boundary bus-tick pass, which is timing of the sim, not a register).
     # Ran: cargo test -p labwired-core --lib (default and event-scheduler),
-    # tests/esp32s3_camera_dvp.rs, tests/esp32s3_lcd_i80_pixels.rs.
+    # tests/esp32s3_camera_dvp.rs, tests/esp32s3_lcd_i80_pixels.rs,
+    # tests/esp32s3_gdma_oracle.rs. Approved by the maintainer.
     # ACK, NOT A CAPTURE. The live re-capture owed above is still owed, and a
     # live LCD_CAM camera capture would be new evidence, not a re-capture.
     drift_ack: 2026-10-16
-    drift_ack_digest: 1c7de137c9347dfdb53ff9b8a80edb2b36fee62ee79760c8538471aaae1621de
+    drift_ack_digest: e02ef9c65693f1447fad331d6723fe31ed591ed9af67cb3869a54d65954cf583
 
   - id: esp32s3-zero
     # Board variant of esp32s3: same silicon (LX7), 4 MiB flash / 480 KiB RAM.

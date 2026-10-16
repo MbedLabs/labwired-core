@@ -316,7 +316,20 @@ impl EspSpiWire {
             ],
             self.bit_time,
         );
-        for &(byte, framing) in &self.words {
+        // Nobody records this wire's edges — no capture tap, no `gpio_net` — so
+        // the only thing anyone can observe is where the lines END (a pad
+        // read). Every frame drives all three lines itself, so the last byte
+        // alone leaves them exactly where the whole burst would. Narrating
+        // every byte here cost a third of a camera-to-display frame loop: a
+        // 38 400-byte `writeBytes` is ~600 000 planned edges per frame that
+        // nothing reads. A tap or a net brings the full narration back.
+        let observed = lines.tap_clock().is_some() || lines.any_on_net();
+        let narrated = if observed {
+            &self.words[..]
+        } else {
+            &self.words[self.words.len() - 1..]
+        };
+        for &(byte, framing) in narrated {
             narrator.frame(u16::from(byte), framing);
         }
         if let NarrationFit::LevelsOnly {
@@ -430,7 +443,9 @@ mod tests {
     #[test]
     fn a_burst_too_long_for_the_run_waits_for_its_deficit() {
         let mut wire = EspSpiWire::default();
-        let _ = wire.pad_lines_arc(false);
+        // A watched wire (here: on a net) is narrated in full; an unwatched
+        // one only narrates its last byte and never runs short.
+        wire.pad_lines_arc(false).mark_on_net(LINE_SCK);
         let now = 100;
         for _ in 0..WIRE_BURST_CAP + 1 {
             wire.push(0xA5, SpiFraming::default(), Some(2), now);
@@ -449,5 +464,45 @@ mod tests {
             !wire.is_pending(),
             "with the room it lacked, the burst publishes"
         );
+    }
+
+    /// With no tap and no net only the final levels are observable, and the
+    /// shortcut that narrates just the last byte must leave the lines exactly
+    /// where narrating the whole burst does.
+    #[test]
+    fn an_unwatched_wire_ends_where_the_whole_burst_would() {
+        for bytes in [
+            vec![0xA5u8, 0x3C, 0xFF, 0x00, 0x81],
+            vec![0x81, 0x00],
+            vec![0xFF; 300],
+        ] {
+            let mut wire = EspSpiWire::default();
+            let lines = wire.pad_lines_arc(false);
+            for &b in &bytes {
+                wire.push(b, SpiFraming::default(), Some(4), 0);
+            }
+            wire.flush(10_000_000, false);
+            assert!(!wire.is_pending());
+
+            let full = PadLines::new(SPI_LINES, &[false, false, true]);
+            let mut narrator = SpiNarrator::with_lines(
+                LINE_SCK,
+                LINE_MOSI,
+                Some(LINE_CS),
+                &[false, false, true],
+                4,
+            );
+            for &b in &bytes {
+                narrator.frame(u16::from(b), SpiFraming::default());
+            }
+            let _ = narrator.emit_between(&full, 0, 10_000_000);
+            for line in [LINE_SCK, LINE_MOSI, LINE_CS] {
+                assert_eq!(
+                    lines.level(line),
+                    full.level(line),
+                    "line {line} after {bytes:02x?}"
+                );
+            }
+        }
     }
 }
