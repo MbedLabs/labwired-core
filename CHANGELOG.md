@@ -25,42 +25,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once its per-test records are summed. `labwired test --coverage` also writes
   `coverage.cobertura.xml` (valid against `coverage-04.dtd`) and names each
   run's `TN:` after its script.
-
-### Changed
-- Firmware coverage paths: LCOV `SF:`, Cobertura `filename` and the JSON's
-  new `path` field carry the source's directory (`src/main.c`, not
-  `main.c`), relative to the build directory most of the line table comes
-  from; files of other compilation units (a registry crate, a vendor SDK)
-  keep their absolute path. Update `genhtml --prefix` / editor path
-  mappings that relied on bare names. The JSON's `file` keeps the bare name.
-- The coverage JSON's `branches` lists every conditional branch in the ELF
-  (unreached ones with `reached: false`), so UIs see more entries and a
-  lower, honest branch percentage.
-- `Session::restore` gives a coverage report equal to a straight run to the
-  snapshot; the browser playground keeps accumulating across a rewind, as
-  before.
-
-### Fixed
-- Firmware coverage branch numbers were wrong on every ISA but Thumb: the
-  fall-through address came from a Thumb-only instruction-length rule, so a
-  RISC-V run reported ~200 "branch sites" for firmware with 19. The observer
-  now records `(from, to)` step counts with no ISA assumption.
-- Branch coverage counted unconditional jumps, calls and returns as
-  half-covered branches, and dropped branches the run never reached.
-- Coverage source files are keyed by their path with directory
-  (`src/main.c`), not the bare name: two `main.c` files no longer merge, and
-  branch data is no longer lost when the compiler records the source with a
-  directory (a clang build of `src/brake_ecu.c` produced LCOV with no `BRDA`
-  at all).
-- `Session::restore` replayed the run into the coverage observer on top of
-  the counts it already had. The playground's restore no longer records the
-  rewind as a jump, and on dual-core chips the two cores' instructions no
-  longer chain into made-up jumps (new `SimulationObserver::on_core_switch`).
-- Line-table sequences of functions the linker discarded (relocated to
-  address 0) no longer count as statements or claim the live code that sits
-  at low addresses; a sequence starting where another ends is found.
-- Plain C function names were passed through the C++ demangler (`f` became
-  `float`, `d` became `double`).
+- Hardware chip select on `gpio_net`s for more parts. The STM32L476 SPI pad
+  table routes NSS (SPI1 PA4/PA15/PE12 and SPI2 PB9/PB12/PD0 on AF5, SPI3
+  PA4/PA15 on AF6), and the STM32G474, STM32WB55 and STM32L073 get their own
+  SPI tables with NSS (`pad_map: stm32g4` / `stm32wb` / `stm32l0`, read off
+  ST's open pin data): until now the G4 and WB used the L4 table (whose
+  PE12-PE15/AF5 rows are SPI4 on a G4) and the L073 the F4 AF5 one (its SPI1
+  is on AF0). A FIFO master with `CR2.SSOE=1` drives NSS (with `NSSP`
+  pulses) and a slave with `SSM=0` takes it from its pad. The nRF52840 gains
+  SPIM3 at 0x4002F000 (`spi3`; the inert ACL stub that sat there moves to the
+  reserved 0x4002E000), and SPIM3 on a net drives its own chip select and
+  D/CX: `PSEL.CSN`, `CSNPOL`, `IFTIMING.CSNDUR` (CSN-to-SCK, SCK-to-CSN and
+  CSN-high times) and `PSELDCX`/`DCXCNT`. The nRF52 SPIM register map now
+  decodes `IFTIMING.RXDELAY`/`CSNDUR`, `CSNPOL`, `PSELDCX` and `DCXCNT`
+  (0x560-0x570), and `PSEL.CSN`/`PSELDCX` reset disconnected, as the SVD
+  says. Tested in `examples/gpio-net-buses` (`env-spi-l4-nss.yaml` on an L476
+  and a G474 pair, `env-spi-nrf52-spim3.yaml` against a G071 on hardware
+  NSS), each re-run with the nodes swapped and with 37 ns rounds.
 - Classic ESP32 LEDC drives its pads. Each of the 16 channels generates its
   PWM waveform (TRM §14.2: REF_TICK / APB / RTC8M source, Q8 `DIV_NUM`,
   `2^DUTY_RES` period, `HPOINT`/`DUTY`, duty latched at the next overflow,
@@ -156,7 +137,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Every new exchange is checked for the same results and wire history
     with the nodes swapped and with 37 ns rounds.
 
+### Changed
+- Firmware coverage paths: LCOV `SF:`, Cobertura `filename` and the JSON's
+  new `path` field carry the source's directory (`src/main.c`, not
+  `main.c`), relative to the build directory most of the line table comes
+  from; files of other compilation units (a registry crate, a vendor SDK)
+  keep their absolute path. Update `genhtml --prefix` / editor path
+  mappings that relied on bare names. The JSON's `file` keeps the bare name.
+- The coverage JSON's `branches` lists every conditional branch in the ELF
+  (unreached ones with `reached: false`), so UIs see more entries and a
+  lower, honest branch percentage.
+- `Session::restore` gives a coverage report equal to a straight run to the
+  snapshot; the browser playground keeps accumulating across a rewind, as
+  before.
+
 ### Fixed
+- Firmware coverage branch numbers were wrong on every ISA but Thumb: the
+  fall-through address came from a Thumb-only instruction-length rule, so a
+  RISC-V run reported ~200 "branch sites" for firmware with 19. The observer
+  now records `(from, to)` step counts with no ISA assumption.
+- Branch coverage counted unconditional jumps, calls and returns as
+  half-covered branches, and dropped branches the run never reached.
+- Coverage source files are keyed by their path with directory
+  (`src/main.c`), not the bare name: two `main.c` files no longer merge, and
+  branch data is no longer lost when the compiler records the source with a
+  directory (a clang build of `src/brake_ecu.c` produced LCOV with no `BRDA`
+  at all).
+- `Session::restore` replayed the run into the coverage observer on top of
+  the counts it already had. The playground's restore no longer records the
+  rewind as a jump, and on dual-core chips the two cores' instructions no
+  longer chain into made-up jumps (new `SimulationObserver::on_core_switch`).
+- Line-table sequences of functions the linker discarded (relocated to
+  address 0) no longer count as statements or claim the live code that sits
+  at low addresses; a sequence starting where another ends is found.
+- Plain C function names were passed through the C++ demangler (`f` became
+  `float`, `d` became `double`).
 - A peripheral answering a `gpio_net` edge on a timed core (the nRF52's
   Cortex-M4) stamped its answer with the bus cycle, which lags the core
   between peripheral ticks: the answer's time then depended on the world's
