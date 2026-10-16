@@ -387,6 +387,14 @@ pub struct Esp32Gpio {
     /// Last [`PadSource`] reported to the observers, per pad. Only read and
     /// written while an observer is installed.
     pad_sources: [PadSource; PAD_COUNT as usize],
+    /// The RTC IO MUX this port shares its RTC-capable pads with
+    /// (GPIO0/2/4/12..15/25..27/32..39), handed over by the bus at attach
+    /// ([`Peripheral::attach_rtc_io_pads`]). A pad whose `MUX_SEL` is set is
+    /// driven by the RTC GPIO, not by `GPIO_OUT` / `GPIO_ENABLE` or the
+    /// matrix, and its pull follows `RUE` / `RDE` in either domain (errata
+    /// 3.6). See [`crate::peripherals::esp_rtc_io`]. `None`: no RTC_IO on the
+    /// bus, every pad digital and unpulled, as before it existed.
+    rtc: Option<Arc<crate::peripherals::esp_rtc_io::RtcIoPads>>,
 }
 
 impl Esp32Gpio {
@@ -415,7 +423,72 @@ impl Esp32Gpio {
             anchor_tick: 0,
             observers: Vec::new(),
             pad_sources: [PadSource::Latch; PAD_COUNT as usize],
+            rtc: None,
         }
+    }
+
+    /// The RTC IO MUX's view of the pads; all-digital without RTC_IO.
+    #[inline]
+    fn rtc_view(&self) -> crate::peripherals::esp_rtc_io::RtcPadView {
+        self.rtc.as_ref().map(|r| r.view()).unwrap_or_default()
+    }
+
+    /// `true` when the RTC IO MUX owns `pin` (`MUX_SEL` = 1).
+    #[inline]
+    fn in_rtc(&self, pin: u8) -> bool {
+        self.rtc
+            .as_ref()
+            .is_some_and(|r| pin < PAD_COUNT && r.rtc_mask() & (1u64 << pin) != 0)
+    }
+
+    /// `GPIO_IN` / `GPIO_IN1` of `bank` with the RTC IO MUX applied to the
+    /// `word` the digital side reads (`driving` its driving pads): a released
+    /// pad nothing outside holds sits at the RTC_IO pull (errata 3.6), and a
+    /// pad the RTC IO MUX owns reads what its input buffer passes on
+    /// (`FUN_IE`), the digital input path still being wired to the pad (S3 TRM
+    /// Figure 6.3-1, classic TRM §6.5.2; see `esp_rtc_io`).
+    fn with_rtc(&self, bank: usize, word: u32, driving: u32) -> u32 {
+        let v = self.rtc_view();
+        if v.is_idle() {
+            return word;
+        }
+        let shift = 32 * bank as u32;
+        let width = if bank == 0 { u32::MAX } else { BANK1_MASK };
+        let ext = if bank == 0 {
+            self.ext_mask
+        } else {
+            self.ext_mask1
+        };
+        let up = (v.pull_up >> shift) as u32 & width;
+        let down = (v.pull_down >> shift) as u32 & width;
+        let floating = !driving & !ext;
+        let mut word = (word & !(floating & (up | down))) | (floating & up);
+        let mut rtc = (v.rtc >> shift) as u32 & width;
+        while rtc != 0 {
+            let bit = rtc.trailing_zeros();
+            rtc &= rtc - 1;
+            let pin = (shift + bit) as u8;
+            if v.input(pin, PinPort::external(self, pin), self.input_data(pin)) {
+                word |= 1 << bit;
+            } else {
+                word &= !(1 << bit);
+            }
+        }
+        word
+    }
+
+    /// Tell the RTC IO MUX what the pads see from here (the outside's levels,
+    /// `GPIO_IN`), for `RTC_GPIO_IN` and its interrupts. After every pad
+    /// mutation on this side.
+    fn sync_rtc_inputs(&self) {
+        let Some(rtc) = &self.rtc else {
+            return;
+        };
+        rtc.set_inputs(crate::peripherals::esp_rtc_io::PadInputs {
+            ext_mask: u64::from(self.ext_mask) | (u64::from(self.ext_mask1) << 32),
+            stored: u64::from(self.in_data) | (u64::from(self.in_data1) << 32),
+            digital: self.pad_levels(),
+        });
     }
 
     pub fn add_observer(&mut self, obs: Arc<dyn GpioObserver>) {
@@ -482,6 +555,7 @@ impl Esp32Gpio {
             *data &= !bit;
         }
         self.latch_input_edges(before);
+        self.sync_rtc_inputs();
     }
 
     /// Pads of `bank` (0: GPIO0..31, 1: GPIO32..39) in open drain
@@ -596,7 +670,11 @@ impl Esp32Gpio {
         } else {
             self.driving_bank0()
         };
-        (self.out & driving) | (self.in_data & !driving)
+        let word = (self.out & driving) | (self.in_data & !driving);
+        if self.rtc.is_none() {
+            return word;
+        }
+        self.with_rtc(0, word, driving)
     }
 
     /// ENABLE1 as far as an output stage exists behind it: GPIO34..39 are
@@ -616,7 +694,11 @@ impl Esp32Gpio {
             self.out1,
             self.open_drain(1) & self.ext_mask1,
         );
-        ((self.out1 & driving) | (self.in_data1 & !driving)) & BANK1_MASK
+        let word = ((self.out1 & driving) | (self.in_data1 & !driving)) & BANK1_MASK;
+        if self.rtc.is_none() {
+            return word;
+        }
+        self.with_rtc(1, word, driving)
     }
 
     /// `true` when pad `pin`'s output driver is enabled.
@@ -651,8 +733,12 @@ impl Esp32Gpio {
     /// direction first (`i2cInit` does `pinMode(sda, OUTPUT_OPEN_DRAIN)` before
     /// `pinMatrixOutAttach`). If a lab ever shows a flat line while the matrix
     /// IS programmed, this gate is where to look.
+    ///
+    /// A pad the RTC IO MUX owns carries no matrix signal either: with
+    /// `MUX_SEL` set the pad's output comes from the RTC GPIO, so the matrix
+    /// route stays programmed but dark until `MUX_SEL` clears.
     fn matrix_signal(&self, pin: u8) -> Option<u32> {
-        if pin >= PAD_COUNT || !self.output_driver_on(pin) {
+        if pin >= PAD_COUNT || !self.output_driver_on(pin) || self.in_rtc(pin) {
             return None;
         }
         Some(self.out_sel[pin as usize] & OUT_SEL_MASK)
@@ -669,6 +755,16 @@ impl Esp32Gpio {
     fn pad_level(&self, pin: u8) -> Option<bool> {
         if pin >= PAD_COUNT {
             return None;
+        }
+        // A pad the RTC IO MUX owns: its RTC output stage against the
+        // outside. The wire, not `GPIO_IN`: a probe sees a driven pad whose
+        // `FUN_IE` is off.
+        if self.in_rtc(pin) {
+            return Some(self.rtc_view().wire_level(
+                pin,
+                PinPort::external(self, pin),
+                self.input_data(pin),
+            ));
         }
         // A routed line its peripheral does not drive right now (released
         // open drain, an SPI slave's MISO while deselected) leaves the pad
@@ -928,11 +1024,20 @@ impl Esp32Gpio {
     /// (`None`), which is what makes a world refuse it. Otherwise ENABLE
     /// drives the latch, and an open-drain (`PAD_DRIVER`) 1 is released.
     /// The IO_MUX pulls are not modelled on this part: no pull.
+    ///
+    /// A pad the RTC IO MUX owns is driven by the RTC GPIO alone. The pull of
+    /// an RTC-capable pad is its RTC_IO `RUE` / `RDE` in either domain
+    /// (errata 3.6); every other pad has none.
     fn pad_driver(&self, pin: u8) -> Option<crate::pins::PadDriver> {
         use crate::pins::PadDriver;
         if pin >= PAD_COUNT {
             return None;
         }
+        let rtc = self.rtc_view();
+        if rtc.in_rtc(pin) {
+            return Some(rtc.driver(pin));
+        }
+        let pull = rtc.pull(pin);
         if let Some(sig) = self.matrix_signal(pin) {
             if sig != SIG_GPIO_OUT {
                 // The peripheral says what its output stage does: a line it
@@ -942,25 +1047,28 @@ impl Esp32Gpio {
                     .active_line(pin, |p| self.matrix_signal(p))
                     .map(|(cell, line)| {
                         if cell.drives(line) {
-                            PadDriver::drive(cell.level(line))
+                            PadDriver::drive(cell.level(line)).with_pull(pull)
                         } else {
-                            PadDriver::OFF
+                            PadDriver::released(pull)
                         }
                     });
             }
         }
         if !self.output_driver_on(pin) {
-            return Some(PadDriver::OFF);
+            return Some(PadDriver::released(pull));
         }
         let latch = if pin < 32 {
             self.out & (1 << pin) != 0
         } else {
             self.out1 & (1 << (pin - 32)) != 0
         };
-        Some(PadDriver::output(
-            latch,
-            self.pin_cfg[pin as usize] & crate::peripherals::esp_gpio_net::PIN_PAD_DRIVER != 0,
-        ))
+        Some(
+            PadDriver::output(
+                latch,
+                self.pin_cfg[pin as usize] & crate::peripherals::esp_gpio_net::PIN_PAD_DRIVER != 0,
+            )
+            .with_pull(pull),
+        )
     }
 
     /// Re-register watched pads with the wires that drive them, so a pad the
@@ -1094,6 +1202,7 @@ impl Esp32Gpio {
             self.sync_net_routes();
             self.notify_pad_sources();
         }
+        self.sync_rtc_inputs();
     }
 
     fn write_word_inner(&mut self, word_off: u64, value: u32) {
@@ -1223,6 +1332,7 @@ impl PinPort for Esp32Gpio {
                 External::Released => *mask &= !bit,
             }
             s.latch_input_edges(before);
+            s.sync_rtc_inputs();
         });
         self.deliver_wire_input(pin);
         Some(InputChange {
@@ -1394,8 +1504,25 @@ impl Peripheral for Esp32Gpio {
         })
     }
 
+    /// What the outside presents to the pad: the level it holds, else the
+    /// RTC_IO pull of an RTC-capable pad, else the last level it presented.
+    /// A pad the RTC IO MUX owns reads through its `FUN_IE`, as `GPIO_IN`.
     fn read_gpio_input(&self, pin: u8) -> Option<bool> {
-        (pin < PAD_COUNT).then(|| self.input_data(pin))
+        use crate::pins::Pull;
+        if pin >= PAD_COUNT {
+            return None;
+        }
+        if self.in_rtc(pin) {
+            return PinPort::input(self, pin);
+        }
+        Some(
+            self.external_level(pin)
+                .unwrap_or_else(|| match self.rtc_view().pull(pin) {
+                    Pull::Up => true,
+                    Pull::Down => false,
+                    Pull::None => self.input_data(pin),
+                }),
+        )
     }
 
     fn read_gpio_output(&self, pin: u8) -> Option<bool> {
@@ -1420,6 +1547,19 @@ impl Peripheral for Esp32Gpio {
         use crate::peripherals::gpio::{GpioMode, GpioRouting};
         if pin >= PAD_COUNT {
             return None;
+        }
+        // A pad the RTC IO MUX owns is an RTC GPIO, whatever GPIO_ENABLE and
+        // the matrix say.
+        if let Some(rtc) = self.rtc.as_ref().filter(|_| self.in_rtc(pin)) {
+            let v = rtc.view();
+            return Some(GpioRouting {
+                mode: if v.drive & (1u64 << pin) != 0 {
+                    GpioMode::Output
+                } else {
+                    GpioMode::Input
+                },
+                func: rtc.rtc_channel(pin).map(|n| format!("RTC_GPIO{n}")),
+            });
         }
         if !self.output_driver_on(pin) {
             // Output driver off ⇒ the pad is an input. `FUNCn_IN_SEL_CFG` is
@@ -1496,6 +1636,27 @@ impl Peripheral for Esp32Gpio {
 
     fn take_wire_input_edges(&mut self) -> Vec<crate::peripherals::pad_lines::WireInputEdge> {
         std::mem::take(&mut self.wire_edges)
+    }
+
+    /// The classic RTC IO MUX (RTC_GPIO0..17 on GPIO36..39, 34, 35, 25, 26,
+    /// 33, 32, 4, 0, 2, 15, 13, 12, 14, 27). Refuses the S3's.
+    fn attach_rtc_io_pads(&mut self, pads: Arc<crate::peripherals::esp_rtc_io::RtcIoPads>) -> bool {
+        if pads.chip() != crate::peripherals::esp_rtc_io::RtcChip::Esp32 {
+            return false;
+        }
+        self.rtc = Some(pads);
+        self.sync_rtc_inputs();
+        true
+    }
+
+    /// A `MUX_SEL` write may have handed a pad back to the matrix (or taken
+    /// it): re-mark net lines and re-route inputs as a routing write does,
+    /// report the new sources, and tell the RTC side what `GPIO_IN` reads
+    /// now (a pull change moves a released digital pad).
+    fn rtc_io_written(&mut self) {
+        self.sync_net_routes();
+        self.notify_pad_sources();
+        self.sync_rtc_inputs();
     }
 
     fn as_any(&self) -> Option<&dyn std::any::Any> {

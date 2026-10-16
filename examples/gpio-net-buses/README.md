@@ -50,6 +50,7 @@ pull-up reading 1.
 | `env-spi-esp32-hi.yaml` | classic ESP32 VSPI master, GPIO33 SCK, GPIO32 MOSI, GPIO34 MISO (input-only pad), GPIO5 CS0 | G071 SPI1 slave | `cs`, `sck`, `miso`, `mosi` |
 | `env-spi-esp32-hi-slave.yaml` | classic ESP32 HSPI slave, SCK / MOSI / CS0 in on the input-only GPIO34 / GPIO35 / GPIO36, MISO out on GPIO33 | G071 SPI1 master | `cs`, `sck`, `miso`, `mosi` |
 | `env-gpio-esp32-esp32s3.yaml` | classic ESP32, plain GPIO: out GPIO32, in GPIO39 (input-only) | ESP32-S3, plain GPIO: in GPIO40, out GPIO41 | `a2b`, `b2a` (pull-down) |
+| `env-rtc-gpio-esp32-esp32s3.yaml` | classic ESP32, RTC GPIO (RTC_IO `MUX_SEL` set): open-drain out GPIO25 (RTC_GPIO6), in GPIO26 (RTC_GPIO7); GPIO27 handed from the RTC domain to a digital output | ESP32-S3, RTC GPIO: in GPIO4 with `RUE`, out GPIO5, in GPIO6 with `RDE` | `a2b`, `b2a`, `handoff` (no board pull) |
 
 SPI: the master sends `A5 3C 5A C3` and receives `81 82 83 84`, which the
 slave queues from its SPI interrupt (or preloads in its FIFO, on the RP2040).

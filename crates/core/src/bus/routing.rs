@@ -391,6 +391,9 @@ impl SystemBus {
         // Pin ports whose pulls another block keeps: link them, and hand each
         // the pulls its block holds now.
         self.rebuild_pad_control_links();
+        // The ESP32 / ESP32-S3 RTC IO MUX and the GPIO port it shares pads
+        // with.
+        self.rebuild_rtc_io_link();
         // Cache the clock-controller peripheral index so the clock-gate check
         // on the hot read/write path is O(1).
         //

@@ -6978,6 +6978,9 @@ boards:
       # UART register map lived outside its own watch list from that date.
       - crates/core/src/peripherals/esp_uart.rs
       - crates/core/src/peripherals/esp_systimer.rs
+      # The RTC IO MUX / RTC GPIO model (`rtc_io` at 0x6000_8400), shared with
+      # the classic part. Added 2026-10-16 with the model.
+      - crates/core/src/peripherals/esp_rtc_io.rs
       - crates/core/src/cpu/xtensa_jit
       # The S3's peripheral registration itself. The models above can be
       # perfectly correct and still not be on the bus: this file decides which
@@ -6990,6 +6993,22 @@ boards:
       # Declarative descriptors the chip yaml wires; the 9-reg reset-state
       # anchor is asserted against their reset_values.
       - configs/peripherals/esp32s3
+    # 2026-10-16 (RTC_IO model): new watched esp_rtc_io.rs; esp32s3/gpio.rs and
+    # system/xtensa/esp32s3.rs moved. RTC_IO (0x6000_8400..0x6000_8800) is now
+    # a model instead of the RTC_CNTL catch-all's round-trip storage: the SVD
+    # register map and reset values (TOUCH_PADn / XTAL_32P/N / PAD_DACn /
+    # RTC_PAD19..21 = 0x4000_0000..0x5000_0000, DATE 0x0210_1180; pinned by
+    # esp_rtc_io::tests::registers_match_the_svd), so reads there change from
+    # 0 to the SVD reset values and the write-only W1TS/W1TC views read 0. A
+    # pad whose MUX_SEL is set is driven by RTC_GPIO_OUT / ENABLE instead of
+    # GPIO_OUT / ENABLE and the matrix; MUX_SEL resets to 0 on every pad, so a
+    # firmware that never sets it sees GPIO behave as before. RTC_IO is not
+    # in the nine captured windows and no register or reset value in them
+    # changed (RTC_CNTL keeps 0x6000_8000..0x6000_8400). Ran:
+    # world_gpio_net_buses (RTC GPIO between a classic ESP32 and an S3, and
+    # every existing S3 net test with the firmware now clearing MUX_SEL), the
+    # lib suites (default and event-scheduler). No physical probe connected.
+    # Approved by the maintainer. ACK, NOT A CAPTURE.
     # 2026-09-30: Xtensa store-spin loops collapse into one plain-memory write,
     # and the shared ESP UART repeats a stable status poll without taking the
     # lock. The recommended scheduler interval is 1024. No register map or
@@ -7099,7 +7118,7 @@ boards:
     # esp32s3_irq_cache_differential, esp32s3_walk_differential, xtensa_exec,
     # xtensa_lx7. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-16
-    drift_ack_digest: 2a3c0381dedaefeab6362f0aa9aaea44ed83dcc63aebf0d8154011c2043a6aa8
+    drift_ack_digest: 2325b6779bfd12d97255ce7dd4f51ed36d1a141b66fe4367ecdf37bd8bf2a754
 
   - id: esp32s3-zero
     # Board variant of esp32s3: same silicon (LX7), 4 MiB flash / 480 KiB RAM.
@@ -7125,6 +7144,7 @@ boards:
       - crates/core/src/system/xtensa/esp32s3.rs
       - crates/core/src/peripherals/esp_uart.rs
       - crates/core/src/peripherals/esp_systimer.rs
+      - crates/core/src/peripherals/esp_rtc_io.rs
       - crates/core/src/cpu/xtensa_jit
       - configs/chips/esp32s3-zero.yaml
       - configs/peripherals/esp32s3
@@ -7803,6 +7823,9 @@ boards:
       - crates/core/src/peripherals/esp32/timg.rs
       - crates/core/src/peripherals/esp32/twai.rs
       - crates/core/src/peripherals/esp32/uart.rs
+      # 2026-10-16: the RTC IO MUX / RTC GPIO model (`rtcio`, was a round-trip
+      # stub), shared with the S3. No silicon capture on this board.
+      - crates/core/src/peripherals/esp_rtc_io.rs
       - crates/core/src/peripherals/stub.rs
       - crates/core/src/peripherals/timer.rs
       - crates/core/src/peripherals/uart.rs

@@ -15,6 +15,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mode: 320x240 frames that decode with Pillow and `jpeg-decoder`. The encoder
   is `peripherals/jpeg_baseline.rs`; `jpeg-decoder` is a new dev-dependency
   for its tests.
+- RTC IO MUX and RTC GPIO on the classic ESP32 and the ESP32-S3
+  (`peripherals/esp_rtc_io.rs`, `esp32_rtc_io` at 0x3FF4_8400 replacing the
+  round-trip stub, `esp32s3_rtc_io` at 0x6000_8400 in place of the RTC_CNTL
+  catch-all). The SVD register map and reset values (unit-tested against the
+  vendored SVDs); a pad whose `MUX_SEL` is set is driven by
+  `RTC_GPIO_OUT` / `ENABLE` (+ `_W1TS` / `_W1TC`), `PAD_DRIVER` open drain
+  and `RUE` / `RDE` pulls instead of `GPIO_OUT` / `GPIO_ENABLE` and the GPIO
+  matrix, on a probe and on a world `gpio_net`; `RTC_GPIO_IN` and `GPIO_IN`
+  read it through `FUN_IE`; `RTC_GPIO_PINn.INT_TYPE` latches
+  `RTC_GPIO_STATUS` (no CPU interrupt: neither part routes it to one); the
+  classic `HOLD` bits freeze the RTC output stage. Classic RTC GPIO numbers
+  follow `rtc_io_desc` (GPIO0 is RTC_GPIO11, bit 25). The GPIO model of each
+  part takes the shared state through `Peripheral::rtc_io_pads` /
+  `attach_rtc_io_pads`, no downcast. `env-rtc-gpio-esp32-esp32s3.yaml` runs
+  RTC GPIO between the two parts and hands a pad from the RTC domain back to
+  the digital one.
+
+### Changed
+- Classic ESP32 RTC-capable pads (GPIO0, 2, 4, 12..15, 25..27, 32, 33) take
+  their pull from RTC_IO `RUE` / `RDE` in the digital domain too (ESP32
+  errata 3.6; ESP-IDF `gpio_pullup_en` writes them there), from the silicon
+  reset values on: GPIO0, GPIO14 and GPIO15 pulled up, GPIO2, GPIO4, GPIO12
+  and GPIO13 pulled down. A released input there now reads its pull and shows
+  it on a net, where it read the last outside level (0) before.
+- The `gpio-net-buses` Xtensa firmware clears RTC_IO `MUX_SEL` before using
+  an RTC-capable pad digitally, as `gpio_config()` does (`RTC_DIGITAL` in
+  `src/esp32x.inc`). The ELFs whose pads have an RTC function were rebuilt:
+  the S3 GP-SPI2 / I2C0 ones (GPIO8..13) and the classic bank-1 ones
+  (GPIO32..36, GPIO39); the rest are byte-identical.
 
 ### Performance
 - Idle fast-forward also skips a proven CCOUNT busy-wait, on any core. A
