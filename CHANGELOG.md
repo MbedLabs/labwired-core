@@ -51,6 +51,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     round on each part, including an address NACK, a slow G071 target
     holding either controller and a slow S3 target stretching the G071's
     clock, each re-run with the nodes swapped and with 37 ns rounds.
+- SPI DMA, STM32 and ESP32-C3/C6, including over `gpio_net`s
+  (`docs/howto/gpio-nets.md`, "SPI DMA"). The STM32 classic and FIFO SPI raise
+  DMA requests from `CR2.TXDMAEN` (TXE; the FIFO port while its TX FIFO is at
+  or below half full) and `RXDMAEN` (RXNE, following `FRXTH`), each held until
+  the `DR` access that answers it; `LDMA_TX` sends one frame from the last
+  packed half-word item and `LDMA_RX` requests the odd last byte below the
+  16-bit threshold, both from the DMA's end-of-transfer notice
+  (`DmaRequest::remaining`, `Peripheral::dma_access_notice`). Requests reach
+  the chip's DMA through its own routing registers
+  (`Peripheral::dma_route_request`): F1 fixed channels and L4 `CSELR`
+  (`dma`, `config.requests`), F4 `SxCR.CHSEL` (`stm32f4_dma`), and the new
+  G0 DMAMUX model (`dmamux`, `DMAMUX_CxCR.DMAREQ_ID`, 0x4002_0800 on the
+  G071). Routes are declared for the G071, F103, F401, F407 and L476. The
+  ESP32-C3 GDMA is a behavioral model now (`esp32c3_gdma`, was a declarative
+  register file): descriptor lists in RAM, channels bound to the GP-SPI2
+  (`PERI_SEL` = 0) feed `SPI_DMA_CONF.DMA_TX_ENA` / `DMA_RX_ENA`
+  transactions, `MEM_TRANS_EN` copies memory to memory, `INT_RAW` / `ST` /
+  `ENA` / `CLR` per channel on matrix sources 44..46. The ESP32-C6 GDMA
+  couples its SPI2 channels the same way. A DMA transaction completes
+  (`USR` clears, `SPI_TRANS_DONE`) once the IN link holds the data. Tested
+  end to end over nets (`examples/gpio-net-buses`, `env-spi-dma.yaml`,
+  `env-spi-esp32c3-dma*.yaml`, clang-built firmware): a G071 DMA master and
+  a G071 DMA slave, and an ESP32-C3 / C6 GDMA master and slave against a
+  G071 DMA slave and master, each with nodes swapped and 37 ns rounds.
 - Classic ESP32 LEDC drives its pads. Each of the 16 channels generates its
   PWM waveform (TRM §14.2: REF_TICK / APB / RTC8M source, Q8 `DIV_NUM`,
   `2^DUTY_RES` period, `HPOINT`/`DUTY`, duty latched at the next overflow,
@@ -147,6 +171,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     with the nodes swapped and with 37 ns rounds.
 
 ### Fixed
+- STM32 DMA peripheral transfers move data. The channel (`dma`) and stream
+  (`stm32f4_dma`) models emitted a memory-to-peripheral item as a write of 0
+  and a peripheral-to-memory item as a read whose value was dropped; every
+  item is now a copy at its `PSIZE` / `MSIZE` widths (one 16-bit access for a
+  half-word item, so a FIFO SPI `DR` read pops two bytes). A peripheral
+  channel no longer moves an item when it is enabled, only on its
+  peripheral's request; the channel model's `PINC` / `MINC` strides decode
+  `PSIZE` / `MSIZE` from the right bits; an F4 stream clears `SxCR.EN` at the
+  end of a non-circular transfer; and a word (or half-word) store to a DMA
+  register is one write, so a `CCR` with `EN` and `MEM2MEM` written together
+  starts as memory-to-memory.
 - A peripheral answering a `gpio_net` edge on a timed core (the nRF52's
   Cortex-M4) stamped its answer with the bus cycle, which lags the core
   between peripheral ticks: the answer's time then depended on the world's

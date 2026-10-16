@@ -152,6 +152,13 @@ peripherals:
     clock: { reg: "ahbenr", bit: 0 }
     config:
       debug_schema: "../peripherals/stm32f103/dma1.yaml"
+      # Hard-wired peripheral requests (RM0008 Table 78, DMA1 request
+      # mapping): SPI1_RX ch2, SPI1_TX ch3, SPI2_RX ch4, SPI2_TX ch5.
+      requests:
+        spi1_rx: 2
+        spi1_tx: 3
+        spi2_rx: 4
+        spi2_tx: 5
   # ─── STM32F1-family peripherals, reset values verified against ─────────
   # ─── STM32F103C8 silicon (Blue Pill, ST-LINK V2, 2026-06-04). ──────────
   # Each `profile` selects the chip-family layout in the peripheral model

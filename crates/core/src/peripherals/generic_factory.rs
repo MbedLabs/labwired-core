@@ -49,6 +49,7 @@ pub const MODEL_TYPES: &[&str] = &[
     "exti",
     "afio",
     "dma",
+    "dmamux",
     "stm32f4_dma",
     "gpdma",
     "adc",
@@ -102,6 +103,9 @@ pub const MODEL_TYPES: &[&str] = &[
     "esp32c3_bt",
     "esp32c3_i2c",
     "esp32c3_spi",
+    // MUST be listed: the fuzzy `contains("dma")` fallback would coerce the
+    // C3 GDMA onto the STM32 DMA register map.
+    "esp32c3_gdma",
     "esp32c3_gpio",
     "esp32c3_io_mux",
     "esp32c3_apb_saradc",
@@ -316,6 +320,21 @@ pub const MODEL_TYPES: &[&str] = &[
 /// True if `t` is already a canonical model-type name (see [`MODEL_TYPES`]).
 pub fn is_canonical_model_type(t: &str) -> bool {
     MODEL_TYPES.contains(&t)
+}
+
+/// The chip yaml's DMA `config: { requests: { <request>: <route>, ... } }`
+/// table, sorted by request name so the routing order is deterministic.
+fn dma_request_table(p_cfg: &PeripheralConfig) -> Vec<(String, serde_yaml::Value)> {
+    let mut out: Vec<(String, serde_yaml::Value)> = p_cfg
+        .config
+        .get("requests")
+        .and_then(|v| v.as_mapping())
+        .into_iter()
+        .flatten()
+        .filter_map(|(k, v)| Some((k.as_str()?.to_string(), v.clone())))
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
 }
 
 /// Build a generic peripheral model for `canonical_type`, or `None` if it is not
@@ -693,7 +712,69 @@ pub fn try_build(
             ))
         }
         "afio" => Box::new(crate::peripherals::afio::Afio::new()),
-        "dma" | "stm32dma" => Box::new(crate::peripherals::dma::Dma1::new()),
+        // Channel-based DMA (F1/L0/L4/G0). `config: { requests: { spi1_tx: 3,
+        // spi1_rx: [2, 1] } }` hard-wires a peripheral request to a channel
+        // (F1), or — `[channel, selector]` — to a channel while its L4
+        // `CSELR` nibble holds the selector.
+        "dma" | "stm32dma" => {
+            let mut dma = crate::peripherals::dma::Dma1::new();
+            for (request, v) in dma_request_table(p_cfg) {
+                let pair = v.as_sequence().map(|s| {
+                    s.iter()
+                        .filter_map(|n| n.as_u64())
+                        .map(|n| n as u32)
+                        .collect::<Vec<_>>()
+                });
+                match (v.as_u64(), pair.as_deref()) {
+                    (Some(ch), _) => dma = dma.with_request_route(&request, ch as u32, None),
+                    (None, Some([ch, sel])) => {
+                        dma = dma.with_request_route(&request, *ch, Some(*sel))
+                    }
+                    _ => anyhow::bail!(
+                        "dma `{}`: request `{request}` must be a channel or [channel, cselr]",
+                        p_cfg.id
+                    ),
+                }
+            }
+            Box::new(dma)
+        }
+        // STM32 DMA request multiplexer (G0/G4/WB). `config: { dma: dma1,
+        // channels: 7, requests: { spi1_tx: 17, ... }, id_registers: {
+        // 0x3FC: 0xA3C5DD01, ... } }`.
+        "dmamux" => {
+            let channels = p_cfg
+                .config
+                .get("channels")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(7) as usize;
+            let dma = p_cfg
+                .config
+                .get("dma")
+                .and_then(|v| v.as_str())
+                .unwrap_or("dma1");
+            let mut mux = crate::peripherals::dmamux::Dmamux::new(channels, dma);
+            for (request, v) in dma_request_table(p_cfg) {
+                let Some(id) = v.as_u64() else {
+                    anyhow::bail!(
+                        "dmamux `{}`: request `{request}` needs a DMAREQ_ID",
+                        p_cfg.id
+                    );
+                };
+                mux = mux.with_request(&request, id as u32);
+            }
+            if let Some(map) = p_cfg
+                .config
+                .get("id_registers")
+                .and_then(|v| v.as_mapping())
+            {
+                for (k, v) in map {
+                    if let (Some(off), Some(val)) = (k.as_u64(), v.as_u64()) {
+                        mux = mux.with_id_register(off, val as u32);
+                    }
+                }
+            }
+            Box::new(mux)
+        }
         // STM32F4 stream-based DMA (RM0090 §10). `config: { dma2: true }` marks
         // the DMA2 instance (memory-to-memory capable); `config: { stream_irqs:
         // [..8..] }` routes each stream to its own NVIC vector (F4 stream IRQs
@@ -718,6 +799,25 @@ pub fn try_build(
                     .filter_map(|v| v.as_u64().map(|n| n as u32))
                     .collect();
                 dma = dma.with_stream_irqs(irqs);
+            }
+            // `config: { requests: { spi1_tx: [[3, 3], [5, 3]] } }`: the
+            // (stream, channel) pairs a peripheral request reaches.
+            for (request, v) in dma_request_table(p_cfg) {
+                for pair in v.as_sequence().into_iter().flatten() {
+                    let ns: Vec<u32> = pair
+                        .as_sequence()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|n| n.as_u64().map(|n| n as u32))
+                        .collect();
+                    let [stream, chsel] = ns[..] else {
+                        anyhow::bail!(
+                            "stm32f4_dma `{}`: request `{request}` needs [stream, channel] pairs",
+                            p_cfg.id
+                        );
+                    };
+                    dma = dma.with_request_route(&request, stream, chsel);
+                }
             }
             Box::new(dma)
         }

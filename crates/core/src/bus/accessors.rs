@@ -1305,24 +1305,23 @@ impl crate::Bus for SystemBus {
 
     fn execute_dma(&mut self, requests: &[crate::DmaRequest]) -> SimResult<()> {
         for req in requests {
-            match req.direction {
-                crate::DmaDirection::Read => {
-                    let _ = self.read_u8(req.addr)?;
-                }
-                crate::DmaDirection::Write => {
-                    self.write_u8(req.addr, req.val)?;
-                }
-                crate::DmaDirection::Copy => {
-                    if let Some(t) = req.transform {
-                        self.dma_copy_unit(req.src_addr, req.addr, t)?;
-                    } else {
-                        let val = self.read_u8(req.src_addr)?;
-                        self.write_u8(req.addr, val)?;
-                    }
-                }
-            }
+            self.execute_dma_request(req)?;
         }
         Ok(())
+    }
+
+    fn with_peripheral_mut(
+        &mut self,
+        name: &str,
+        f: &mut dyn FnMut(&mut dyn crate::Peripheral),
+    ) -> bool {
+        let Some(idx) = self.find_peripheral_index_by_name(name) else {
+            return false;
+        };
+        f(&mut *self.peripherals[idx].dev);
+        self.refresh_legacy_tick_index(idx);
+        self.collect_scheduled_events(idx);
+        true
     }
 
     fn config(&self) -> &crate::SimulationConfig {

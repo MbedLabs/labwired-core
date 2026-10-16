@@ -115,7 +115,38 @@ pub struct DmaRequest {
     /// destination data widths (STM32H5 GPDMA CTR1 PAM / SBX / DBX / DHX).
     /// `None` keeps the classic single-byte semantics.
     pub transform: Option<DmaUnitTransform>,
+    /// Peripheral-paced STM32 DMA only: the items the channel/stream still
+    /// has to move AFTER this one (`NDTR` after the decrement). The bus hands
+    /// it to the peripheral on the request's peripheral side before the access
+    /// ([`Peripheral::dma_access_notice`]) — the model's form of the DMA's
+    /// end-of-transfer signal, which the STM32 FIFO SPI needs for
+    /// `CR2.LDMA_TX` / `LDMA_RX` (RM0444 §35.5.10). `None` for memory-to-memory
+    /// and for engines that do not report it.
+    pub remaining: Option<u32>,
 }
+
+/// One DMA channel a peripheral request line currently drives
+/// ([`Peripheral::dma_route_request`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DmaRoute {
+    /// The DMA controller to request on, by peripheral id. `None`: the
+    /// peripheral that answered (a DMA controller routing to itself); `Some`
+    /// for a request multiplexer (STM32 DMAMUX) naming the controller it
+    /// feeds.
+    pub controller: Option<String>,
+    /// The controller's channel / stream, 1-based (the
+    /// [`Peripheral::dma_request`] numbering).
+    pub channel: u32,
+}
+
+/// The [`PeripheralTickResult::dma_signals`] ids a peripheral raises for its
+/// two DMA request lines. The bus names the request `<peripheral id>_tx` /
+/// `<peripheral id>_rx` (e.g. `spi1_tx`) and asks the chip's DMA controllers
+/// and multiplexers which channels that request drives
+/// ([`Peripheral::dma_route_request`]).
+pub const DMA_SIGNAL_TX: u32 = 1;
+/// See [`DMA_SIGNAL_TX`].
+pub const DMA_SIGNAL_RX: u32 = 2;
 
 /// One source-data-unit -> destination-data-unit transform descriptor.
 /// Semantics follow RM0481 §15 and are pinned by the DMA_DataHandling
@@ -1650,6 +1681,29 @@ pub trait Peripheral: std::fmt::Debug + Send {
     fn drain_attached_pin_drives(&mut self, _out: &mut Vec<(String, String, bool)>) {}
 
     fn dma_request(&mut self, _request_id: u32) {}
+    /// DMA request routing: append the channels the peripheral request
+    /// `request` (`<peripheral id>_tx` / `_rx`, see [`DMA_SIGNAL_TX`]) drives
+    /// on this DMA controller — or, for a request multiplexer, on the
+    /// controller it feeds — as the routing registers stand NOW (STM32F4
+    /// `SxCR.CHSEL`, L4 `CSELR`, G0/G4/WB `DMAMUX_CxCR.DMAREQ_ID`). Default:
+    /// not a DMA controller, routes nothing.
+    fn dma_route_request(&self, _request: &str, _out: &mut Vec<DmaRoute>) {}
+    /// A peripheral-paced DMA item is about to access this peripheral at
+    /// `offset`: `read` when the peripheral is the item's source (a receive),
+    /// `remaining` the items the channel still has after this one (see
+    /// [`DmaRequest::remaining`]). Default: ignored.
+    fn dma_access_notice(&mut self, _offset: u64, _read: bool, _remaining: u32) {}
+    /// Espressif GDMA → GP-SPI: an OUT link bound to this controller pushed
+    /// `bytes` into its transmit FIFO. Default: not a GDMA-coupled SPI.
+    fn gdma_out_load(&mut self, _bytes: &[u8]) {}
+    /// Espressif GP-SPI → GDMA: the bytes a finished `DMA_RX_ENA`
+    /// transaction holds for the IN link, if any.
+    fn gdma_in_take(&mut self) -> Option<Vec<u8>> {
+        None
+    }
+    /// Espressif GDMA → GP-SPI: the IN link has the received bytes in
+    /// memory; the transaction may complete.
+    fn gdma_in_delivered(&mut self) {}
     /// Level of one of this peripheral's DMA request lines, for DMA engines
     /// that sample requests (the i.MX RT eDMA through its DMAMUX). `line` is
     /// peripheral-specific (e.g. 0 = transmit, 1 = receive). Default: never
@@ -2231,6 +2285,18 @@ pub trait Bus {
     }
     fn as_any_mut(&mut self) -> Option<&mut dyn Any> {
         None
+    }
+    /// Run `f` on the peripheral with id `name` and let the bus see what it
+    /// changed (its legacy-walk membership, the events it wants scheduled) —
+    /// how one peripheral's bus-aware pass reaches another's state (a GDMA
+    /// feeding a GP-SPI). `false` when there is no such peripheral or the bus
+    /// has no peripherals. Default: none.
+    fn with_peripheral_mut(
+        &mut self,
+        _name: &str,
+        _f: &mut dyn FnMut(&mut dyn Peripheral),
+    ) -> bool {
+        false
     }
     /// Resolve a configured GPIO label and read its output latch.
     fn read_gpio_output_by_label(&self, _pin: &str) -> Option<bool> {

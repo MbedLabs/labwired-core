@@ -4317,6 +4317,7 @@ fn test_execute_dma_copy_request() {
         val: 0,
         direction: crate::DmaDirection::Copy,
         transform: None,
+        remaining: None,
     };
     bus.execute_dma(&[req]).unwrap();
 

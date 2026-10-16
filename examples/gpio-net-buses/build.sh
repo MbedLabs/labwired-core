@@ -7,7 +7,8 @@ CC=${CC:-clang}
 COMMON=(-mthumb -Os -ffreestanding -fno-builtin -nostdlib -Wall -Wextra -fuse-ld=lld
         -Xlinker --build-id=none -Xlinker -z -Xlinker max-page-size=4096)
 G0=(--target=thumbv6m-none-eabi -mcpu=cortex-m0plus "${COMMON[@]}" -T src/g0.ld)
-for fw in spi_master spi_slave i2c_controller i2c_target i2c_bulk_controller i2c_bulk_target; do
+for fw in spi_master spi_slave spi_dma_master spi_dma_slave i2c_controller i2c_target \
+          i2c_bulk_controller i2c_bulk_target; do
     "$CC" "${G0[@]}" "src/$fw.c" -o "firmware/${fw//_/-}.elf"
 done
 # A target too slow for the clock: the controller must be held by the stretch.
@@ -73,7 +74,7 @@ for chip in c3 c6; do
     if [ "$chip" = c6 ]; then arch=rv32imac; defs=(-DCHIP_C6); else arch=rv32imc; defs=(); fi
     ESP=(--target=riscv32-unknown-elf "-march=$arch" -mabi=ilp32 -Os -ffreestanding -fno-builtin -nostdlib
          -Wall -Wextra -fuse-ld=lld -Xlinker --build-id=none -Xlinker --no-relax -T src/esp32c3.ld)
-    for fw in spi_master spi_slave i2c_controller i2c_target; do
+    for fw in spi_master spi_slave spi_dma_master spi_dma_slave i2c_controller i2c_target; do
         "$CC" "${ESP[@]}" "${defs[@]}" "src/esp32c_$fw.c" -o "firmware/esp32${chip}-${fw//_/-}.elf"
     done
     "$CC" "${ESP[@]}" "${defs[@]}" -DSLOW=1 src/esp32c_i2c_target.c -o "firmware/esp32${chip}-i2c-target-slow.elf"

@@ -45,10 +45,18 @@
 //!   when CS goes high, with their count in `SPI_SLAVE1.DATA_BITLEN`,
 //!   `SPI_TRANS_DONE` latched and `USR` cleared.
 //!
+//! * **DMA** (`SPI_DMA_CONF.DMA_TX_ENA` / `DMA_RX_ENA`, both roles). The
+//!   data phase's MOSI (master) or MISO (slave) bytes come from what the
+//!   GDMA's OUT link pushed into the controller ([`GpSpiHost::take_dma_tx`]),
+//!   and the bytes received go to its IN link ([`GpSpiHost::give_dma_rx`])
+//!   instead of `W0..W15`; the data phase may then exceed the W buffer's
+//!   64 bytes. The transaction completes (`USR` clears, `SPI_TRANS_DONE`)
+//!   once the IN link holds the bytes (`crate::peripherals::esp_gdma`).
+//!
 //! Timed steps run at their exact cycle from a scheduler event; a slave runs
 //! when the net delivers an edge. Not modelled on a net: dual/quad/octal
-//! modes, DMA (the GDMA path), segmented transfers, the CS polarity bits of a
-//! master, `CK_DIS`, and the timing-module delays (`DIN/DOUT_MODE`).
+//! modes, segmented (`DMA_SLV_SEG_TRANS_EN`) transfers, the CS polarity bits
+//! of a master, `CK_DIS`, and the timing-module delays (`DIN/DOUT_MODE`).
 
 use crate::peripherals::esp_gpspi_wire::{LINE_CS, LINE_MISO, LINE_MOSI, LINE_SCK};
 use crate::peripherals::pad_lines::{LineDrive, PadLines};
@@ -102,6 +110,59 @@ pub(crate) trait GpSpiHost {
     fn raise(&mut self, bits: u32);
     /// CPU cycles per SCK period from `SPI_CLOCK`.
     fn bit_time(&self) -> Option<u64>;
+    /// `SPI_DMA_CONF.DMA_TX_ENA`: the data phase's MOSI bytes come from the
+    /// GDMA (OUT link), not from `W0..W15`. Default: no DMA.
+    fn dma_tx(&self) -> bool {
+        false
+    }
+    /// `SPI_DMA_CONF.DMA_RX_ENA`: the bytes received go to the GDMA (IN
+    /// link), not into `W0..W15`.
+    fn dma_rx(&self) -> bool {
+        false
+    }
+    /// Up to `max` bytes the GDMA has pushed into the transmit FIFO, oldest
+    /// first; fewer (the FIFO ran dry) shift out zeros.
+    fn take_dma_tx(&mut self, _max: usize) -> Vec<u8> {
+        Vec::new()
+    }
+    /// The transaction's received bytes for the GDMA. The host completes the
+    /// transaction (`USR` clear, `TRANS_DONE`) once its IN link has taken
+    /// them, so firmware that sees the transaction done finds the data in
+    /// memory.
+    fn give_dma_rx(&mut self, _bytes: Vec<u8>) {}
+}
+
+/// The longest data phase in bits: `SPI_MS_DATA_BITLEN` is 18 bits wide; with
+/// the CPU data path the 64-byte W buffer caps it.
+const DMA_MAX_BITS: usize = 1 << 18;
+
+/// Pack wire-order bits into bytes.
+fn pack_bits(bits: &[bool], lsb_first: bool) -> Vec<u8> {
+    let mut out = vec![0u8; bits.len().div_ceil(8)];
+    for (i, &bit) in bits.iter().enumerate() {
+        let j = (i % 8) as u32;
+        let pos = if lsb_first { j } else { 7 - j };
+        if bit {
+            out[i / 8] |= 1 << pos;
+        }
+    }
+    out
+}
+
+/// End a transaction: the received bits go to the GDMA when DMA_RX_ENA (the
+/// host completes the transaction once they are delivered), else into
+/// `W0..` and the transaction completes now.
+fn complete(host: &mut dyn GpSpiHost, rx: &[bool], store_empty: bool) {
+    let rd_lsb = host.reg(REG_CTRL) & CTRL_RD_BIT_ORDER != 0;
+    if host.dma_rx() {
+        host.give_dma_rx(pack_bits(rx, rd_lsb));
+        return;
+    }
+    if store_empty || !rx.is_empty() {
+        store_bits(host, rx, rd_lsb);
+    }
+    host.set_reg(REG_CMD, host.reg(REG_CMD) & !CMD_USR);
+    host.raise(INT_TRANS_DONE);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -221,7 +282,7 @@ impl GpSpiNet {
 
     /// Re-state every line's drive from the registers. Called after every
     /// register write while on a net.
-    pub(crate) fn apply_drive(&mut self, host: &dyn GpSpiHost, pads: &PadLines) {
+    pub(crate) fn apply_drive(&mut self, host: &mut dyn GpSpiHost, pads: &PadLines) {
         if Self::is_slave(host) {
             if self.master.take().is_some() {
                 self.deadline = None;
@@ -306,8 +367,18 @@ impl GpSpiNet {
                 n,
             ));
         }
-        let n = ((host.reg(REG_MS_DLEN) & 0x3_FFFF) as usize + 1).min(BUFFER_BITS);
-        let tx = w_bytes(host);
+        let dma_tx = host.dma_tx();
+        let cap = if dma_tx || host.dma_rx() {
+            DMA_MAX_BITS
+        } else {
+            BUFFER_BITS
+        };
+        let n = ((host.reg(REG_MS_DLEN) & 0x3_FFFF) as usize + 1).min(cap);
+        let tx: Vec<u8> = if dma_tx {
+            host.take_dma_tx(n.div_ceil(8))
+        } else {
+            w_bytes(host).to_vec()
+        };
         let mosi = user & USER_USR_MOSI != 0;
         let miso = user & USER_USR_MISO != 0;
         if user & USER_DOUTDIN != 0 {
@@ -424,12 +495,7 @@ impl GpSpiNet {
                 if x.cs && !x.keep_cs {
                     pads.drive_line(LINE_CS, LineDrive::PushPull, true);
                 }
-                let rd_lsb = host.reg(REG_CTRL) & CTRL_RD_BIT_ORDER != 0;
-                if !x.rx.is_empty() {
-                    store_bits(host, &x.rx, rd_lsb);
-                }
-                host.set_reg(REG_CMD, host.reg(REG_CMD) & !CMD_USR);
-                host.raise(INT_TRANS_DONE);
+                complete(host, &x.rx, false);
                 self.master_transactions += 1;
                 self.deadline = None;
                 return;
@@ -467,7 +533,7 @@ impl GpSpiNet {
         pads.drive_line(LINE_MISO, LineDrive::PushPull, level);
     }
 
-    fn slave_update_select(&mut self, host: &dyn GpSpiHost, pads: &PadLines) {
+    fn slave_update_select(&mut self, host: &mut dyn GpSpiHost, pads: &PadLines) {
         let pol = host.reg(REG_MISC) & MISC_SLAVE_CS_POL != 0;
         let selected = Self::is_slave(host) && pads.input(LINE_CS).map(|l| l != pol) == Some(false);
         if selected == self.slave.selected {
@@ -475,11 +541,16 @@ impl GpSpiNet {
         }
         if selected {
             let wr_lsb = host.reg(REG_CTRL) & CTRL_WR_BIT_ORDER != 0;
-            let tx = w_bytes(host);
+            // DMA: everything the GDMA has queued; else the W buffer.
+            let tx: Vec<u8> = if host.dma_tx() {
+                host.take_dma_tx(DMA_MAX_BITS / 8)
+            } else {
+                w_bytes(host).to_vec()
+            };
             self.slave = Slave {
                 selected: true,
                 sck: pads.input(LINE_SCK).unwrap_or(Self::cpol(host)),
-                tx: (0..BUFFER_BITS)
+                tx: (0..tx.len() * 8)
                     .map(|i| bit_of_bytes(&tx, i, wr_lsb))
                     .collect(),
                 rx: Vec::new(),
@@ -497,15 +568,12 @@ impl GpSpiNet {
     /// CS went high on a selected slave: the transaction is complete.
     fn slave_finish(&mut self, host: &mut dyn GpSpiHost) {
         let rx = std::mem::take(&mut self.slave.rx);
-        let rd_lsb = host.reg(REG_CTRL) & CTRL_RD_BIT_ORDER != 0;
-        store_bits(host, &rx, rd_lsb);
         let slave1 = host.reg(REG_SLAVE1);
         host.set_reg(
             REG_SLAVE1,
             (slave1 & !0x3_FFFF) | (rx.len() as u32 & 0x3_FFFF),
         );
-        host.set_reg(REG_CMD, host.reg(REG_CMD) & !CMD_USR);
-        host.raise(INT_TRANS_DONE);
+        complete(host, &rx, true);
         self.slave_transactions += 1;
     }
 
@@ -536,7 +604,12 @@ impl GpSpiNet {
                 let leading = level != Self::cpol(host);
                 if leading != Self::slave_cpha(host) {
                     // Sampling edge.
-                    if self.slave.rx.len() < BUFFER_BITS {
+                    let cap = if host.dma_rx() {
+                        DMA_MAX_BITS
+                    } else {
+                        BUFFER_BITS
+                    };
+                    if self.slave.rx.len() < cap {
                         self.slave.rx.push(pads.wire_level(LINE_MOSI));
                     }
                 } else {
@@ -633,7 +706,7 @@ mod tests {
         h.set_reg(REG_CMD, CMD_USR);
         let p = pads();
         let mut net = GpSpiNet::default();
-        net.apply_drive(&h, &p);
+        net.apply_drive(&mut h, &p);
         assert!(p.drives(LINE_SCK) && p.drives(LINE_CS) && !p.drives(LINE_MISO));
         net.launch(&mut h, 0, &p);
         assert!(!p.level(LINE_CS), "CS low for the transaction");
@@ -676,7 +749,7 @@ mod tests {
         h.set_reg(REG_W0, 0x81);
         let p = pads();
         let mut net = GpSpiNet::default();
-        net.apply_drive(&h, &p);
+        net.apply_drive(&mut h, &p);
         assert!(!p.drives(LINE_MISO));
         p.set_input(LINE_SCK, false);
         p.set_input(LINE_CS, false);

@@ -1543,7 +1543,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: 28ba20c6649418ecd3c16045f42552510d83da638fd6cb86264d0ab28df32826
+    drift_ack_digest: 99aac378061a7a2dee9e35c6e365469ee30873e71de1146156a4331554de2b72
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -2060,6 +2060,11 @@ boards:
     # (CSN, CSNPOL, IFTIMING.CSNDUR, DCX) at 0x4002F000; spi.rs keeps an nRF net
     # transfer in the bus-tick set. No register map or reset value of this board
     # changed. Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
+    # 2026-10-15 (SPI DMA): watched gpdma.rs + spi.rs. GPDMA only fills the new
+    # DmaRequest::remaining field (None); the H5 SPI v3 path is untouched. The
+    # classic/FIFO STM32 SPI gains TXDMAEN/RXDMAEN requests and LDMA_TX/LDMA_RX
+    # (not the H5 layout). No register map or reset value changed. No physical
+    # probe connected. Approved by the maintainer. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-15
   - id: esp32c3
     # 2026-09-15 (#932): SPI edge sampling is opt-in (`SpiSampling::Byte` default). Byte-level golden pins the pre-feature path. Controllers without a bit engine reject opt-in at config time.
@@ -2221,7 +2226,7 @@ boards:
     # reset value the reset-conformance capture asserts is touched: the new
     # behaviour lives in exchange memory and the radio event path, which that
     # capture does not cover. This acknowledges model drift, NOT a recapture.
-    drift_ack_digest: 5ccbafc74ee6361323c2400985dc65ed0cdc97202a17bf3b1c6ac3ed839996d0
+    drift_ack_digest: 7a4adc583a71ede65be3fa9d4a2576fb2107eedde9c7f790641c57d4d3f060ea
     models:
       - crates/core/src/cpu/riscv.rs
       - crates/core/src/decoder/riscv.rs
@@ -2964,6 +2969,13 @@ boards:
     # pad on a net; off a net the byte-level behaviour is unchanged. No register map
     # or reset value changed. Pinned by world_gpio_net_buses. Approved by the
     # maintainer. ACK, NOT A CAPTURE.
+    # 2026-10-15 (SPI DMA): watched esp32c3/spi.rs, the new esp32c3/gdma.rs and
+    # the chip yaml. The GDMA at 0x6003F000 becomes a behavioral model
+    # (esp32c3_gdma) over the same SVD register map and reset values the
+    # declarative descriptor carried (pinned by reset_values_match_the_svd);
+    # GP-SPI2 honours SPI_DMA_CONF.DMA_TX_ENA/DMA_RX_ENA through it. CPU-path
+    # (W buffer) transactions are unchanged. No physical probe connected.
+    # Approved by the maintainer. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-15
 
   - id: nucleo-l476rg
@@ -3403,7 +3415,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: 1ac97667b1a012e87023a7516766177fc73c4c40089ba2b4cfd9ef08be3ff21e
+    drift_ack_digest: 2e565c5898739c7156620845b9ac0b46db46506b2f563a03f3f6b221e00a5a27
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -3891,6 +3903,12 @@ boards:
     # (CSN, CSNPOL, IFTIMING.CSNDUR, DCX) at 0x4002F000; spi.rs keeps an nRF net
     # transfer in the bus-tick set. No register map or reset value of this board
     # changed. Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
+    # 2026-10-15 (SPI DMA): watched dma.rs / stm32f4_dma.rs, spi.rs and the chip
+    # yaml (new `requests:` routes). SPI TXDMAEN/RXDMAEN raise DMA requests;
+    # peripheral DMA items now copy data at PSIZE/MSIZE instead of writing 0 /
+    # dropping reads, and fire only on request; a word store to a DMA register
+    # is one write. No register map or reset value changed. No physical probe
+    # connected. Approved by the maintainer. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-15
   - id: nucleo-l073rz
     # 2026-09-16 (#1128): Cortex-M browser JIT rides `Machine::advance_with_window_runner` — the advance loop now plans and commits the window (tick cadence, reset drains, idle fast forward) and a compiled backend only supplies the instruction stream; the JIT batch gates (takeable exception, SysTick crossing, SYSRESETREQ latch) become public for `jit-framework` so the browser adapter refuses the same windows `run_jit_loop` does. In `cortex_m.rs`: `note_chained` only counts a chain that retired instructions, `sysreset_latched` is pub. Interpreter path unchanged — the gates are the ones `run_jit_loop` already used; pinned by `cortex_m_jit_alu_lockstep` and new window-runner cadence tests. No silicon capture pins JIT.
@@ -4288,7 +4306,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: 6687c9e6581c6202fdfd1156189cad393a8dd985ce82c01909ae28e85bca3c23
+    drift_ack_digest: daebe60faf92691bb22649f5921468ad4364f08675c4b520eb0c73543530cfde
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -4718,6 +4736,12 @@ boards:
     # (CSN, CSNPOL, IFTIMING.CSNDUR, DCX) at 0x4002F000; spi.rs keeps an nRF net
     # transfer in the bus-tick set. No register map or reset value of this board
     # changed. Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
+    # 2026-10-15 (SPI DMA): watched dma.rs / stm32f4_dma.rs, spi.rs and the chip
+    # yaml (new `requests:` routes). SPI TXDMAEN/RXDMAEN raise DMA requests;
+    # peripheral DMA items now copy data at PSIZE/MSIZE instead of writing 0 /
+    # dropping reads, and fire only on request; a word store to a DMA register
+    # is one write. No register map or reset value changed. No physical probe
+    # connected. Approved by the maintainer. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-15
   - id: stm32f103
     # 2026-09-16 (#1128): Cortex-M browser JIT rides `Machine::advance_with_window_runner` — the advance loop now plans and commits the window (tick cadence, reset drains, idle fast forward) and a compiled backend only supplies the instruction stream; the JIT batch gates (takeable exception, SysTick crossing, SYSRESETREQ latch) become public for `jit-framework` so the browser adapter refuses the same windows `run_jit_loop` does. In `cortex_m.rs`: `note_chained` only counts a chain that retired instructions, `sysreset_latched` is pub. Interpreter path unchanged — the gates are the ones `run_jit_loop` already used; pinned by `cortex_m_jit_alu_lockstep` and new window-runner cadence tests. No silicon capture pins JIT.
@@ -5169,7 +5193,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: 36b35b40d599bf29f94aa133004f76731b5c90527acaf6a5519942493186d56c
+    drift_ack_digest: 8b721264ff611bfbb3fcb42b0942e48e422124bd8daec4ed9fc5149361d88960
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -5674,6 +5698,12 @@ boards:
     # (CSN, CSNPOL, IFTIMING.CSNDUR, DCX) at 0x4002F000; spi.rs keeps an nRF net
     # transfer in the bus-tick set. No register map or reset value of this board
     # changed. Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
+    # 2026-10-15 (SPI DMA): watched dma.rs / stm32f4_dma.rs, spi.rs and the chip
+    # yaml (new `requests:` routes). SPI TXDMAEN/RXDMAEN raise DMA requests;
+    # peripheral DMA items now copy data at PSIZE/MSIZE instead of writing 0 /
+    # dropping reads, and fire only on request; a word store to a DMA register
+    # is one write. No register map or reset value changed. No physical probe
+    # connected. Approved by the maintainer. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-15
   - id: stm32f407
     # 2026-09-16 (#1128): Cortex-M browser JIT rides `Machine::advance_with_window_runner` — the advance loop now plans and commits the window (tick cadence, reset drains, idle fast forward) and a compiled backend only supplies the instruction stream; the JIT batch gates (takeable exception, SysTick crossing, SYSRESETREQ latch) become public for `jit-framework` so the browser adapter refuses the same windows `run_jit_loop` does. In `cortex_m.rs`: `note_chained` only counts a chain that retired instructions, `sysreset_latched` is pub. Interpreter path unchanged — the gates are the ones `run_jit_loop` already used; pinned by `cortex_m_jit_alu_lockstep` and new window-runner cadence tests. No silicon capture pins JIT.
@@ -6089,7 +6119,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: 5867b7a366779d30b472fbeab356387cfe37bd7eabc462c867a2806786ac9f07
+    drift_ack_digest: e7ec04a6fec9f00f15d40af116281538f8bcca138d4b35d646a5b0536d632497
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -6529,6 +6559,12 @@ boards:
     # (CSN, CSNPOL, IFTIMING.CSNDUR, DCX) at 0x4002F000; spi.rs keeps an nRF net
     # transfer in the bus-tick set. No register map or reset value of this board
     # changed. Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
+    # 2026-10-15 (SPI DMA): watched dma.rs / stm32f4_dma.rs, spi.rs and the chip
+    # yaml (new `requests:` routes). SPI TXDMAEN/RXDMAEN raise DMA requests;
+    # peripheral DMA items now copy data at PSIZE/MSIZE instead of writing 0 /
+    # dropping reads, and fire only on request; a word store to a DMA register
+    # is one write. No register map or reset value changed. No physical probe
+    # connected. Approved by the maintainer. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-15
   - id: esp32s3
     # 2026-09-16 (#jit-xtensa-browser): generic Xtensa BB emit core + browser adapter. `xtensa_lx7.rs` gains only `invalidate_for_data_write` — a public forwarder to the existing `maybe_invalidate_for_write` so JIT-committed stores run the same SMC invalidation the S8i/S32i interpreter arms run (no interpreter behavior change; the existing sub-word rules are reused). Hot-block dispatch and every interpreter arm are untouched; the new shapes are browser-only and refused when unsafe. Native interpreter-identity tests in `xtensa_jit/variable.rs`. No silicon capture pins the browser JIT.
@@ -8418,6 +8454,7 @@ boards:
       - crates/core/src/peripherals/dac.rs
       - crates/core/src/peripherals/dbgmcu.rs
       - crates/core/src/peripherals/dma.rs
+      - crates/core/src/peripherals/dmamux.rs
       - crates/core/src/peripherals/exti.rs
       - crates/core/src/peripherals/flash.rs
       - crates/core/src/peripherals/i2c.rs

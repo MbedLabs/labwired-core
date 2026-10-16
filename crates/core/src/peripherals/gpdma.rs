@@ -375,6 +375,7 @@ impl Gpdma {
                                 val: 0,
                                 direction: DmaDirection::Copy,
                                 transform: None,
+                                remaining: None,
                             });
                         }
                         word += 1;
@@ -403,6 +404,7 @@ impl Gpdma {
                 dbx: ch.ctr1 & CTR1_DBX != 0,
                 dhx: ch.ctr1 & CTR1_DHX != 0,
             }),
+            remaining: None,
         });
 
         // H5 GPDMA advances user-visible CSAR/CDAR as the transfer runs.

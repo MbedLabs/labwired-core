@@ -312,14 +312,14 @@ One net per wire, as for any other signal:
 
 | Peripheral | Register file | Pads (chip yaml) | Roles |
 |------------|---------------|------------------|-------|
-| STM32 SPI | classic F1/F4/L0 (`CR1.DFF`) / FIFO G0/L4/G4/WB/F7 (`CR2.DS`, `FRXTH`, `FRLVL`/`FTLVL`) | NSS included on every table: G071 AF0 (`pad_map: stm32g0`); F4/F7 AF5 (PA4/PA15, PB9/PB12); L476 AF5/AF6 (SPI1 PA4/PA15/PE12, SPI2 PB9/PB12/PD0, SPI3 PA4/PA15 on AF6); G474 (`pad_map: stm32g4`, SPI1 PA4/PA15/PG5, SPI2 PB12/PF0 and PD15 on AF6, SPI3 PA4/PA15 on AF6); WB55 (`pad_map: stm32wb`, SPI1 PA4/PA15/PB2, SPI2 PB9/PB12/PD0); L073 (`pad_map: stm32l0`, SPI1 AF0 PA4/PA15, PE12 AF2; SPI2 PB12 AF0, PB9 AF5, PD0 AF1) | master, slave |
+| STM32 SPI | classic F1/F4/L0 (`CR1.DFF`) / FIFO G0/L4/G4/WB/F7 (`CR2.DS`, `FRXTH`, `FRLVL`/`FTLVL`); DMA requests (`TXDMAEN`/`RXDMAEN`, `LDMA_TX`/`LDMA_RX`, [SPI DMA](#spi-dma)) | NSS included on every table: G071 AF0 (`pad_map: stm32g0`); F4/F7 AF5 (PA4/PA15, PB9/PB12); L476 AF5/AF6 (SPI1 PA4/PA15/PE12, SPI2 PB9/PB12/PD0, SPI3 PA4/PA15 on AF6); G474 (`pad_map: stm32g4`, SPI1 PA4/PA15/PG5, SPI2 PB12/PF0 and PD15 on AF6, SPI3 PA4/PA15 on AF6); WB55 (`pad_map: stm32wb`, SPI1 PA4/PA15/PB2, SPI2 PB9/PB12/PD0); L073 (`pad_map: stm32l0`, SPI1 AF0 PA4/PA15, PE12 AF2; SPI2 PB12 AF0, PB9 AF5, PD0 AF1) | master, slave |
 | STM32 I²C, modern | L4/G0 `TIMINGR` (`ISR`/`ICR`) | G071 AF6 (`pad_map: stm32g0`); L4 AF4 | controller, target |
 | STM32 I²C, legacy | F1/F2/F4 (`SR1`/`SR2`/`CCR`/`TRISE`) | F103 default mapping (PB6/PB7, PB10/PB11); F401 AF4 | master, slave |
 | RP2040 SPI | PL022 (`SSPCR0`/`SSPCR1`/`SSPDR`/`SSPSR`/`SSPCPSR`) | IO_BANK0 `FUNCSEL` 1: SCK, TX, RX, CSn | master, slave |
 | RP2040 I²C | DW_apb_i2c (`IC_CON`/`IC_TAR`/`IC_SAR`/`IC_DATA_CMD`/...) | IO_BANK0 `FUNCSEL` 3: SDA, SCL | master, slave |
 | nRF52 SPI | SPIM / SPIS, EasyDMA (`TXD`/`RXD` `PTR`/`MAXCNT`/`AMOUNT`) | any pad, by `PSEL.SCK`/`MOSI`/`MISO` (and SPIS `PSEL.CSN`; SPIM3 `PSEL.CSN` and `PSELDCX`) | master (`ENABLE = 7`), slave (`ENABLE = 2`) |
 | nRF52 I²C | TWIM / TWIS, EasyDMA | any pad, by `PSEL.SCL`/`SDA` | controller (`ENABLE = 6`), target (`ENABLE = 9`) |
-| ESP32-C3 / ESP32-C6 GP-SPI2 | Espressif GP-SPI (`SPI_CMD`/`SPI_USER`/`SPI_MS_DLEN`/`W0..W15`/`SPI_SLAVE`) | GPIO matrix: `FSPICLK`, `FSPID`, `FSPIQ`, `FSPICS0` (63/65/64/68 on both), any pad | master, slave |
+| ESP32-C3 / ESP32-C6 GP-SPI2 | Espressif GP-SPI (`SPI_CMD`/`SPI_USER`/`SPI_MS_DLEN`/`W0..W15`/`SPI_SLAVE`), or by GDMA (`SPI_DMA_CONF`, [SPI DMA](#spi-dma)) | GPIO matrix: `FSPICLK`, `FSPID`, `FSPIQ`, `FSPICS0` (63/65/64/68 on both), any pad | master, slave |
 | ESP32-C3 / ESP32-C6 I²C0 | Espressif command list (`CTR`/`COMD0..7`/`DATA` FIFOs/`SLAVE_ADDR`) | GPIO matrix: `I2CEXT0_SCL`/`SDA` (53/54 on the C3, 45/46 on the C6), any pad, out and back in | master, slave |
 | ESP32-S3 GP-SPI2 | Espressif GP-SPI, as the C3 | GPIO matrix: `FSPICLK`, `FSPID`, `FSPIQ`, `FSPICS0` (101/103/102/110), pads 0..31 | master, slave |
 | ESP32-S3 I²C0 | Espressif command list, as the C3 | GPIO matrix: `I2CEXT0_SCL`/`SDA` (89/90), pads 0..31, out and back in | master, slave |
@@ -525,8 +525,9 @@ bits it sampled to `W0..`, their count to `SLAVE1.DATA_BITLEN`, and latches
 `SPI_TRANS_DONE` (CPOL `CK_IDLE_EDGE`, CPHA `SLAVE.CLK_MODE_13`, as
 `spi_ll_slave_set_mode` sets them). Tested against an STM32G071 both ways
 round on the C3 and the C6 (register-level firmware), and with esp-hal
-1.1's blocking master driver (hardware CS0) on the C3. Not on a net: DMA,
-dual/quad modes, segmented transfers and the master's CS polarity bits.
+1.1's blocking master driver (hardware CS0) on the C3. Both roles also run
+by GDMA (see [SPI DMA](#spi-dma)). Not on a net: dual/quad modes, segmented
+transfers and the master's CS polarity bits.
 
 **I²C, ESP32-C3 / ESP32-C6** (I2C0): the same open-drain wire engine as the
 legacy STM32 and RP2040 I²C, driven by the command list. A master
@@ -622,10 +623,62 @@ Not modelled on a net yet: other SPI/I²C families (the S3's SPI3 and I2C1,
 the classic I2C1, the H5 SPI v3, whose NSS pads stay unrouted), ESP pads 32
 and up, legacy-I²C
 10-bit addressing, SMBus/PEC, modern-I²C slave byte control (`SBC`), the I²C
-filters and timeouts, SPI CRC, TI mode, the SPI mode fault (`MODF`) and DMA on
-either side (`LDMA_TX`/`LDMA_RX` are stored, no STM32 SPI DMA request is
-modelled). Such a peripheral on a net
-keeps its usual behaviour and drives its lines push-pull as before.
+filters and timeouts, SPI CRC, TI mode and the SPI mode fault (`MODF`). Such
+a peripheral on a net keeps its usual behaviour and drives its lines
+push-pull as before.
+
+### SPI DMA
+
+The data of an SPI transfer can move by DMA on either chip, master or slave,
+on a net or off it (byte-level devices on the bus); the bits on the wire are
+the same as with the CPU feeding `DR` or `W0..W15`.
+
+**STM32** (classic F1/F4/L0 and FIFO G0/L4/G4/WB/F7 SPI). `CR2.TXDMAEN`
+raises a request while TXE is set (the classic port's buffer is empty; the
+FIFO port's TX FIFO is at or below half full) and the SPI is enabled;
+`CR2.RXDMAEN` while RXNE is set (on the FIFO port it follows `FRXTH`). Each
+request is held until the `DR` write (TX) or read (RX) that answers it, so
+the DMA moves one item per free slot or received frame. The request reaches
+the DMA channel the chip's routing registers select: the F1's fixed channels
+and the L4's `CSELR` (`type: dma`, `config.requests: { spi1_tx: 3, spi1_rx:
+[2, 1] }`), the F4's `SxCR.CHSEL` (`type: stm32f4_dma`, `config.requests: {
+spi1_tx: [[3, 3], [5, 3]] }`, stream and channel), and on the G0 the
+DMAMUX (`type: dmamux`, `DMAMUX_CxCR.DMAREQ_ID`, channel x feeding DMA1
+channel x + 1). The G071, F103, F401, F407 and L476 chip files declare their
+SPI routes. Each DMA item is one access at its programmed width, so a
+half-word item packs two frames at `DS` ≤ 8 bits; with `CR2.LDMA_TX` the last
+item of a transfer (the DMA tells the SPI, as its end-of-transfer signal
+does) carries one frame, and with `LDMA_RX` and `FRXTH = 0` the odd last byte
+is requested below the 16-bit threshold. Enable the DMA channel before the
+SPI's request bit, as HAL does: a request raised while no channel is enabled
+is not seen again until it is answered.
+
+**ESP32-C3 / ESP32-C6** (GP-SPI2 by GDMA). With `SPI_DMA_CONF.DMA_TX_ENA`
+the transaction's MOSI bytes (a master's data phase, a slave's answer) come
+from what the GDMA OUT link bound to SPI2 (`OUT_PERI_SEL = 0`) pushed into
+the controller when it was started; with `DMA_RX_ENA` the bytes received go
+to the IN link (`IN_PERI_SEL = 0`), whose descriptors get the data, their
+length, `suc_eof` on the last and the owner bit back to the CPU. The data
+phase may then exceed the 64-byte W buffer. The transaction completes
+(`USR` clears, `SPI_TRANS_DONE`) once the IN link holds the bytes, so
+firmware that sees it done finds them in memory; `IN_SUC_EOF` / `IN_DONE`
+and `OUT_EOF` / `OUT_TOTAL_EOF` / `OUT_DONE` latch in the GDMA. The SPI's
+AFIFO reset bits (`SPI_DMA_CONF` 29..31) empty its DMA FIFOs, as drivers do
+before each transaction. The C3 GDMA (`esp32c3_gdma`) also copies memory to
+memory (`IN_CONF0.MEM_TRANS_EN`).
+
+Tested end to end over nets (`examples/gpio-net-buses`): a G071 master and a
+G071 slave both by DMA through the DMAMUX (`env-spi-dma.yaml`), and an
+ESP32-C3 and an ESP32-C6, master and slave by GDMA, against a G071 by DMA
+(`env-spi-esp32c3-dma.yaml`, `env-spi-esp32c3-dma-slave.yaml`), each run with
+the nodes swapped and with 37 ns rounds.
+
+Not modelled: DMA FIFO thresholds and bursts (`SxFCR`, one item per request),
+DMA priorities, DMAMUX request synchronisation and generators, GDMA
+descriptor errors (`*_DSCR_ERR`, `IN_DSCR_EMPTY`: a short IN list drops the
+excess), the GP-SPI's segmented DMA transfers, and DMA for the other
+Espressif peripherals (UHCI0, I2S, crypto, ADC stall visibly on the C3 and
+C6 GDMA).
 
 ## Reports
 

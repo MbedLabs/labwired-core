@@ -66,12 +66,15 @@
 //!
 //! ## What is NOT modelled (documented stubs, never silent byte movement)
 //!
-//! * **Peripheral-coupled transfers** (SPI2, UHCI0, I2S, AES, SHA, ADC,
-//!   PARLIO): a START with `MEM_TRANS_EN` clear and a real peripheral bound in
-//!   `PERI_SEL` (0, 2, 3, 6, 7, 8, 9) is marked *pending* and **stalls
-//!   visibly** — no EOF latches and `needs_bus_tick()` stays true. There is no
-//!   peripheral-side pump on the C6 yet, and auto-completing would claim a
-//!   transfer that never moved a byte. A Dummy `PERI_SEL` value or the unbound
+//! * **Peripheral-coupled transfers** other than the GP-SPI2 (UHCI0, I2S,
+//!   AES, SHA, ADC, PARLIO): a START with `MEM_TRANS_EN` clear and such a
+//!   peripheral bound in `PERI_SEL` (2, 3, 6, 7, 8, 9) is marked *pending* and
+//!   **stalls visibly** — no EOF latches and `needs_bus_tick()` stays true.
+//!   There is no peripheral-side pump for them, and auto-completing would
+//!   claim a transfer that never moved a byte. The **GP-SPI2** (`PERI_SEL` =
+//!   0) IS coupled: the OUT list feeds the controller's transmit FIFO and the
+//!   IN list receives what a DMA transaction read, through the C3's shared
+//!   coupling ([`crate::peripherals::esp_gdma`]). A Dummy `PERI_SEL` value or the unbound
 //!   reset value (`0x3F`) takes the fallback auto-complete path (EOF/DONE
 //!   latch, zero bytes moved), matching the S3 twin's fallback so a firmware
 //!   that never binds a peripheral cannot hang.
@@ -712,8 +715,49 @@ impl Esp32c6Gdma {
         last
     }
 
+    /// Serve the directions bound to the GP-SPI2 (`PERI_SEL` = 0): the C6
+    /// GP-SPI2 is the C3's controller model, and the coupling is the one the
+    /// C3 GDMA uses ([`crate::peripherals::esp_gdma`]).
+    fn pump_spi2(&mut self, bus: &mut dyn Bus) {
+        use crate::peripherals::esp_gdma::{
+            fill_in, spi2_in_delivered, spi2_in_take, spi2_out_load, walk_out,
+        };
+        for ch in 0..NUM_CHANNELS {
+            let c = self.channels[ch];
+            if c.out_coupled_pending && c.tx.peri_sel & PERI_SEL_MASK == 0 {
+                let w = walk_out(
+                    bus,
+                    Self::full_desc_addr(c.tx.link_addr) as u32,
+                    c.tx.conf1 & CHECK_OWNER_BIT != 0,
+                    c.tx.conf0 & OUT_AUTO_WRBACK_BIT != 0,
+                );
+                spi2_out_load(bus, &w.bytes);
+                let c = &mut self.channels[ch];
+                c.out_coupled_pending = false;
+                c.out_eof_des_addr = w.last_desc;
+                c.tx.int_raw |= OUT_EOF_BIT | OUT_TOTAL_EOF_BIT | OUT_DONE_BIT;
+            }
+            if c.in_coupled_pending && c.rx.peri_sel & PERI_SEL_MASK == 0 {
+                if let Some(rx) = spi2_in_take(bus) {
+                    let last = fill_in(
+                        bus,
+                        Self::full_desc_addr(c.rx.link_addr) as u32,
+                        &rx,
+                        c.rx.conf1 & CHECK_OWNER_BIT != 0,
+                    );
+                    spi2_in_delivered(bus);
+                    let c = &mut self.channels[ch];
+                    c.in_coupled_pending = false;
+                    c.in_suc_eof_des_addr = last;
+                    c.rx.int_raw |= IN_SUC_EOF_BIT | IN_DONE_BIT;
+                }
+            }
+        }
+    }
+
     /// Execute pending descriptor walks. Called from `tick_with_bus`.
     fn do_tick_with_bus(&mut self, bus: &mut dyn Bus) {
+        self.pump_spi2(bus);
         for ch in 0..NUM_CHANNELS {
             if !self.channels[ch].pending_m2m {
                 continue;
