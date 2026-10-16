@@ -678,18 +678,54 @@ AFIFO reset bits (`SPI_DMA_CONF` 29..31) empty its DMA FIFOs, as drivers do
 before each transaction. The C3 GDMA (`esp32c3_gdma`) also copies memory to
 memory (`IN_CONF0.MEM_TRANS_EN`).
 
+**The STM32 DMA controllers themselves.** One data item per arbitration slot
+(one slot per cycle) per controller: when several channels or streams have
+work, the slot goes to the highest software priority (`CCR.PL`, `SxCR.PL`;
+GPDMA `CCR.PRIO`, 11 first), then the lowest channel or stream number, and a
+request that loses the slot stays latched. An item that faults on the bus (an
+unmapped address) sets `TEIF` (GPDMA `DTEF`) and disables its channel or
+stream, as silicon does. The F4/F7 stream FIFO (`SxFCR.DMDIS` = 1, and always
+for memory-to-memory) is modelled: requests fill or drain a 16-byte FIFO at
+the peripheral port (`PBURST` moves 4/8/16 items per request), the memory
+port moves `FTH` worth (1/4 .. full) as `MSIZE` beats (`MBURST` bursts),
+`PSIZE` ≠ `MSIZE` packs and unpacks little-endian, `SxNDTR` counts `PSIZE`
+items, `SxFCR.FS` reads the level, and clearing `EN` flushes a P2M FIFO to
+memory before the stream stops (`EN` reads 1 until then, `TCIF` set).
+Direct mode forces `MSIZE` = `PSIZE` and no bursts at enable. `FEIF` is set
+for a threshold that does not hold a whole number of memory bursts (RM0090
+Table 48: the stream does not enable) and for a FIFO overrun (P2M) or
+underrun (M2P) when a request comes. On the G0 the DMAMUX request generators
+(`RGxCR`) turn edges of EXTI lines 0..15 (the pad `EXTI_EXTICRx` selects) or
+of the channel events `dmamux_evt0..3` into `GNBREQ + 1` requests, and
+request synchronisation (`CxCR.SE`, `SYNC_ID`, `SPOL`, `NBREQ`) lets
+`NBREQ + 1` requests through per edge, holding the rest; `EGE` emits a
+channel's event every `NBREQ + 1` requests; `RGSR.OF` / `CSR.SOF` report
+overruns.
+
+**GDMA descriptor errors.** On the GP-SPI2 path a CPU-owned descriptor under
+`*_CHECK_OWNER`, or a descriptor, buffer or next link outside the internal
+SRAM the DMA reaches, stops the walk with `IN_DSCR_ERR` / `OUT_DSCR_ERR`; an
+IN list shorter than the data sets `IN_DSCR_EMPTY` (no `IN_SUC_EOF`); an OUT
+list that ends without a `suc_eof` descriptor sends its bytes without
+`OUT_EOF`. `*_DONE` latch per descriptor consumed.
+
 Tested end to end over nets (`examples/gpio-net-buses`): a G071 master and a
-G071 slave both by DMA through the DMAMUX (`env-spi-dma.yaml`), and an
-ESP32-C3 and an ESP32-C6, master and slave by GDMA, against a G071 by DMA
+G071 slave both by DMA through the DMAMUX (`env-spi-dma.yaml`), an F401
+master whose DMA2 streams first complete two memory-to-memory copies in
+priority order and then move SPI1 both ways through their FIFOs in half-word
+INCR4 bursts against the G071 slave (`env-spi-f4-dma.yaml`), and an ESP32-C3
+and an ESP32-C6, master and slave by GDMA, against a G071 by DMA
 (`env-spi-esp32c3-dma.yaml`, `env-spi-esp32c3-dma-slave.yaml`), each run with
 the nodes swapped and with 37 ns rounds.
 
-Not modelled: DMA FIFO thresholds and bursts (`SxFCR`, one item per request),
-DMA priorities, DMAMUX request synchronisation and generators, GDMA
-descriptor errors (`*_DSCR_ERR`, `IN_DSCR_EMPTY`: a short IN list drops the
-excess), the GP-SPI's segmented DMA transfers, and DMA for the other
-Espressif peripherals (UHCI0, I2S, crypto, ADC stall visibly on the C3 and
-C6 GDMA).
+Not modelled: `DMEIF` (the request handshake never loses a direct-mode
+item), bus timing inside a slot (a burst or FIFO drain moves at once), the
+GPDMA's weighted round robin among low-priority channels (strict `PRIO`
+order instead), DMAMUX inputs with no source in the model (G071 LPTIM1_OUT,
+LPTIM2_OUT and TIM14_OC), the G071's DMA / DMAMUX interrupt lines (the chip
+file wires none), GDMA descriptor errors on the C6 memory-to-memory path, the
+GP-SPI's segmented DMA transfers, and DMA for the other Espressif peripherals
+(UHCI0, I2S, crypto, ADC stall visibly on the C3 and C6 GDMA).
 
 ## Reports
 

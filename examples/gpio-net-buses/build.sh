@@ -34,6 +34,10 @@ for fw in f4_spi16_master f4_spi16_slave; do
     # Hardware NSS: the master's SSOE drives it, the slave (SSM=0) reads it.
     "$CC" "${F4[@]}" -DHW_NSS=1 "src/$fw.c" -o "firmware/${fw//_/-}-nss.elf"
 done
+# STM32F401 DMA2: stream priority (two memory-to-memory streams), then SPI1
+# both ways through the stream FIFOs with half-word INCR4 bursts, against the
+# G071 DMA slave.
+"$CC" "${F4[@]}" src/f4_spi_dma_master.c -o firmware/f4-spi-dma-master.elf
 # Legacy I2C (CR1/SR1/SR2/CCR) on the STM32F103 (Cortex-M3) and STM32F401.
 F1=(--target=thumbv7m-none-eabi -mcpu=cortex-m3 "${COMMON[@]}" -T src/f1.ld)
 for fw in legacy_i2c_controller legacy_i2c_target; do
