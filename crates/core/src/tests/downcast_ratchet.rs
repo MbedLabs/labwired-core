@@ -152,7 +152,11 @@ use std::path::{Path, PathBuf};
 /// RTT and ITM reaches above, plus two `as_any()` checks that confirm a cached
 /// pad-bracket slot is still that peripheral (`begin_*`). Measured by
 /// `the_downcast_count_only_shrinks`.
-const MAX_AS_ANY: usize = 198;
+///
+/// 198 → 197: `SystemBus::wire_esp32s3_spi_pads` binds GP-SPI3 beside GP-SPI2,
+/// and resolving both by name through one `is_spi` check retired the two
+/// separate `as_any()` type tests the SPI2-only lookup carried.
+const MAX_AS_ANY: usize = 197;
 // GPIO schedule migration removes four concrete sensor downcasts.
 const MAX_DOWNCAST_REF: usize = 197;
 

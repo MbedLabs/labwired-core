@@ -1,4 +1,4 @@
-/* ESP32-S3 GP-SPI2 (or --defsym CHIP_ESP32=1: classic ESP32 HSPI) slave on
+/* ESP32-S3 GP-SPI2 (INST1: GP-SPI3; or --defsym CHIP_ESP32=1: classic ESP32 HSPI) slave on
  * gpio nets, register level, CPU-controlled (W buffer) as esp-idf's
  * spi_slave does it without DMA: slave mode, mode 0, full duplex, the answer
  * preloaded in W0, USR set; the transaction ends when the master lets CS
@@ -9,6 +9,9 @@
  * the transaction-done flag word (S3 SPI_DMA_INT_RAW, classic SPI_SLAVE),
  * RESULT[7] = 1 done.
  */
+    /* The pads of the slave role (classic PADS_HI: input-only GPIO34..36
+     * take the master's lines in). */
+    .set SPI_ROLE_SLAVE, 1
     .include "esp32x.inc"
 
     .section .text,"ax"

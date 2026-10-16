@@ -165,14 +165,33 @@ impl SystemBus {
     /// only caller: `configure_xtensa_esp32` registers the classic peripheral
     /// bank in Rust and bypasses the chip YAML's peripheral list, so the classic
     /// call site lives there too. Both are no-ops unless both models are present.
+    ///
+    /// I2C0 (`i2c0`, signals 29/30) and I2C1 (`i2c1` at 0x3FF6_7000, signals
+    /// 95/96) are resolved by NAME: both are the same model, and
+    /// `configure_xtensa_esp32` registers `i2c1` from the table BEFORE it
+    /// builds `i2c0`, so "the first one found" would bind I2C1's wire to
+    /// I2C0's signals. A hand-built bus with one unnamed controller still
+    /// wires it as I2C0.
     pub(crate) fn wire_esp32_i2c_pads(&mut self) {
-        use crate::peripherals::esp32::gpio::Esp32Gpio;
+        use crate::peripherals::esp32::gpio::{Esp32Gpio, I2C0_SIGNALS, I2C1_SIGNALS};
         use crate::peripherals::esp32::i2c::Esp32I2c;
 
-        let i2c_idx = self
-            .peripherals
-            .iter()
-            .position(|p| p.dev.as_any().map(|a| a.is::<Esp32I2c>()).unwrap_or(false));
+        let is_i2c = |p: &crate::bus::PeripheralEntry| {
+            p.dev.as_any().map(|a| a.is::<Esp32I2c>()).unwrap_or(false)
+        };
+        let mut controllers: Vec<_> = [("i2c0", I2C0_SIGNALS), ("i2c1", I2C1_SIGNALS)]
+            .into_iter()
+            .filter_map(|(name, signals)| {
+                self.find_peripheral_index_by_name(name)
+                    .filter(|&i| is_i2c(&self.peripherals[i]))
+                    .map(|i| (i, signals))
+            })
+            .collect();
+        if controllers.is_empty() {
+            if let Some(i) = self.peripherals.iter().position(is_i2c) {
+                controllers.push((i, I2C0_SIGNALS));
+            }
+        }
         let gpio_idx = self
             .peripherals
             .iter()
@@ -180,23 +199,25 @@ impl SystemBus {
         // Resolve BOTH before touching either: `pad_lines_arc` CREATES the wire
         // cell, and a controller owning a cell no GPIO port reaches would
         // narrate every transaction into something nothing reads.
-        let (Some(i2c_idx), Some(gpio_idx)) = (i2c_idx, gpio_idx) else {
+        let Some(gpio_idx) = gpio_idx else {
             return;
         };
-        let Some(lines) = self.peripherals[i2c_idx]
-            .dev
-            .as_any_mut()
-            .and_then(|a| a.downcast_mut::<Esp32I2c>())
-            .map(Esp32I2c::pad_lines_arc)
-        else {
-            return;
-        };
-        if let Some(gpio) = self.peripherals[gpio_idx]
-            .dev
-            .as_any_mut()
-            .and_then(|a| a.downcast_mut::<Esp32Gpio>())
-        {
-            gpio.set_i2c_lines(lines);
+        for (i2c_idx, signals) in controllers {
+            let Some(lines) = self.peripherals[i2c_idx]
+                .dev
+                .as_any_mut()
+                .and_then(|a| a.downcast_mut::<Esp32I2c>())
+                .map(Esp32I2c::pad_lines_arc)
+            else {
+                continue;
+            };
+            if let Some(gpio) = self.peripherals[gpio_idx]
+                .dev
+                .as_any_mut()
+                .and_then(|a| a.downcast_mut::<Esp32Gpio>())
+            {
+                gpio.bind_i2c_lines(&lines, signals);
+            }
         }
     }
 
@@ -680,7 +701,7 @@ impl SystemBus {
     /// this direction is one-way, because the S3 I²C model resolves its slaves
     /// by address rather than by physical pad route.
     pub(crate) fn wire_esp32s3_i2c_pads(&mut self) {
-        use crate::peripherals::esp32s3::gpio::Esp32s3Gpio;
+        use crate::peripherals::esp32s3::gpio::{Esp32s3Gpio, I2C0_SIGNALS, I2C1_SIGNALS};
         use crate::peripherals::esp32s3::i2c::Esp32s3I2c;
 
         let is_i2c = |p: &crate::bus::PeripheralEntry| {
@@ -689,35 +710,49 @@ impl SystemBus {
                 .map(|a| a.is::<Esp32s3I2c>())
                 .unwrap_or(false)
         };
-        // I2C0 by name: the S3 bus carries I2C1 (signals 91/92, not bound
-        // here) as the same model, registered BEFORE i2c0 by the programmatic
-        // builder, so "the first one found" bound I2C1's wire to I2C0's
-        // signals. A hand-built bus with one unnamed controller still wires.
-        let i2c_idx = self
-            .find_peripheral_index_by_name("i2c0")
-            .filter(|&i| is_i2c(&self.peripherals[i]))
-            .or_else(|| self.peripherals.iter().position(is_i2c));
+        // By name: I2C0 (signals 89/90) and I2C1 (91/92) are the same model,
+        // and the programmatic builder registers i2c1 BEFORE i2c0, so "the
+        // first one found" bound I2C1's wire to I2C0's signals. A hand-built
+        // bus with one unnamed controller still wires it as I2C0.
+        let mut controllers: Vec<_> = [("i2c0", I2C0_SIGNALS), ("i2c1", I2C1_SIGNALS)]
+            .into_iter()
+            .filter_map(|(name, signals)| {
+                self.find_peripheral_index_by_name(name)
+                    .filter(|&i| is_i2c(&self.peripherals[i]))
+                    .map(|i| (i, signals))
+            })
+            .collect();
+        if controllers.is_empty() {
+            if let Some(i) = self.peripherals.iter().position(is_i2c) {
+                controllers.push((i, I2C0_SIGNALS));
+            }
+        }
         let gpio_idx = self.peripherals.iter().position(|p| {
             p.dev
                 .as_any()
                 .map(|a| a.is::<Esp32s3Gpio>())
                 .unwrap_or(false)
         });
-        let (Some(i2c_idx), Some(gpio_idx)) = (i2c_idx, gpio_idx) else {
+        let (false, Some(gpio_idx)) = (controllers.is_empty(), gpio_idx) else {
             return;
         };
-        let lines = self.peripherals[i2c_idx]
-            .dev
-            .as_any_mut()
-            .and_then(|a| a.downcast_mut::<Esp32s3I2c>())
-            .map(|c| c.pad_lines_arc());
+        let lines: Vec<_> = controllers
+            .into_iter()
+            .filter_map(|(i2c_idx, signals)| {
+                self.peripherals[i2c_idx]
+                    .dev
+                    .as_any_mut()
+                    .and_then(|a| a.downcast_mut::<Esp32s3I2c>())
+                    .map(|c| (c.pad_lines_arc(), signals))
+            })
+            .collect();
         let matrix = self.peripherals[gpio_idx]
             .dev
             .as_any_mut()
             .and_then(|a| a.downcast_mut::<Esp32s3Gpio>())
             .map(|gpio| {
-                if let Some(lines) = lines {
-                    gpio.set_i2c_lines(lines);
+                for (lines, signals) in &lines {
+                    gpio.bind_i2c_lines(lines, *signals);
                 }
                 gpio.out_sel_view()
             });
@@ -890,12 +925,11 @@ impl SystemBus {
     /// signal at all — a borrowed constant would decode routed pads as plain and
     /// plain pads as routed, silently, in both directions.
     ///
-    /// Only SPI2 is bound. Both S3 GP-SPI instances are the same model type, so
-    /// the first one found is taken and SPI3 keeps the latch fallback; binding
-    /// both would need a per-instance signal set (`SPI3_CLK_OUT_IDX` and
-    /// friends) that no lab drives today.
+    /// SPI2 (`FSPI*`, 101..110) and SPI3 (`SPI3_*`, 66..71) are both bound,
+    /// each by NAME with its own signal set: the two GP-SPI instances are the
+    /// same model type, so the type cannot say which is which.
     pub(crate) fn wire_esp32s3_spi_pads(&mut self) {
-        use crate::peripherals::esp32s3::gpio::Esp32s3Gpio;
+        use crate::peripherals::esp32s3::gpio::{Esp32s3Gpio, SPI2_SIGNALS, SPI3_SIGNALS};
         use crate::peripherals::esp32s3::gpspi::Esp32s3Spi;
 
         let gpio_idx = self.peripherals.iter().position(|p| {
@@ -904,45 +938,47 @@ impl SystemBus {
                 .map(|a| a.is::<Esp32s3Gpio>())
                 .unwrap_or(false)
         });
-        // Prefer the instance the chip calls SPI2 (`spi2_s3` on the programmatic
-        // builder, `spi2` from a yaml); fall back to the first GP-SPI on the bus
-        // so a hand-built test bus with one controller still wires.
-        let spi_idx = ["spi2_s3", "spi2"]
-            .iter()
-            .find_map(|n| self.find_peripheral_index_by_name(n))
-            .filter(|&i| {
+        let is_spi = |i: usize| {
+            self.peripherals[i]
+                .dev
+                .as_any()
+                .map(|a| a.is::<Esp32s3Spi>())
+                .unwrap_or(false)
+        };
+        // The instance names: `spi2_s3` / `spi3_s3` on the programmatic
+        // builder, `spi2` / `spi3` from a yaml. With neither SPI2 name, the
+        // first GP-SPI on the bus is SPI2, so a hand-built test bus with one
+        // controller still wires.
+        let by_name = |names: [&str; 2]| {
+            names
+                .iter()
+                .find_map(|n| self.find_peripheral_index_by_name(n))
+                .filter(|&i| is_spi(i))
+        };
+        let spi2 = by_name(["spi2_s3", "spi2"])
+            .or_else(|| (0..self.peripherals.len()).find(|&i| is_spi(i)));
+        let spi3 = by_name(["spi3_s3", "spi3"]).filter(|&i| Some(i) != spi2);
+        // ⚠️ Resolve BOTH first — `pad_lines_arc` CREATES the wire cell.
+        let Some(gpio_idx) = gpio_idx else {
+            return;
+        };
+        for (spi_idx, signals) in [(spi2, SPI2_SIGNALS), (spi3, SPI3_SIGNALS)] {
+            let Some(lines) = spi_idx.and_then(|i| {
                 self.peripherals[i]
                     .dev
-                    .as_any()
-                    .map(|a| a.is::<Esp32s3Spi>())
-                    .unwrap_or(false)
-            })
-            .or_else(|| {
-                self.peripherals.iter().position(|p| {
-                    p.dev
-                        .as_any()
-                        .map(|a| a.is::<Esp32s3Spi>())
-                        .unwrap_or(false)
-                })
-            });
-        // ⚠️ Resolve BOTH first — `pad_lines_arc` CREATES the wire cell.
-        let (Some(spi_idx), Some(gpio_idx)) = (spi_idx, gpio_idx) else {
-            return;
-        };
-        let Some(lines) = self.peripherals[spi_idx]
-            .dev
-            .as_any_mut()
-            .and_then(|a| a.downcast_mut::<Esp32s3Spi>())
-            .map(Esp32s3Spi::pad_lines_arc)
-        else {
-            return;
-        };
-        if let Some(gpio) = self.peripherals[gpio_idx]
-            .dev
-            .as_any_mut()
-            .and_then(|a| a.downcast_mut::<Esp32s3Gpio>())
-        {
-            gpio.bind_spi_lines(&lines);
+                    .as_any_mut()
+                    .and_then(|a| a.downcast_mut::<Esp32s3Spi>())
+                    .map(Esp32s3Spi::pad_lines_arc)
+            }) else {
+                continue;
+            };
+            if let Some(gpio) = self.peripherals[gpio_idx]
+                .dev
+                .as_any_mut()
+                .and_then(|a| a.downcast_mut::<Esp32s3Gpio>())
+            {
+                gpio.bind_spi_lines(&lines, signals);
+            }
         }
     }
 

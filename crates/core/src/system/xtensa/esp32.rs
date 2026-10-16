@@ -741,14 +741,20 @@ pub fn configure_xtensa_esp32(bus: &mut SystemBus) -> XtensaLx7 {
     //
     // I2C0 TX FIFO AHB window: esp-idf `i2c_ll_write_txfifo` stores at
     // 0x6001_301c (not the APB DATA reg). Same last-wins priority over wifi stub.
-    if let Some(idx) = bus.find_peripheral_index_by_name("i2c0") {
-        if let Some(i2c) = bus.peripherals[idx]
-            .dev
-            .as_any()
-            .and_then(|a| a.downcast_ref::<crate::peripherals::esp32::i2c::Esp32I2c>())
-        {
-            let ahb = i2c.ahb_tx_fifo_alias(idx);
-            bus.add_peripheral("i2c0_ahb_fifo", 0x6001_301c, 4, None, Box::new(ahb));
+    // I2C1's is at 0x6002_701c (`DR_REG_I2C1_EXT_BASE` + the AHB offset).
+    for (name, alias, ahb_base) in [
+        ("i2c0", "i2c0_ahb_fifo", 0x6001_301cu64),
+        ("i2c1", "i2c1_ahb_fifo", 0x6002_701c),
+    ] {
+        if let Some(idx) = bus.find_peripheral_index_by_name(name) {
+            if let Some(i2c) = bus.peripherals[idx]
+                .dev
+                .as_any()
+                .and_then(|a| a.downcast_ref::<crate::peripherals::esp32::i2c::Esp32I2c>())
+            {
+                let ahb = i2c.ahb_tx_fifo_alias(idx);
+                bus.add_peripheral(alias, ahb_base, 4, None, Box::new(ahb));
+            }
         }
     }
     for (name, ahb_base) in [
@@ -917,6 +923,10 @@ pub(crate) const ESP32_PERIPHERALS: &[(&str, &str, u64, u64, Option<u32>)] = &[
     ("spi2",     "esp32_spi",      0x3FF6_4000, 0x1000, None),
     ("spi3",     "esp32_spi",      0x3FF6_5000, 0x1000, None),
     ("i2c0",     "esp32_i2c",      0x3FF5_3000, 0x1000, Some(49)),
+    // I2C1 (I2C_EXT1, TRM §11): the second controller, `DR_REG_I2C1_EXT_BASE`
+    // = 0x3FF6_7000, `ETS_I2C_EXT1_INTR_SOURCE` = 50, matrix signals
+    // `I2CEXT1_SCL/SDA` 95/96. Bound to the pads by `wire_esp32_i2c_pads`.
+    ("i2c1",     "esp32_i2c",      0x3FF6_7000, 0x1000, Some(50)),
     // SENS SAR-ADC one-shot engine (RTC controller ADC1/ADC2 path the IDF
     // adc1_get_raw/adc2_get_raw drivers drive). 0x100 window over the SAR
     // control + measurement registers. It wins the overlapping SENS sub-range

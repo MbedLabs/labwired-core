@@ -452,18 +452,37 @@ impl Rig for Rp2040 {
 
 // ── ESP32 family ─────────────────────────────────────────────────────────────
 
-/// GPIO_OUT_W1TS 0x08, OUT_W1TC 0x0C, ENABLE_W1TS 0x24, ENABLE_W1TC 0x28 on
-/// all three; `pin_reg` is `GPIO_PINn_REG` (PAD_DRIVER = bit 2).
-fn esp_output(port: &mut dyn Peripheral, pin: u8, level: bool, open_drain: bool, pin_reg: u64) {
-    w32(port, pin_reg, if open_drain { 1 << 2 } else { 0 });
-    w32(port, if level { 0x08 } else { 0x0C }, 1 << pin);
-    w32(port, 0x24, 1 << pin);
+/// `(OUT_W1TS, OUT_W1TC, ENABLE_W1TS, ENABLE_W1TC, bit)` for `pin` on all
+/// three: GPIO_OUT_W1TS 0x08, OUT_W1TC 0x0C, ENABLE_W1TS 0x24, ENABLE_W1TC
+/// 0x28 for GPIO0..31; the `1` twins at 0x14 / 0x18 / 0x30 / 0x34 and bit
+/// `pin - 32` above (classic ESP32 and S3).
+fn esp_bank(pin: u8) -> (u64, u64, u64, u64, u32) {
+    if pin < 32 {
+        (0x08, 0x0C, 0x24, 0x28, 1 << pin)
+    } else {
+        (0x14, 0x18, 0x30, 0x34, 1 << (pin - 32))
+    }
 }
 
-struct Esp32;
+/// An output through the bank's W1TS / W1TC registers; `pin_reg` is
+/// `GPIO_PINn_REG` (PAD_DRIVER = bit 2).
+fn esp_output(port: &mut dyn Peripheral, pin: u8, level: bool, open_drain: bool, pin_reg: u64) {
+    let (set, clear, oe, _, bit) = esp_bank(pin);
+    w32(port, pin_reg, if open_drain { 1 << 2 } else { 0 });
+    w32(port, if level { set } else { clear }, bit);
+    w32(port, oe, bit);
+}
+
+/// The classic ESP32 GPIO, on a bank-0 pad (GPIO3) and, as `Esp32(33)`, on
+/// GPIO33: bank 1, the highest pad with an output stage.
+struct Esp32(u8);
 impl Rig for Esp32 {
     fn name(&self) -> &'static str {
-        "Esp32Gpio"
+        if self.0 < 32 {
+            "Esp32Gpio"
+        } else {
+            "Esp32Gpio bank 1"
+        }
     }
     fn build(&mut self) -> Box<dyn Peripheral> {
         Box::new(crate::peripherals::esp32::gpio::Esp32Gpio::new())
@@ -471,12 +490,18 @@ impl Rig for Esp32 {
     fn set_mode(&mut self, port: &mut dyn Peripheral, pin: u8, mode: Mode) -> bool {
         let pin_reg = 0x88 + u64::from(pin) * 4;
         match mode {
-            Mode::Input(Pull::None) => w32(port, 0x28, 1 << pin),
+            Mode::Input(Pull::None) => {
+                let (_, _, _, oe_clear, bit) = esp_bank(pin);
+                w32(port, oe_clear, bit)
+            }
             Mode::Input(_) => return false,
             Mode::PushPull(level) => esp_output(port, pin, level, false, pin_reg),
             Mode::OpenDrain(level) => esp_output(port, pin, level, true, pin_reg),
         }
         true
+    }
+    fn pin(&self) -> u8 {
+        self.0
     }
 }
 
@@ -509,7 +534,8 @@ fn esp_matrix_mode(
                 IO_MUX_INPUT
             };
             io_mux_write(io_mux, port, pin, word);
-            w32(port, 0x28, 1 << pin);
+            let (_, _, _, oe_clear, bit) = esp_bank(pin);
+            w32(port, oe_clear, bit);
         }
         Mode::PushPull(level) | Mode::OpenDrain(level) => {
             io_mux_write(io_mux, port, pin, IO_MUX_INPUT);
@@ -546,13 +572,26 @@ impl Rig for Esp32c3 {
     }
 }
 
+/// The ESP32-S3 GPIO on a bank-0 pad (GPIO3), or with `bank1` on GPIO40.
 #[derive(Default)]
 struct Esp32s3 {
     io_mux: Option<crate::peripherals::esp32s3::io_mux::Esp32s3IoMux>,
+    bank1: bool,
 }
 impl Rig for Esp32s3 {
     fn name(&self) -> &'static str {
-        "Esp32s3Gpio"
+        if self.bank1 {
+            "Esp32s3Gpio bank 1"
+        } else {
+            "Esp32s3Gpio"
+        }
+    }
+    fn pin(&self) -> u8 {
+        if self.bank1 {
+            40
+        } else {
+            3
+        }
     }
     fn build(&mut self) -> Box<dyn Peripheral> {
         let io_mux = crate::peripherals::esp32s3::io_mux::Esp32s3IoMux::new();
@@ -629,9 +668,14 @@ fn rigs() -> Vec<Box<dyn Rig>> {
         Box::new(Imxrt::default()),
         Box::new(Avr),
         Box::new(Rp2040),
-        Box::new(Esp32),
+        Box::new(Esp32(3)),
+        Box::new(Esp32(33)),
         Box::new(Esp32c3::default()),
         Box::new(Esp32s3::default()),
+        Box::new(Esp32s3 {
+            bank1: true,
+            ..Default::default()
+        }),
         Box::new(Declarative),
     ]
 }

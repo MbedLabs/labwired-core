@@ -1,4 +1,4 @@
-/* ESP32-S3 (or --defsym CHIP_ESP32=1: classic ESP32) I2C0 slave at 0x42 on
+/* ESP32-S3 (or --defsym CHIP_ESP32=1: classic ESP32) I2C0 (INST1: I2C1) slave at 0x42 on
  * gpio nets, register level, polled: the 256-byte register file of
  * i2c_target.c (the first byte of a write sets the pointer, later bytes
  * store, reads return from it, auto-incrementing). Open drain.
@@ -40,7 +40,7 @@ _start:
     MATRIX_OUT PAD_SCL, IOMUX_SCL, SIG_I2C_SCL, PAD_WPU
     WR GPIO_BASE + GPIO_PIN0 + 4 * PAD_SDA, PAD_DRIVER
     WR GPIO_BASE + GPIO_PIN0 + 4 * PAD_SCL, PAD_DRIVER
-    WR GPIO_OUT_W1TS, (1 << PAD_SDA) | (1 << PAD_SCL)
+    OUT_HIGH2 PAD_SDA, PAD_SCL
     WR GPIO_BASE + GPIO_IN_SEL0 + 4 * SIG_I2C_SDA, IN_SEL | PAD_SDA
     WR GPIO_BASE + GPIO_IN_SEL0 + 4 * SIG_I2C_SCL, IN_SEL | PAD_SCL
 

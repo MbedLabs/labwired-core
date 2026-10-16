@@ -6992,7 +6992,6 @@ boards:
     #
     # No silicon-anchored reset value is reachable from this: it changes when a level
     # is recomputed, never what the registers hold. This is an ack, not a capture.
-    drift_ack: 2026-09-15
     # 2026-09-17 (#1142): no model change. The inline `#[cfg(test)] mod tests`
     # blocks were moved out of 13 model source files (spi.rs, i2c.rs, tick.rs,
     # cortex_m.rs, esp32c3/{i2c,bt,virtual_wifi}.rs, esp32s3/gdma.rs, ...) into
@@ -7001,7 +7000,6 @@ boards:
     # `#[test]` counts before and after match exactly. The digest moves because
     # it hashes the whole file. This is an ACK, NOT A CAPTURE — a live
     # re-capture is still owed.
-    drift_ack: 2026-09-17
     # 2026-09-18 (#1179): batched-path timing fidelity, no register change.
     # Two watched files move: esp32s3/rmt.rs keys the post-TX_START IRQ
     # holdoff and the WS2812 pad playback on CYCLES elapsed since the last bus
@@ -7018,7 +7016,6 @@ boards:
     # and the walk/scheduler differential gates, the Doom frame oracle and the
     # S3 IRQ-cache differential all pass. The nine anchored reset registers
     # and every register map are untouched. This is an ACK, NOT A CAPTURE.
-    drift_ack: 2026-09-18
     # 2026-08-10: GP-SPI2 CPU W-buffer transactions now deliver MOSI bytes to
     # attached devices and return their MISO bytes; display D/C observes the S3
     # GPIO output; GPIO labels resolve against the S3 register bank. This is an
@@ -7134,8 +7131,6 @@ boards:
     # 2026-09-18 (merge): this digest also covers `main`'s own standing ack for
     # the generic Xtensa BB JIT emit core (#1139) — the merge of the two is one
     # digest, so it is re-stamped once here rather than twice.
-    drift_ack: 2026-09-18
-    drift_ack_digest: e3242f531262e1590ca1e4d3972669441ebda57afd6dc30257c21c3cd535d6fd
     #
     # 2026-09-18 (execute split): no execution change. The arm bodies of
     # `XtensaLx7::execute` moved verbatim into `cpu/xtensa_lx7/exec/*.rs` as
@@ -7144,7 +7139,6 @@ boards:
     # `write` so the per-step CCOUNT update stays folded (callgrind Ir/step
     # esp32s3 1072.9 vs 1074.7 before). ACK, NOT A CAPTURE — the live
     # re-capture owed above is still owed.
-    drift_ack: 2026-09-18
     # 2026-09-21 (feat/c6-irq-wdt-depth): the one watched shared file that moved
     # is `esp_uart.rs` — it gained `matrix_irq_source_id()`, an additive
     # accessor that returns the source id the descriptor already declared. No
@@ -7153,30 +7147,25 @@ boards:
     # anchor vs the 2026-08-09 capture) and the S3 tier-1 fixture still passes
     # every cell. ACK, NOT A CAPTURE — the live re-capture owed above is still
     # owed.
-    drift_ack: 2026-09-21
     # 2026-09-23 (#1225): SecondaryExecutionState + reset-held coalesce on the
     # machine advance path. Watched xtensa_lx7.rs gains secondary_execution_state()
     # (ResetHeld when halted, ParkedIdle when WAITI). No register map, reset
     # value, or peripheral model changed — ACK, NOT A CAPTURE. The live
     # re-capture owed above is still owed.
-    drift_ack: 2026-09-23
     # 2026-09-25: Xtensa step_batch keeps the bus IRQ word across instructions
     # whose helpers do not touch the bus. A source test rebuilds that list
     # from the helpers. Esp32s3Spi grows `spi_attached_devices` (the TypeId
     # probe is retired). No register map or reset value changed.
     # ACK, NOT A CAPTURE. The live re-capture owed above is still owed.
-    drift_ack: 2026-09-25
     # 2026-09-25: the Xtensa batch loop inlines the same step body, and the
     # decode cache is one array instead of a parallel generation vector.
     # `max_logical_reg` is marked inline. Same instructions, same IRQ memo.
     # No register map or reset value changed.
     # ACK, NOT A CAPTURE. The live re-capture owed above is still owed.
-    drift_ack: 2026-09-25
     # 2026-09-25: the per-instruction timer edge skips the CCOMPARE0 read
     # while that register is zero. A write, a raw store, and a snapshot
     # restore all update the armed flag. The crossing test is unchanged.
     # ACK, NOT A CAPTURE. The live re-capture owed above is still owed.
-    drift_ack: 2026-09-25
     # 2026-09-27 (four-state pin trace, feat/timer-input-capture-hiz): watched
     # esp32s3/gpio.rs moved. GPIO observers gain an `on_pin_state_change`
     # callback (--gpio-trace-format 4state) and the port reports pad drive
@@ -7185,7 +7174,6 @@ boards:
     # callback changed.
     # Ran: cargo test -p labwired-core --lib (default and event-scheduler).
     # ACK, NOT A CAPTURE — the live re-capture owed above is still owed.
-    drift_ack: 2026-09-27
     # 2026-09-28: speed only. The step loop runs the common ALU, load/store
     # and branch variants through execute_hot, inline, and sends the rest to
     # execute (now out of line); the F5 window-overflow check moved verbatim
@@ -7194,17 +7182,14 @@ boards:
     # (esp32s3 romboot, 5M and 40M, batch and step). No register map or
     # reset value changed.
     # ACK, NOT A CAPTURE. The live re-capture owed above is still owed.
-    drift_ack: 2026-09-28
     # 2026-09-28: speed only. irq_level_with keeps its zero test inline and
     # moves the level search into highest_irq_level (out of line); the search
     # is the same expression. No register map or reset value changed.
     # ACK, NOT A CAPTURE. The live re-capture owed above is still owed.
-    drift_ack: 2026-09-28
     # 2026-09-28: speed only. The decode-cache slot is padded to 32 bytes
     # (repr(align(32))); same fields, same lookup. No register map or reset
     # value changed.
     # ACK, NOT A CAPTURE. The live re-capture owed above is still owed.
-    drift_ack: 2026-09-28
     models:
       - crates/core/src/cpu/xtensa_lx7.rs
       - crates/core/src/cpu/xtensa_lx7/exec
@@ -7238,25 +7223,21 @@ boards:
     # lock. The recommended scheduler interval is 1024. No register map or
     # reset value changed.
     # ACK, NOT A CAPTURE. The live re-capture owed above is still owed.
-    drift_ack: 2026-09-30
     # 2026-10-07 (#1326 GPIO nets): watched esp32s3/gpio.rs. A net-isolated pad
     # reports its own drive, and an external edge raises matrix source 16.
     # FUNCn_OUT_SEL_CFG still resets to 0x100. No register map or other reset
     # value changed. No physical probe connected. ACK, NOT A CAPTURE.
-    drift_ack: 2026-10-07
     # 2026-10-09 (#1344): watched esp32s3/gpio.rs + io_mux.rs. GPIO_IN now shows
     # the driven level of a pad whose output driver is on and whose IO_MUX FUN_IE
     # is set on both banks (silicon samples the pad through its input buffer). Only reads of
     # driven output pads change; no register map or reset value changed. No
     # physical probe connected. ACK, NOT A CAPTURE.
-    drift_ack: 2026-10-09
     # 2026-10-09 (MCP audit P1-14): watched esp_uart.rs, usb_serial_jtag.rs,
     # i2c.rs and bus/*. UART0 and USB-Serial-JTAG can deliver TX bytes into one
     # merged console stream (host-side capture only), and the bus counts
     # back-to-back MMIO accesses (run diagnosis only). No register, reset
     # value or bus-visible behaviour changed. No physical probe connected.
     # ACK, NOT A CAPTURE.
-    drift_ack: 2026-10-09
     # 2026-10-09 (#1348): watched xtensa decoder + xtensa_lx7 exec and
     # esp32s3/ledc.rs + esp32s3/mcpwm.rs. The FP divide/sqrt assists (div0.s
     # ... divn.s, used by ROM `__divsf3` and libgcc `sqrtf`) now decode and
@@ -7264,19 +7245,16 @@ boards:
     # observers on DUTY_START and the S3 MCPWM on a compare-A commit (a servo
     # follows ledcWrite / mcpwm_set_duty). No register map or reset value
     # changed. No physical probe connected. ACK, NOT A CAPTURE.
-    drift_ack: 2026-10-09
     # 2026-10-10 (gpio gaps): watched esp32s3/gpio.rs. A matrix-routed
     # peripheral driving a bank-0 pad (drive_pad_output) now latches GPIO_STATUS
     # per INT_TYPE like the register-write path already did (TRM GPIO
     # Interrupt, input buffer on). No register map or reset value changed. No
     # physical probe connected. ACK, NOT A CAPTURE.
-    drift_ack: 2026-10-10
     # 2026-10-10 (#1355 PinPort): watched GPIO models moved onto one PinPort
     # interface (driver/set_external, generic PadWatch push capture, EXTI
     # fan-out by PortId). Register maps and reset values unchanged; pinned
     # by the pins::conformance suite and the existing net/EXTI/pin-trace
     # tests. Approved by the maintainer. ACK, NOT A CAPTURE.
-    drift_ack: 2026-10-10
     # 2026-10-11 (C3 trigger CSRs + SYSTIMER): the shared SYSTIMER model now
     # reads VALUE_VALID as 0 until the first update (C3 cold-reset capture);
     # snapshot format V3, older snapshots still load. No other S3 register map or
@@ -7291,7 +7269,21 @@ boards:
     # 2026-10-15 (Xtensa preserve-pane spill): spill_call_preserve_to_stack places
     # a chain frame's a0..a3 at its chain callee SP instead of a stale pane SP.
     # Window spill plumbing only; no register map or reset value changed. ACK, NOT A CAPTURE.
-    drift_ack: 2026-10-15
+    # 2026-10-16 (every ESP pad and bus instance on gpio_nets): watched
+    # esp32s3/gpio.rs moved. GPIO32..48 join the pin interface and world
+    # nets like bank 0: an outside level lands in IN1, OUT1 / ENABLE1 drive
+    # the pad (open drain releasing a 1), STATUS1 latches per INT_TYPE, and
+    # PCPU_INT1 / PCPU_NMI_INT1 read the pending enabled bank-1 pins (they
+    # read their reset 0 before), raising source 16 like bank 0. GP-SPI3
+    # (SPI3_CLK/Q/D/CS0 66/67/68/71) and I2C1 (I2CEXT1_SCL/SDA 91/92) are
+    # bound to the matrix beside SPI2 / I2C0 and host the shared net engines
+    # only when a net line is routed; off a net their byte-level paths are
+    # unchanged. No register map or reset value changed (GPIO reset values in
+    # the captured window untouched; STATUS1 and PCPU_INT1 still reset to 0).
+    # Ran: world_gpio_net_buses (S3 SPI3 / I2C1 on GPIO34..42 against a
+    # G071, plain GPIO on GPIO40/41 against a classic ESP32), pins
+    # conformance with a bank-1 rig, and the lib suites (default and
+    # event-scheduler). Approved by the maintainer. ACK, NOT A CAPTURE.
     # 2026-10-15 (ESP32-S3 / classic SPI+I2C on gpio_nets): `esp32s3/gpio.rs`
     # stores FUNCn_IN_SEL_CFG routes for net pads and binds GP-SPI2/I2C0 lines;
     # `esp32s3/gpspi.rs` and `esp32s3/i2c.rs` host the shared esp_gpspi_net /
@@ -7326,7 +7318,7 @@ boards:
     # world_gpio_net_buses, and the lib suites. Approved by the maintainer.
     # ACK, NOT A CAPTURE.
     drift_ack: 2026-10-16
-    drift_ack_digest: 14d9f25bcbc9827fb8c0c0a2f87dde3b5b04a44709557ea34f3736d64f8a393d
+    drift_ack_digest: 47615d801478ee0e882e94931da0176c0a2bf1e0dcb6d096b77ccd560f24c4d3
 
   - id: esp32s3-zero
     # Board variant of esp32s3: same silicon (LX7), 4 MiB flash / 480 KiB RAM.

@@ -98,3 +98,26 @@ for chip in esp32s3 esp32; do
         python3 src/xtensa_elf.py "$XT_OBJ/$fw.o" "firmware/${chip}-${fw//_/-}.elf" "$base"
     done
 done
+# The second controller of a kind (--defsym INST1=1) on bank-1 pads
+# (--defsym PADS_HI=1, GPIO32 and up): S3 GP-SPI3 and I2C1, classic I2C1; and
+# the classic VSPI master / HSPI slave on bank-1 pads (the slave's SCK, MOSI
+# and CS0 on the input-only GPIO34..36). Plus plain GPIO on bank-1 pads
+# between a classic ESP32 and an ESP32-S3 (src/esp32x_gpio_hi.S).
+for build in "esp32s3 spi3-master spi_master INST1 PADS_HI" \
+             "esp32s3 spi3-slave spi_slave INST1 PADS_HI" \
+             "esp32s3 i2c1-controller i2c_controller INST1 PADS_HI" \
+             "esp32s3 i2c1-target i2c_target INST1 PADS_HI" \
+             "esp32s3 i2c1-target-slow i2c_target INST1 PADS_HI SLOW" \
+             "esp32 i2c1-controller i2c_controller INST1 PADS_HI" \
+             "esp32 i2c1-target i2c_target INST1 PADS_HI" \
+             "esp32 spi-hi-master spi_master PADS_HI" \
+             "esp32 spi-hi-slave spi_slave PADS_HI" \
+             "esp32 gpio-hi gpio_hi" \
+             "esp32s3 gpio-hi gpio_hi"; do
+    read -r chip out src syms <<<"$build"
+    read -ra syms <<<"$syms"
+    if [ "$chip" = esp32 ]; then base=0x40080000; defs=(--defsym CHIP_ESP32=1); else base=0x40378000; defs=(); fi
+    for sym in "${syms[@]}"; do defs+=(--defsym "$sym=1"); done
+    llvm-mc -triple=xtensa -filetype=obj -I src "${defs[@]}" "src/esp32x_$src.S" -o "$XT_OBJ/$out.o"
+    python3 src/xtensa_elf.py "$XT_OBJ/$out.o" "firmware/${chip}-${out}.elf" "$base"
+done

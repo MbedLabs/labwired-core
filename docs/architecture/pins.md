@@ -196,8 +196,9 @@ model):
   its latch (STM32, ESP32 family), standing in for the board pull-up these
   models have no other source for. As soon as the outside presents a level
   (a net always does) it reads that level.
-- ESP32-S3: the interface covers bank 0 (GPIO0..31), the pads with input
-  storage and a probe level in the model.
+- ESP32-S3: the interface covers the package's pads, GPIO0..48, both banks;
+  GPIO49..53 have registers but no pad. Classic ESP32: GPIO0..39, with
+  GPIO34..39 input-only (their `ENABLE1` bits never drive).
 
 What the pull models leave out:
 

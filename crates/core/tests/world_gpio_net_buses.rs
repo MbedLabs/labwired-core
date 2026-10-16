@@ -2179,7 +2179,11 @@ mod nrf52_spim3 {
 /// (slave) and I2C0, against the STM32G071, both ways round, routed through
 /// each part's GPIO matrix (`env-spi-esp32s3*.yaml`, `env-spi-esp32*.yaml`,
 /// `env-i2c-...`; firmware `src/esp32x_*.S`, hand-written Xtensa assembly
-/// of the `esp32c_*.c` sequences).
+/// of the `esp32c_*.c` sequences). The same, on bank-1 pads (GPIO32 and up),
+/// for the second controller of a kind: the S3's GP-SPI3 and I2C1 and the
+/// classic part's I2C1, and the classic VSPI / HSPI with the input-only
+/// GPIO34..36 taking lines in. Plain GPIO on bank-1 pads between the two
+/// Xtensa parts.
 mod esp32_xtensa {
     use super::*;
 
@@ -2195,21 +2199,47 @@ mod esp32_xtensa {
         trans_done: u32,
         /// The part's I2C pads: (SDA, SCL).
         i2c_pads: (u8, u8),
+        /// What tells the env files of this variant apart: `(spi, i2c)`.
+        variant: (&'static str, &'static str),
     }
 
     const S3: Chip = Chip {
         name: "esp32s3",
         trans_done: 1 << 12,
         i2c_pads: (8, 9),
+        variant: ("", ""),
     };
     const CLASSIC: Chip = Chip {
         name: "esp32",
         trans_done: 1 << 4,
         i2c_pads: (21, 22),
+        variant: ("", ""),
+    };
+    /// The S3's GP-SPI3 (GPIO34..37) and I2C1 (GPIO41 SDA, GPIO42 SCL), on
+    /// bank-1 pads.
+    const S3_HI: Chip = Chip {
+        name: "esp32s3",
+        trans_done: 1 << 12,
+        i2c_pads: (41, 42),
+        variant: ("-spi3", "-i2c1"),
+    };
+    /// The classic part's VSPI master / HSPI slave on bank-1 pads (the
+    /// input-only GPIO34..36 taking lines in), and its I2C1 on GPIO32 (SDA)
+    /// / GPIO33 (SCL).
+    const CLASSIC_HI: Chip = Chip {
+        name: "esp32",
+        trans_done: 1 << 4,
+        i2c_pads: (32, 33),
+        variant: ("-hi", "-i2c1"),
     };
 
     fn env(kind: &str, chip: Chip, suffix: &str) -> String {
-        format!("env-{kind}-{}{suffix}.yaml", chip.name)
+        let variant = if kind == "spi" {
+            chip.variant.0
+        } else {
+            chip.variant.1
+        };
+        format!("env-{kind}-{}{variant}{suffix}.yaml", chip.name)
     }
 
     fn spi_master(chip: Chip) {
@@ -2304,7 +2334,7 @@ mod esp32_xtensa {
     fn i2c_target(chip: Chip, slow: bool) -> World {
         let mut world = build(&env("i2c", chip, "-target"), |s| {
             if slow {
-                s.replace("-i2c-target.elf", "-i2c-target-slow.elf")
+                s.replace("-target.elf", "-target-slow.elf")
             } else {
                 s
             }
@@ -2369,7 +2399,7 @@ mod esp32_xtensa {
     /// classic: 400 APB cycles of 80 MHz).
     #[test]
     fn a_slow_g071_target_holds_the_xtensa_controllers_by_stretching_scl() {
-        for chip in [S3, CLASSIC] {
+        for chip in [S3, CLASSIC, S3_HI, CLASSIC_HI] {
             let world = i2c_controller(chip, "i2c-target-slow.elf");
             let held = longest_low(&world, "esp", chip.i2c_pads.1);
             assert!(held > 2 * 1200, "{}: SCL held low {held} cycles", chip.name);
@@ -2404,6 +2434,95 @@ mod esp32_xtensa {
                 assert_order_and_round_independent(&env_file, |s| s, ["esp", "b"], 3000, 8);
             }
         }
+    }
+
+    // ── second instances, bank-1 pads ──────────────────────────────────────
+
+    #[test]
+    fn an_esp32s3_spi3_master_on_bank_one_pads_clocks_a_g071_slave() {
+        spi_master(S3_HI);
+    }
+
+    #[test]
+    fn a_g071_master_clocks_an_esp32s3_spi3_slave_on_bank_one_pads() {
+        spi_slave(S3_HI);
+    }
+
+    #[test]
+    fn a_classic_esp32_vspi_master_on_bank_one_pads_clocks_a_g071_slave() {
+        // MISO comes in on GPIO34, which has no output stage at all.
+        spi_master(CLASSIC_HI);
+    }
+
+    #[test]
+    fn a_g071_master_clocks_a_classic_esp32_hspi_slave_through_input_only_pads() {
+        spi_slave(CLASSIC_HI);
+    }
+
+    #[test]
+    fn an_esp32s3_i2c1_controller_on_bank_one_pads_writes_and_reads_a_g071_target() {
+        i2c_controller(S3_HI, "i2c-target.elf");
+    }
+
+    #[test]
+    fn a_classic_esp32_i2c1_controller_on_gpio32_33_writes_and_reads_a_g071_target() {
+        i2c_controller(CLASSIC_HI, "i2c-target.elf");
+    }
+
+    #[test]
+    fn a_g071_controller_writes_and_reads_an_esp32s3_i2c1_target_on_bank_one_pads() {
+        i2c_target(S3_HI, false);
+    }
+
+    #[test]
+    fn a_g071_controller_writes_and_reads_a_classic_esp32_i2c1_target_on_gpio32_33() {
+        i2c_target(CLASSIC_HI, false);
+    }
+
+    #[test]
+    fn a_slow_esp32s3_i2c1_target_holds_the_g071_controller_by_stretching_scl() {
+        let world = i2c_target(S3_HI, true);
+        let held = longest_low(&world, "b", 6);
+        assert!(held > 4 * 128, "SCL held low {held} cycles");
+    }
+
+    #[test]
+    fn bank_one_buses_do_not_depend_on_node_order_or_round_size() {
+        for chip in [S3_HI, CLASSIC_HI] {
+            for env_file in [env("spi", chip, ""), env("spi", chip, "-slave")] {
+                assert_order_and_round_independent(&env_file, |s| s, ["esp", "b"], 1000, 8);
+            }
+            for env_file in [env("i2c", chip, ""), env("i2c", chip, "-target")] {
+                assert_order_and_round_independent(&env_file, |s| s, ["esp", "b"], 3000, 8);
+            }
+        }
+    }
+
+    /// Plain GPIO on bank-1 pads, classic ESP32 against ESP32-S3
+    /// (`env-gpio-esp32-esp32s3.yaml`, `src/esp32x_gpio_hi.S`): OUT1 /
+    /// ENABLE1 drive the pad onto the net, the other part reads it in IN1
+    /// and latches each edge in STATUS1 — the classic part on its
+    /// input-only GPIO39.
+    #[test]
+    fn bank_one_gpio_pads_hand_a_level_between_a_classic_esp32_and_an_esp32s3() {
+        const ENV: &str = "env-gpio-esp32-esp32s3.yaml";
+        let mut world = build(ENV, |s| s);
+        run_us(&mut world, 400);
+        for node in ["esp", "esps3"] {
+            let r = result(&world, node, 8);
+            assert_eq!(r[7], 1, "{node} finished: {r:x?}");
+            assert_eq!(r[0], 4, "{node}: four rounds");
+            assert_eq!(r[1], 8, "{node}: every edge latched STATUS1: {r:x?}");
+            assert_eq!(r[2], 0, "{node}: STATUS1 clear when armed");
+        }
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        for name in ["a2b", "b2a"] {
+            let n = net(&reports, name);
+            assert_eq!(n.edges, 8, "{n:#?}");
+            assert!(!n.level, "{name} low at the end");
+        }
+        assert_order_and_round_independent(ENV, |s| s, ["esp", "esps3"], 400, 8);
     }
 }
 
