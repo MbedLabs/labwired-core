@@ -1212,8 +1212,8 @@ fn idle_fast_forward_is_reconciled_in_report_and_cpu() {
 /// The skip moves machine time without stepping either core. With the
 /// secondary running (an ESP32 loopTask on APP_CPU while PRO_CPU sits in
 /// WAITI), a skip takes that time away from it: the primary's idle budget
-/// alone must not skip.
-#[cfg(feature = "event-scheduler")]
+/// alone must not skip. Holds with and without `event-scheduler` (without it
+/// nothing skips), so it carries no cfg.
 #[test]
 fn idle_fast_forward_waits_for_an_active_secondary() {
     let mut bus = SystemBus::new();
