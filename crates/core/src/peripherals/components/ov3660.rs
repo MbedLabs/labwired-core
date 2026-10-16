@@ -16,8 +16,8 @@
 //! * **DVP** (8-bit parallel). [`DvpSensor::next_frame`] renders one frame
 //!   from the CURRENT register state: the output window the driver programmed
 //!   (`0x3808`–`0x380B`), the format it selected (`0x4300`), the colour-bar
-//!   test-pattern enable (`0x503D[7]`) and the power-down / JPEG bits that
-//!   stop a real sensor from producing a raw frame.
+//!   test-pattern enable (`0x503D[7]`), the JPEG compression enable
+//!   (`0x3821[5]`) and quality (`0x4407`), and the power-down bit.
 //!
 //! ## What the frame shows
 //!
@@ -28,12 +28,30 @@
 //! test-pattern bit wins over the stimulus, as it does on silicon: firmware
 //! that calls `set_colorbar(1)` gets bars whatever the scene is.
 //!
+//! ## JPEG
+//!
+//! With the compression enable (`0x3821[5]`) set, each frame is a real
+//! baseline JPEG of the same scene ([`crate::peripherals::jpeg_baseline`]):
+//! YCbCr 4:2:2 at the programmed window, quantised by `COMPRESSION_CTRL07`
+//! (`0x4407[5:0]`, the QS `esp32-camera`'s `set_quality` writes; lower is
+//! better, mapped onto the 1–100 scale as `100 - 1.5 × QS`). The bytes on
+//! D[7:0] are then sized for the driver that reads them, as a sensor's are:
+//!
+//! * `esp32-camera` sizes a PSRAM JPEG frame as the number of 1 KiB DMA
+//!   blocks it saw and looks for `FF D9` only in the last one, so a JPEG
+//!   whose length is an exact multiple of 1024 could never be found. That one
+//!   case gets a 4-byte COM segment after SOI, which moves EOI off the
+//!   boundary and is ignored by every decoder.
+//! * The stream is then zero-padded to one byte short of the next 1 KiB
+//!   boundary, so the last DMA block holds no stale bytes from a larger
+//!   earlier frame for the driver's backward `FF D9` search to trip over.
+//!
+//! The JPEG is an encoding of the synthetic scene, not of the OV3660's own
+//! compression engine: quantisation, chroma sampling and file size are
+//! representative, not bit-exact.
+//!
 //! ## What is NOT modelled
 //!
-//! * **JPEG.** With the compression enable (`0x3821[5]`) set the model emits
-//!   no frames rather than a fake bitstream; the camera driver then times out
-//!   waiting for a frame, which is the honest outcome of "this twin cannot
-//!   encode JPEG". The `sccb` log records why.
 //! * Exposure, gain, white balance, gamma, scaling quality, PLL and the
 //!   ISP — the registers round-trip (drivers read-modify-write them) but have
 //!   no effect on the pixels.
@@ -51,6 +69,7 @@ use std::sync::{Arc, Mutex};
 
 use super::dvp_sensor::DvpSensor;
 use crate::peripherals::i2c::I2cDevice;
+use crate::peripherals::jpeg_baseline;
 use crate::sim_input::{InputChannel, SimInput, SimInputError};
 
 /// 7-bit SCCB address. The OV3660 has no address-select pin.
@@ -74,6 +93,10 @@ const REG_Y_OUTPUT_SIZE_L: u16 = 0x380B;
 /// TIMING_TC_REG21: bit 5 enables JPEG compression.
 const REG_TIMING_TC_REG21: u16 = 0x3821;
 const TC21_JPEG_EN: u8 = 0x20;
+/// COMPRESSION_CTRL07: [5:0] QS, the JPEG quantisation scale (lower = better).
+const REG_COMPRESSION_CTRL07: u16 = 0x4407;
+/// The DMA block `esp32-camera` sizes JPEG frames by (`dma_half_buffer_size`).
+const JPEG_DMA_BLOCK: usize = 1024;
 /// FORMAT_CTRL00: [7:4] output format, [3:0] byte sequence.
 const REG_FORMAT_CTRL00: u16 = 0x4300;
 /// PRE_ISP_TEST_SETTING_1: bit 7 enables the colour-bar test pattern.
@@ -170,8 +193,8 @@ struct Inner {
     motion_px: f64,
     /// SCCB writes and notable events, oldest first.
     log: Vec<String>,
-    /// Set once the JPEG refusal has been logged, so the log stays readable.
-    jpeg_refusal_logged: bool,
+    /// Set once the first JPEG frame has been logged, so the log stays readable.
+    jpeg_logged: bool,
 }
 
 impl Inner {
@@ -185,7 +208,7 @@ impl Inner {
             brightness_pct: 100.0,
             motion_px: 0.0,
             log: Vec::new(),
-            jpeg_refusal_logged: false,
+            jpeg_logged: false,
         };
         s.reset_registers();
         s
@@ -250,19 +273,16 @@ impl Inner {
         if self.reg(REG_SYSTEM_CTROL0) & SYS_POWER_DOWN != 0 {
             return None;
         }
-        if self.reg(REG_TIMING_TC_REG21) & TC21_JPEG_EN != 0 {
-            if !self.jpeg_refusal_logged {
-                self.jpeg_refusal_logged = true;
-                self.log
-                    .push("JPEG output selected: not modelled, no frames".to_string());
-            }
-            return None;
-        }
         let (w, h) = self.size();
         if w == 0 || h == 0 {
             return None;
         }
         let bars = self.reg(REG_PRE_ISP_TEST) & PRE_ISP_TEST_EN != 0;
+        if self.reg(REG_TIMING_TC_REG21) & TC21_JPEG_EN != 0 {
+            let frame = self.render_jpeg(w, h, bars);
+            self.frame_no += 1;
+            return Some(frame);
+        }
         let fmt = OutFormat::decode(self.reg(REG_FORMAT_CTRL00));
         let bpp = if fmt == OutFormat::Y8 { 1 } else { 2 };
         let mut out = Vec::with_capacity((w * h * bpp) as usize);
@@ -308,6 +328,27 @@ impl Inner {
         }
         self.frame_no += 1;
         Some(out)
+    }
+
+    /// One JPEG frame as it leaves D[7:0]; see the module doc for the sizing.
+    fn render_jpeg(&mut self, w: u32, h: u32, bars: bool) -> Vec<u8> {
+        let qs = self.reg(REG_COMPRESSION_CTRL07) & 0x3F;
+        let quality = (100 - (u32::from(qs) * 3) / 2).clamp(5, 100) as u8;
+        let mut jpg = jpeg_baseline::encode_rgb(w, h, quality, |x, y| self.pixel(x, y, w, h, bars));
+        if jpg.len() % JPEG_DMA_BLOCK == 0 {
+            // COM segment with an empty body: FF FE, length 2.
+            jpg.splice(2..2, [0xFF, 0xFE, 0x00, 0x02]);
+        }
+        let encoded = jpg.len();
+        let padded = (encoded / JPEG_DMA_BLOCK + 1) * JPEG_DMA_BLOCK - 1;
+        jpg.resize(padded, 0);
+        if !self.jpeg_logged {
+            self.jpeg_logged = true;
+            self.log.push(format!(
+                "JPEG {w}x{h} QS={qs} (quality {quality}): {encoded} B, {padded} B on the bus"
+            ));
+        }
+        jpg
     }
 }
 
@@ -532,7 +573,8 @@ static OV3660_METADATA: KitMetadata = KitMetadata {
          YUV422, Y8) the driver programs, and stream through LCD_CAM's camera slave and \
          GDMA exactly as esp32-camera expects. The scene is synthetic: drive `pattern`, \
          `brightness` and `motion`; the colour-bar test-pattern bit (0x503D[7]) overrides \
-         it. JPEG output is not modelled (no frames). connection: the I2C controller \
+         it. JPEG mode (0x3821[5]) emits real baseline JPEG frames at the quality in \
+         0x4407. connection: the I2C controller \
          carrying SIOD/SIOC (esp32-camera uses i2c1 by default).",
     ),
     transport: Transport::I2c,
@@ -693,17 +735,113 @@ mod tests {
     }
 
     #[test]
-    fn power_down_and_jpeg_produce_no_frames() {
+    fn power_down_produces_no_frames() {
         let mut d = dev();
         configure_qqvga_rgb565(&mut d);
         write16(&mut d, REG_SYSTEM_CTROL0, 0x42);
         assert!(d.sensor.next_frame().is_none());
         write16(&mut d, REG_SYSTEM_CTROL0, 0x02);
         assert!(d.sensor.next_frame().is_some());
+    }
+
+    /// What `esp32-camera` does with a JPEG frame: SOI at byte 0 of the first
+    /// DMA block, and — in PSRAM mode — EOI inside the last 1 KiB block plus
+    /// one byte of the `(EOFs + 1) × 1024` it reports.
+    fn assert_driver_finds_the_jpeg(f: &[u8]) -> usize {
+        assert_eq!(
+            &f[..3],
+            &[0xFF, 0xD8, 0xFF],
+            "SOI at the start of the first block"
+        );
+        assert_ne!(f.len() % JPEG_DMA_BLOCK, 0, "never an exact block multiple");
+        let reported = (f.len() / JPEG_DMA_BLOCK + 1) * JPEG_DMA_BLOCK;
+        let window = reported - (JPEG_DMA_BLOCK + 1);
+        let eoi = f[window..]
+            .windows(2)
+            .position(|w| w == [0xFF, 0xD9])
+            .map(|p| p + window)
+            .expect("EOI inside the PSRAM probe window");
+        assert!(
+            f[eoi + 2..].iter().all(|&b| b == 0),
+            "only zero padding after EOI"
+        );
+        eoi + 2
+    }
+
+    #[test]
+    fn jpeg_mode_emits_a_decodable_frame_the_driver_can_size() {
+        let mut d = dev();
+        configure_qqvga_rgb565(&mut d);
         write16(&mut d, REG_TIMING_TC_REG21, TC21_JPEG_EN);
-        assert!(d.sensor.next_frame().is_none());
+        write16(&mut d, REG_COMPRESSION_CTRL07, 12);
+        let f = d.sensor.next_frame().expect("JPEG frames flow");
+        let end = assert_driver_finds_the_jpeg(&f);
+        let mut dec = jpeg_decoder::Decoder::new(&f[..end]);
+        let px = dec.decode().expect("a baseline decoder accepts the frame");
+        let info = dec.info().unwrap();
+        assert_eq!(
+            (info.width, info.height),
+            (160, 120),
+            "the programmed window"
+        );
+        // Colour bars: the first bar is white, the sixth (x = 5/8 w) red.
+        let at = |x: usize, y: usize| &px[(y * 160 + x) * 3..(y * 160 + x) * 3 + 3];
+        assert!(
+            at(4, 60).iter().all(|&c| c > 220),
+            "white bar: {:?}",
+            at(4, 60)
+        );
+        let red = at(110, 60);
+        assert!(
+            red[0] > 200 && red[1] < 60 && red[2] < 60,
+            "red bar: {red:?}"
+        );
         let log = d.logs().remove(0);
-        assert_eq!(log.count_matching("JPEG output selected"), 1);
+        assert_eq!(log.count_matching("JPEG 160x120 QS=12"), 1, "logged once");
+    }
+
+    #[test]
+    fn jpeg_quality_register_trades_size_for_fidelity() {
+        let mut d = dev();
+        configure_qqvga_rgb565(&mut d);
+        write16(&mut d, REG_TIMING_TC_REG21, TC21_JPEG_EN);
+        d.set_input("pattern", 2.0).unwrap(); // gradient: costly to compress
+        write16(&mut d, REG_COMPRESSION_CTRL07, 4);
+        let fine = assert_driver_finds_the_jpeg(&d.sensor.next_frame().unwrap());
+        write16(&mut d, REG_COMPRESSION_CTRL07, 50);
+        let coarse = assert_driver_finds_the_jpeg(&d.sensor.next_frame().unwrap());
+        assert!(coarse < fine, "QS 50 ({coarse} B) < QS 4 ({fine} B)");
+    }
+
+    #[test]
+    fn a_jpeg_on_a_block_boundary_is_moved_off_it() {
+        // A 94x56 colour-bar window at QS 10 encodes to exactly 2048 bytes:
+        // left alone, esp32-camera's PSRAM path could never find its EOI.
+        let (w, h) = (94u32, 56u32);
+        let bare = jpeg_baseline::encode_rgb(w, h, 85, |x, _| BARS[(x * 8 / w) as usize % 8]);
+        assert_eq!(
+            bare.len() % JPEG_DMA_BLOCK,
+            0,
+            "the case under test: {} B",
+            bare.len()
+        );
+        let mut d = dev();
+        write16(&mut d, REG_X_OUTPUT_SIZE_H, 0);
+        write16(&mut d, REG_X_OUTPUT_SIZE_L, w as u8);
+        write16(&mut d, REG_Y_OUTPUT_SIZE_H, 0);
+        write16(&mut d, REG_Y_OUTPUT_SIZE_L, h as u8);
+        write16(&mut d, REG_TIMING_TC_REG21, TC21_JPEG_EN);
+        write16(&mut d, REG_COMPRESSION_CTRL07, 10); // quality 85
+        let f = d.sensor.next_frame().unwrap();
+        let end = assert_driver_finds_the_jpeg(&f);
+        assert_eq!(
+            end,
+            bare.len() + 4,
+            "a 4-byte COM segment moved EOI off the boundary"
+        );
+        jpeg_decoder::Decoder::new(&f[..end])
+            .decode()
+            .expect("still decodes with the COM segment");
     }
 
     #[test]
