@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- OV3660 JPEG output. With `PIXFORMAT_JPEG` the `ov3660` part streams real
+  baseline JPEG frames (YCbCr 4:2:2, quantised by `COMPRESSION_CTRL07`)
+  instead of no frames, sized so `esp32-camera` finds SOI and EOI the way it
+  does on silicon (zero padding to the DMA block, a COM segment for the one
+  length its PSRAM path cannot size). Espressif's `take_picture` runs in JPEG
+  mode: 320x240 frames that decode with Pillow and `jpeg-decoder`. The encoder
+  is `peripherals/jpeg_baseline.rs`; `jpeg-decoder` is a new dev-dependency
+  for its tests.
+
 ### Performance
 - Idle fast-forward also skips a proven CCOUNT busy-wait, on any core. A
   core in a loop that only reads CCOUNT, computes with it and compares it

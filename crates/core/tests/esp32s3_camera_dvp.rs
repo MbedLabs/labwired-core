@@ -493,3 +493,101 @@ board_io: []
     let (pid_l, _) = i2c1_read16(&mut rig, 0x300B);
     assert_eq!(u16::from_be_bytes([pid_h, pid_l]), 0x3660);
 }
+
+// ── JPEG through LCD_CAM and GDMA ────────────────────────────────────────
+// `ll_cam_dma_sizes` in JPEG mode: 1 KiB half buffers (REC_DATA_BYTELEN 1023).
+const JPEG_BLOCK: u32 = 1024;
+const JPEG_DESC: u64 = 0x3FC9_3000;
+const JPEG_BUF: u64 = 0x3FC9_4000;
+const JPEG_NODES: u64 = 4;
+
+/// A 64×48 window in JPEG mode reaches memory as a whole JPEG: SOI at byte 0
+/// of the first block, one `IN_SUC_EOF` per full 1 KiB block, EOI inside the
+/// last block the driver counts, and the bytes in RAM decode to the window.
+#[test]
+fn ov3660_jpeg_frames_reach_memory_as_a_decodable_jpeg() {
+    let mut rig = build();
+    rig.sccb_write(0x3008, 0x82);
+    for (reg, v) in [(0x3808, 0), (0x3809, 64), (0x380A, 0), (0x380B, 48)] {
+        rig.sccb_write(reg, v);
+    }
+    // set_pixformat(JPEG): YUV422 core format + the compression enable;
+    // set_quality(12).
+    rig.sccb_write(0x4300, 0x30);
+    rig.sccb_write(0x3821, 0x20);
+    rig.sccb_write(0x4407, 12);
+
+    for n in 0..JPEG_NODES {
+        let desc = JPEG_DESC + n * 16;
+        let next = JPEG_DESC + ((n + 1) % JPEG_NODES) * 16;
+        rig.wr(desc, OWNER_DMA | JPEG_BLOCK);
+        rig.wr(desc + 4, (JPEG_BUF + n * u64::from(JPEG_BLOCK)) as u32);
+        rig.wr(desc + 8, next as u32);
+    }
+    rig.wr(IN_INT_CLR, !0);
+    rig.wr(IN_CONF1, 0);
+    rig.wr(IN_PERI_SEL, PERI_SEL_LCD_CAM);
+    rig.wr(CAM_CTRL1, (JPEG_BLOCK - 1) | CAM_START);
+    rig.wr(LC_DMA_INT_ENA, INT_CAM_VSYNC);
+
+    rig.wait_for(
+        LC_DMA_INT_RAW,
+        INT_CAM_VSYNC,
+        2_000_000,
+        "frame-start VSYNC",
+    );
+    rig.wr(LC_DMA_INT_CLR, INT_CAM_VSYNC);
+    // ll_cam_start, JPEG half-buffer size.
+    rig.wr(IN_INT_CLR, !0);
+    rig.wr(IN_INT_ENA, IN_SUC_EOF);
+    rig.wr(IN_CONF0, IN_RST);
+    rig.wr(IN_CONF0, 0);
+    rig.wr(CAM_CTRL1, (JPEG_BLOCK - 1) | CAM_RESET);
+    rig.wr(IN_LINK, (JPEG_DESC as u32 & 0xF_FFFF) | IN_LINK_START);
+    rig.wr(CAM_CTRL1, (JPEG_BLOCK - 1) | CAM_START);
+
+    let mut eofs = 0u64;
+    let mut closed = false;
+    for _ in 0..4_000_000 {
+        if rig.rd(IN_INT_RAW) & IN_SUC_EOF != 0 {
+            rig.wr(IN_INT_CLR, IN_SUC_EOF);
+            eofs += 1;
+        }
+        if rig.rd(LC_DMA_INT_RAW) & INT_CAM_VSYNC != 0 {
+            ll_cam_stop(&mut rig);
+            closed = true;
+            break;
+        }
+        rig.step();
+    }
+    assert!(closed, "closing VSYNC not seen ({eofs} EOFs)");
+    assert!(eofs < JPEG_NODES, "the frame fits the ring ({eofs} EOFs)");
+
+    // What cam_hal does with it in PSRAM mode: (EOFs + 1) blocks, SOI at the
+    // start, EOI searched forward in the last block plus one byte.
+    let reported = (eofs + 1) * u64::from(JPEG_BLOCK);
+    let ram: Vec<u8> = (0..reported)
+        .map(|i| rig.bus().read_u8(JPEG_BUF + i).unwrap())
+        .collect();
+    assert_eq!(
+        &ram[..3],
+        &[0xFF, 0xD8, 0xFF],
+        "SOI at byte 0 of the first block"
+    );
+    let window = reported as usize - (JPEG_BLOCK as usize + 1);
+    let eoi = ram[window..]
+        .windows(2)
+        .position(|w| w == [0xFF, 0xD9])
+        .map(|p| p + window)
+        .expect("EOI where esp32-camera looks for it");
+    let mut dec = jpeg_decoder::Decoder::new(&ram[..eoi + 2]);
+    let px = dec.decode().expect("the bytes in RAM are a valid JPEG");
+    let info = dec.info().unwrap();
+    assert_eq!((info.width, info.height), (64, 48));
+    // Out-of-reset scene: colour bars; the first column is the white bar.
+    assert!(
+        px[..3].iter().all(|&c| c > 220),
+        "white bar first: {:?}",
+        &px[..3]
+    );
+}
