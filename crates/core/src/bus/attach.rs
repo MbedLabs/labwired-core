@@ -29,6 +29,21 @@ impl SystemBus {
         self.attach_i2c_slave_with_route(controller, dev, None)
     }
 
+    /// Bind a DVP camera sensor to the chip's camera interface — the first
+    /// peripheral whose [`Peripheral::attach_dvp_sensor`] takes it. Returns
+    /// `false` on a chip with no camera interface; the caller decides whether
+    /// that is an error (a camera kit keeps its SCCB side working either way).
+    ///
+    /// [`Peripheral::attach_dvp_sensor`]: crate::Peripheral::attach_dvp_sensor
+    pub fn attach_dvp_sensor(
+        &mut self,
+        sensor: std::sync::Arc<dyn crate::peripherals::components::DvpSensor>,
+    ) -> bool {
+        self.peripherals
+            .iter_mut()
+            .any(|p| p.dev.attach_dvp_sensor(sensor.clone()))
+    }
+
     /// The single funnel through which every manifest-backed I²C slave reaches
     /// a controller. `route` is a target-neutral signal map (`sda`/`scl` for
     /// I²C); ESP32-C3 lowers it to real GPIO-matrix pads and rejects missing,

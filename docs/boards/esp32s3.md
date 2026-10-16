@@ -47,7 +47,7 @@ There are two chip yamls for ESP32-S3 today:
 | GDMA             | 0x6003F000 | ✅ modeled          | 5 channels; M2M descriptor walks **and** peripheral-coupled byte movement (see below) |
 | SPI2 / SPI3      | 0x60024000 / 0x60025000 | ✅ modeled | GP-SPI master: CPU W-buffer path + GDMA-coupled DMA transactions; device attach surface (e-paper e2e) |
 | I²S0 / I²S1      | 0x6000F000 / 0x6002D000 | ✅ modeled | Config/control twin + GDMA-coupled sample streaming (`RXEOF_NUM` byte semantics) |
-| LCD_CAM          | 0x60041000 | ✅ modeled (LCD TX) | Config/control twin + i80 pixel streaming: `LCD_CMD_VAL` command phase and the GDMA outlink payload drive an attached parallel panel. RGB-mode sync generation and the camera (DVP) RX path are not modelled |
+| LCD_CAM          | 0x60041000 | ✅ modeled (LCD TX + CAM RX) | Config/control twin + i80 pixel streaming: `LCD_CMD_VAL` command phase and the GDMA outlink payload drive an attached parallel panel. CAM slave: an attached DVP sensor (`ov3660`) streams frames into the GDMA inlink with the VSYNC / `IN_SUC_EOF` sequence `esp32-camera` counts (see [Camera](#camera-dvp)). RGB-mode sync generation is not modelled |
 | UART0/1/2        | 0x60000000 / 0x60010000 / 0x6002E000 | ✅ modeled | FIFO + STATUS + baud-paced drain; UART0 doubles as the UHCI0 DMA endpoint |
 
 The authoritative wiring (`configure_xtensa_esp32s3`) additionally registers
@@ -78,11 +78,52 @@ bytes:
   an attached 8080 parallel panel (`ili9341-16bit`) with the command word
   from `LCD_CMD_VAL` and the DMA payload as data. The walk honours
   `suc_eof`, and `LCD_TRANS_DONE` is withheld until the chain drains so the
-  driver cannot remount descriptors mid-transfer. The LCD_CAM **IN**
-  direction (camera RX) is still on the fallback below.
-- Other peripheral ids (AES, SHA, ADC, RMT, LCD_CAM-IN, unknown/unbound)
-  keep an auto-complete fallback: EOF latches without byte movement so
-  polling firmware progresses.
+  driver cannot remount descriptors mid-transfer.
+- **LCD_CAM IN** (`IN_PERI_SEL = 5`): camera receive. The CAM slave hands
+  the attached sensor's bytes to the inlink as they arrive at the PCLK rate;
+  `IN_SUC_EOF` latches every `CAM_REC_DATA_BYTELEN + 1` bytes (or at VSYNC
+  with `CAM_VS_EOF_EN`), closing the current descriptor with its length and
+  `suc_eof`. `IN_CHECK_OWNER` is honoured, so the driver's circular ring
+  keeps filling on its second lap, and `IN_LINK.STOP` ends the receive.
+- Other peripheral ids (AES, SHA, ADC, RMT, unknown/unbound) keep an
+  auto-complete fallback: EOF latches without byte movement so polling
+  firmware progresses.
+
+## Camera (DVP)
+
+An `ov3660` part (`configs` type `ov3660`, kit in
+`crates/core/src/peripherals/components/ov3660.rs`) puts a camera on the
+board: its SCCB port answers at 0x3C on the I²C controller named by
+`connection:` (`esp32-camera` uses `i2c1`), and its DVP output is bound to
+LCD_CAM's CAM slave.
+
+```yaml
+external_devices:
+  - id: "cam"
+    type: "ov3660"
+    connection: "i2c1"
+```
+
+Unmodified `esp32-camera` firmware runs against it: probe and chip ID
+(0x3660), the sensor init table, `set_framesize` / `set_pixformat`, then
+`esp_camera_fb_get()` returning frames in internal RAM or PSRAM. Frames
+follow the window (0x3808–0x380B) and format (0x4300: RGB565, YUV422, Y8)
+the driver programs. Checked with Espressif's `take_picture` example
+(RGB565 QVGA, one PSRAM frame buffer) and a two-buffer `CAMERA_GRAB_LATEST`
+preview to an ST7789.
+
+The picture is synthetic and driven by stimulus: `pattern` (0 colour bars,
+1 checkerboard, 2 gradient, 3 flat), `brightness` (0–100 %) and `motion`
+(pixels the scene scrolls per frame). The sensor's own colour-bar bit
+(0x503D[7]) overrides the stimulus, as on silicon. JPEG output is not
+modelled: with it selected the sensor produces no frames, and
+`esp_camera_fb_get()` times out.
+
+Timing: one byte per 20 MHz PCLK, a 200 µs back porch and 1 ms of
+blanking. Two guards keep the driver's event count intact when the
+simulator fast-forwards idle time: VSYNC waits until a captured frame has
+been handed to GDMA, and GDMA moves no bytes past an `IN_SUC_EOF` the CPU
+has not acknowledged.
 
 ## Not yet modeled (commonly expected on ESP32-S3)
 

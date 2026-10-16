@@ -1070,6 +1070,20 @@ pub trait Peripheral: std::fmt::Debug + Send {
         None
     }
 
+    /// Camera-slave capability: bind a DVP sensor's pixel output to this
+    /// peripheral's camera input. Returns `true` when this peripheral has one
+    /// and took the sensor.
+    ///
+    /// Only a camera interface implements it (the ESP32-S3 `LCD_CAM`). Without
+    /// it, every camera kit would have to downcast to that one concrete model,
+    /// and a second chip's camera interface could never receive a sensor.
+    fn attach_dvp_sensor(
+        &mut self,
+        _sensor: std::sync::Arc<dyn crate::peripherals::components::DvpSensor>,
+    ) -> bool {
+        false
+    }
+
     /// PWM capability: notify `obs` of each duty an LEDC channel commits
     /// (`ledcWrite`). Implemented by the ESP32-family LEDC models; `false`
     /// (observer dropped) for every other peripheral.

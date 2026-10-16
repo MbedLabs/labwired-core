@@ -56,6 +56,8 @@ pub static KITS: &[&'static dyn PeripheralKit] = &[
     &components::declarative_display::ST7789_KIT,
     &components::inmp441::INMP441_KIT,
     &components::ili9341_parallel::ILI9341_PARALLEL_KIT,
+    // OV3660 camera: SCCB on I²C plus DVP frames into the ESP32-S3 LCD_CAM.
+    &components::ov3660::OV3660_KIT,
     &components::declarative_display::SSD1680_TRICOLOR_290_KIT,
     &components::declarative_display::UC8151D_TRICOLOR_290_KIT,
     &components::declarative_spi::SN74HC165_KIT,
