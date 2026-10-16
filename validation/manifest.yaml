@@ -7436,6 +7436,10 @@ boards:
       - crates/core/src/peripherals/nrf52/uicr.rs
       - crates/core/src/peripherals/nrf52/wdt.rs
       - crates/core/src/peripherals/spi.rs
+      # 2026-10-16 (#1394), model_paths_drift_gate: the chip descriptor now
+      # declares the Cortex-M SysTick, so its model joins the watch list. No
+      # silicon capture is recorded for this board, so no ack is implied.
+      - crates/core/src/peripherals/systick.rs
 
   - id: microbit-v1
     doc: docs/boards/microbit-v1.md
@@ -7469,6 +7473,10 @@ boards:
       - crates/core/src/peripherals/components/declarative_led_matrix.rs
       - configs/chips/nrf51822.yaml
       - configs/systems/microbit-v1.yaml
+      # 2026-10-16 (#1394), model_paths_drift_gate: the chip descriptor now
+      # declares the Cortex-M SysTick, so its model joins the watch list. No
+      # silicon capture is recorded for this board, so no ack is implied.
+      - crates/core/src/peripherals/systick.rs
 
   - id: microbit-v2
     doc: docs/boards/microbit-v2.md
@@ -7517,6 +7525,10 @@ boards:
       - crates/core/src/peripherals/nrf52/wdt.rs
       - crates/core/src/peripherals/spi.rs
       - crates/core/src/peripherals/stub.rs
+      # 2026-10-16 (#1394), model_paths_drift_gate: the chip descriptor now
+      # declares the Cortex-M SysTick, so its model joins the watch list. No
+      # silicon capture is recorded for this board, so no ack is implied.
+      - crates/core/src/peripherals/systick.rs
 
   - id: rp2040
     doc: docs/boards/rp2040.md
@@ -7674,6 +7686,10 @@ boards:
       - crates/core/src/peripherals/nrf52/timer.rs
       - crates/core/src/peripherals/nrf52/uarte.rs
       - crates/core/src/peripherals/stub.rs
+      # 2026-10-16 (#1394), model_paths_drift_gate: the chip descriptor now
+      # declares the Cortex-M SysTick, so its model joins the watch list. No
+      # silicon capture is recorded for this board, so no ack is implied.
+      - crates/core/src/peripherals/systick.rs
 
   - id: stm32h735
     doc: docs/boards/stm32h735.md
