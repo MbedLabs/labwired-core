@@ -196,6 +196,14 @@ pub(crate) struct TestResult {
     /// `TestResult` — `result.json` is a write-only artifact.
     #[serde(default, skip_deserializing, skip_serializing_if = "Vec::is_empty")]
     pub(crate) motors: Vec<labwired_core::bus::MotorSnapshot>,
+    /// Run-long change-point series of every in-core analog channel (probes
+    /// and `trace:` expressions such as a coil's `i(L1)`): `[time_ns, value]`
+    /// points, sample-and-hold, written when the value leaves a small
+    /// deadband. Unlike the 2 s scope ring it covers the whole run. Omitted
+    /// when no analog model is attached or none has a channel, so every other
+    /// run keeps a byte-identical `result.json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) analog_series: Option<labwired_core::analog::AnalogSeries>,
     /// What became of every declarative input stimulus the script declared —
     /// applied, rejected by the engine, or never reached. Absent (and omitted)
     /// when the script declared none, so runs that never used the feature keep
