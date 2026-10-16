@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Fixed
+- Classic ESP32 Arduino fast boot: the BROM `gpio_matrix_out` thunk now
+  writes `GPIO_FUNCn_OUT_SEL_CFG` (signal, `OUT_INV_SEL`, `OEN_INV_SEL`)
+  instead of returning without effect. `ledcAttachPin`, `spiAttach*` and
+  HardwareSerial pin attach call it through `pinMatrixOutAttach`, so on that
+  path a pad attached to LEDC stayed a plain GPIO and showed 0 edges. A
+  sketch with `ledcSetup(ch, 50, 14)` + `ledcAttachPin` + `ledcWrite` now
+  shows its 20.032 ms frames on the attached pads in `labwired test
+  --watch-gpio`.
+
 ### Added
 - OV3660 camera on the ESP32-S3 (`type: ov3660`, `docs/boards/esp32s3.md`
   "Camera (DVP)"). The part answers SCCB at 0x3C (16-bit register addresses,
