@@ -1724,6 +1724,9 @@ pub(crate) fn execute_test_loop<C: labwired_core::Cpu>(
         logic_edges,
         gpio_pins,
         ctx.machine.bus.motor_snapshots(),
+        ctx.machine
+            .analog_series()
+            .filter(|series| !series.channels.is_empty()),
         stimulus_outcomes,
         footprint,
         Some(memory),

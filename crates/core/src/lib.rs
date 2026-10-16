@@ -3294,6 +3294,12 @@ impl<C: Cpu> Machine<C> {
             .unwrap_or_default()
     }
 
+    /// Run-long change-point series of every analog channel (`result.json`'s
+    /// `analog_series`); `None` when no co-simulation runner is attached.
+    pub fn analog_series(&self) -> Option<crate::analog::AnalogSeries> {
+        self.analog_trace.as_ref().map(|registry| registry.series())
+    }
+
     /// Current engine cycle — the `nowCycle` reported alongside a logic-edge
     /// read so the UI can extend flat traces to "now".
     pub fn logic_now_cycle(&self) -> u64 {
