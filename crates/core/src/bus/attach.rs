@@ -2506,6 +2506,75 @@ impl SystemBus {
         self.timer_capture_wired = wired;
     }
 
+    /// Route each STM32F1 timer's channel OUTPUTS (OC1..OC4) onto the GPIO
+    /// pads that carry them, so a pad configured as an alternate-function
+    /// output reads — and the logic analyzer records — the PWM / output-compare
+    /// waveform the timer generates, instead of the idle output latch.
+    ///
+    /// F1 only: the pads are the fixed DEFAULT map (RM0008 Rev 21 §9.3.7
+    /// Tables 43-46, `AFIO_MAPR` remaps not decoded — the same honest gap the
+    /// SPI/I²C/USART/capture tables carry): TIM1 CH1-4 = PA8-PA11, TIM2 CH1-4
+    /// = PA0-PA3, TIM3 CH1-4 = PA6/PA7/PB0/PB1, TIM4 CH1-4 = PB6-PB9. A pad
+    /// carries a timer output only while it is an AF output (CRL/CRH `MODE !=
+    /// 0`, `CNF >= 0b10`, RM0008 §9.1.11 Table 20 "TIMx_CHx output compare:
+    /// alternate function push-pull").
+    ///
+    /// Several of these pads carry another peripheral's DEFAULT function too
+    /// (PA7 SPI1_MOSI, PA9 USART1_TX, PA2 USART2_TX, PB6/PB7 I2C1). DS5319 Rev
+    /// 20 Table 5 note 4 leaves that to firmware ("only one peripheral should
+    /// be enabled at a time"), so the timer routes are CONDITIONAL
+    /// ([`crate::Peripheral::bind_timer_output_pad`]): a channel whose output is
+    /// enabled owns the pad, and one that is not leaves it to the other
+    /// peripheral (or to nothing).
+    pub(crate) fn wire_stm32_timer_output_pads(&mut self) {
+        // (timer, port, pin, channel 0-based, func)
+        const F1: &[(&str, char, u8, usize, &str)] = &[
+            ("tim1", 'a', 8, 0, "TIM1_CH1"),
+            ("tim1", 'a', 9, 1, "TIM1_CH2"),
+            ("tim1", 'a', 10, 2, "TIM1_CH3"),
+            ("tim1", 'a', 11, 3, "TIM1_CH4"),
+            ("tim2", 'a', 0, 0, "TIM2_CH1"),
+            ("tim2", 'a', 1, 1, "TIM2_CH2"),
+            ("tim2", 'a', 2, 2, "TIM2_CH3"),
+            ("tim2", 'a', 3, 3, "TIM2_CH4"),
+            ("tim3", 'a', 6, 0, "TIM3_CH1"),
+            ("tim3", 'a', 7, 1, "TIM3_CH2"),
+            ("tim3", 'b', 0, 2, "TIM3_CH3"),
+            ("tim3", 'b', 1, 3, "TIM3_CH4"),
+            ("tim4", 'b', 6, 0, "TIM4_CH1"),
+            ("tim4", 'b', 7, 1, "TIM4_CH2"),
+            ("tim4", 'b', 8, 2, "TIM4_CH3"),
+            ("tim4", 'b', 9, 3, "TIM4_CH4"),
+        ];
+        use crate::peripherals::timer::TimerInputStage;
+        for &(tim, port, pin, ch, func) in F1 {
+            let Some(t_idx) = self
+                .find_peripheral_index_by_name(tim)
+                .or_else(|| self.find_peripheral_index_by_name(&format!("{tim}_pwm")))
+            else {
+                continue;
+            };
+            // Only an F1-generation timer (no CCxNP); the port refuses a row
+            // unless it is an F1 port itself.
+            if self.peripherals[t_idx].dev.timer_input_stage() != Some(TimerInputStage::F1) {
+                continue;
+            }
+            let Some(gpio_idx) = self.find_peripheral_index_by_name(&format!("gpio{port}")) else {
+                continue;
+            };
+            let Some(lines) = self.peripherals[t_idx].dev.timer_output_lines(false) else {
+                continue;
+            };
+            if self.peripherals[gpio_idx]
+                .dev
+                .bind_timer_output_pad(&lines, pin, ch, func)
+            {
+                // A pad can carry it: the timer starts generating its outputs.
+                self.peripherals[t_idx].dev.timer_output_lines(true);
+            }
+        }
+    }
+
     /// Bind every nRF52 bus controller's wire to every pad its `PSEL` can name,
     /// so a probe shows the bus instead of the GPIO output latch.
     ///
