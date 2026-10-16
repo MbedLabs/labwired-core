@@ -471,9 +471,12 @@ impl XtensaLx7 {
 
     fn probe_decode(&self, bus: &ProbeBus<'_>, pc: u32) -> SimResult<(u32, xtensa::Instruction)> {
         let entry = &self.decode_cache[(pc as usize >> 1) & DECODE_CACHE_MASK];
-        // A recording probe reads the code through the bus so the plan
-        // watches it too.
-        if bus.log.is_none() && entry.generation == self.cur_decode_gen && entry.tag == pc {
+        if entry.generation == self.cur_decode_gen && entry.tag == pc {
+            // A recording probe logs the code bytes too, when they are plain
+            // memory (a store can reach them); flash-mapped code is read-only.
+            if bus.log.is_some() {
+                let _ = bus.plain_read(u64::from(pc), entry.len as usize);
+            }
             return Ok((entry.len, entry.ins));
         }
         let b0 = bus.read_u8(u64::from(pc))?;
@@ -719,7 +722,19 @@ impl XtensaLx7 {
                 "a deferred poll loop caught up across its CCOMPARE0 edge"
             );
             let pc = self.pc;
-            let Ok((len, ins)) = self.probe_decode(&probe_bus, pc) else {
+            // Code the decode cache no longer holds and plain memory cannot
+            // serve (flash-mapped) is read through the bus, as a step reads it.
+            let decoded = self.probe_decode(&probe_bus, pc).or_else(|_| {
+                let b0 = bus.read_u8(u64::from(pc))?;
+                let len = xtensa_length::instruction_length(b0);
+                let ins = if len == 2 {
+                    xtensa_narrow::decode_narrow(bus.read_u16(u64::from(pc))?)
+                } else {
+                    xtensa::decode(bus.read_u32(u64::from(pc))?)
+                };
+                Ok::<_, SimulationError>((len, ins))
+            });
+            let Ok((len, ins)) = decoded else {
                 debug_assert!(false, "deferred poll loop: fetch failed at {pc:#x}");
                 return false;
             };
