@@ -120,16 +120,28 @@ Unmodified `esp32-camera` firmware runs against it: probe and chip ID
 (0x3660), the sensor init table, `set_framesize` / `set_pixformat`, then
 `esp_camera_fb_get()` returning frames in internal RAM or PSRAM. Frames
 follow the window (0x3808–0x380B) and format (0x4300: RGB565, YUV422, Y8)
-the driver programs. Checked with Espressif's `take_picture` example
-(RGB565 QVGA, one PSRAM frame buffer) and a two-buffer `CAMERA_GRAB_LATEST`
-preview to an ST7789.
+the driver programs, or are baseline JPEG (below). Checked with Espressif's
+`take_picture` example (RGB565 and JPEG, QVGA, one PSRAM frame buffer) and a
+two-buffer `CAMERA_GRAB_LATEST` preview to an ST7789.
 
 The picture is synthetic and driven by stimulus: `pattern` (0 colour bars,
 1 checkerboard, 2 gradient, 3 flat), `brightness` (0–100 %) and `motion`
 (pixels the scene scrolls per frame). The sensor's own colour-bar bit
-(0x503D[7]) overrides the stimulus, as on silicon. JPEG output is not
-modelled: with it selected the sensor produces no frames, and
-`esp_camera_fb_get()` times out.
+(0x503D[7]) overrides the stimulus, as on silicon.
+
+JPEG (`0x3821[5]`): each frame is a real baseline JPEG of the scene, YCbCr
+4:2:2 at the programmed window, quantised by `COMPRESSION_CTRL07` (0x4407,
+the QS `set_quality` writes). It is sized for the driver: `esp32-camera`
+reports a PSRAM JPEG frame as (EOFs + 1) × 1 KiB and looks for `FF D9` only in
+that last block, so the stream is zero-padded to one byte short of the next
+1 KiB boundary, and the one length that could never be found (an exact
+multiple of 1 KiB) gets a 4-byte COM segment. `esp_camera_fb_get()` returns
+the trimmed JPEG; decoders accept it. Not the OV3660's own encoder, so sizes
+are representative, not bit-exact.
+
+The camera pins in the example are Espressif's `CAMERA_MODEL_ESP32S3_EYE`
+map (arduino-esp32 `camera_pins.h`), the one ESP32-S3 N16R8 camera boards
+are documented against.
 
 Timing: one byte per 20 MHz PCLK, a 200 µs back porch and 1 ms of
 blanking. Two guards keep the driver's event count intact when the

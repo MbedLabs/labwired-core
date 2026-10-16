@@ -61,6 +61,7 @@ pub mod imx_iomuxc;
 pub mod imxrt;
 pub mod itm;
 pub mod iwdg;
+pub mod jpeg_baseline;
 pub mod kit;
 pub mod lptim;
 pub mod mcg;
