@@ -291,6 +291,10 @@ pub static EMBEDDED_DEVICES: &[(&[&str], &str)] = &[
         &["ntc-thermistor"],
         include_str!("../../../configs/devices/ntc_thermistor.yaml"),
     ),
+    (
+        &["tmp36"],
+        include_str!("../../../configs/devices/tmp36.yaml"),
+    ),
     (&["mq-6"], include_str!("../../../configs/devices/mq6.yaml")),
     (
         &["soil-moisture"],
