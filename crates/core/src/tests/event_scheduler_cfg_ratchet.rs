@@ -277,7 +277,14 @@ const MAX_MODEL_SITES: usize = 178;
 /// sleeping ATmega328P on a GPIO net skips its idle cycles and every
 /// observable stays the same" has nothing to measure without it. The rest of
 /// `world_multichip` runs in both builds. Ends with the feature.
-const MAX_HARNESS_SITES: usize = 87;
+///
+/// 87 → 88: `tests/xtensa_poll_loop_skip.rs` is one gated file. The CCOUNT
+/// poll-loop skip is part of the idle fast-forward, which only exists on the
+/// event-scheduler run, so "a CCOUNT busy-wait on either core is skipped and
+/// every record, CCOUNT and machine cycle stays the same" has nothing to
+/// measure without it. `required-features` and the `pr-scheduler-observable`
+/// lane keep it from reading green empty. Ends with the feature.
+const MAX_HARNESS_SITES: usize = 88;
 
 // ---------------------------------------------------------------------------
 // The counter. A pure function over source text, so its definition is testable

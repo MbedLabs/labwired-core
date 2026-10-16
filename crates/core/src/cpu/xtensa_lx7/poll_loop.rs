@@ -405,19 +405,19 @@ impl XtensaLx7 {
         true
     }
 
-    fn probe_decode(&self, bus: &ProbeBus<'_>, pc: u32) -> Option<(u32, xtensa::Instruction)> {
+    fn probe_decode(&self, bus: &ProbeBus<'_>, pc: u32) -> SimResult<(u32, xtensa::Instruction)> {
         let entry = &self.decode_cache[(pc as usize >> 1) & DECODE_CACHE_MASK];
         if entry.generation == self.cur_decode_gen && entry.tag == pc {
-            return Some((entry.len, entry.ins));
+            return Ok((entry.len, entry.ins));
         }
-        let b0 = bus.read_u8(u64::from(pc)).ok()?;
+        let b0 = bus.read_u8(u64::from(pc))?;
         let len = xtensa_length::instruction_length(b0);
         let ins = if len == 2 {
-            xtensa_narrow::decode_narrow(bus.read_u16(u64::from(pc)).ok()?)
+            xtensa_narrow::decode_narrow(bus.read_u16(u64::from(pc))?)
         } else {
-            xtensa::decode(bus.read_u32(u64::from(pc)).ok()?)
+            xtensa::decode(bus.read_u32(u64::from(pc))?)
         };
-        Some((len, ins))
+        Ok((len, ins))
     }
 
     /// Run one iteration from the current state, then put the state back.
@@ -465,8 +465,10 @@ impl XtensaLx7 {
         let start_ps = self.ps.as_raw();
         let start_br = self.br;
         let mut probe_bus = ProbeBus { inner: bus };
-        let anchor_dst = match self.probe_decode(&probe_bus, anchor_pc)? {
-            (_, Rsr { at, sr }) if sr == CCOUNT => at,
+        // A fetch the probe cannot serve from plain memory refuses the skip;
+        // the real step then runs that instruction and reports its own error.
+        let anchor_dst = match self.probe_decode(&probe_bus, anchor_pc) {
+            Ok((_, Rsr { at, sr })) if sr == CCOUNT => at,
             _ => return None,
         };
         let mut taint = Taint {
@@ -500,7 +502,9 @@ impl XtensaLx7 {
                 }
             }
             let pc = self.pc;
-            let (len, ins) = self.probe_decode(&probe_bus, pc)?;
+            let Ok((len, ins)) = self.probe_decode(&probe_bus, pc) else {
+                return None;
+            };
             self.probe_taint(&ins, &mut taint).ok()?;
             self.branched = false;
             let fall_through = pc.wrapping_add(len);
@@ -814,7 +818,11 @@ mod tests {
                             // Every k before the answer keeps the k=0 outcome.
                             let limit = got.unwrap_or(1 << 12).min(1 << 12) as u32;
                             for k in 0..limit {
-                                assert_eq!(at(k), at(0), "{kind:?} t0={t0:#x} c={c:#x} s={slope} a={tainted_a} k={k}");
+                                assert_eq!(
+                                    at(k),
+                                    at(0),
+                                    "{kind:?} t0={t0:#x} c={c:#x} s={slope} a={tainted_a} k={k}"
+                                );
                             }
                             if let Some(k) = got {
                                 assert_ne!(at(k as u32), at(0));

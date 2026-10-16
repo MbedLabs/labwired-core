@@ -3221,8 +3221,8 @@ mod esp32_servo_trajectory_harness {
     pub(crate) fn run(fw: &[u8], ff: bool, sim_cycles: u64) -> Run {
         let sys = std::fs::read_to_string("../../configs/systems/esp32-wroom-32.yaml").unwrap();
         let chip = std::fs::read_to_string("../../configs/chips/esp32.yaml").unwrap();
-        let mut sim =
-            WasmSimulator::new_from_config(&sys, &chip, fw, JsValue::NULL).expect("new_from_config");
+        let mut sim = WasmSimulator::new_from_config(&sys, &chip, fw, JsValue::NULL)
+            .expect("new_from_config");
         sim.install_arduino_esp32_quirks(fw).expect("quirks");
         sim.set_idle_fast_forward_enabled(ff);
         let rec = sim.recommended_tick_interval();
@@ -3304,8 +3304,16 @@ mod esp32_servo_trajectory_harness {
         );
         for (ch, p) in r.pulses.iter().enumerate() {
             let widths: Vec<f64> = p.iter().map(|(a, b)| (b - a) as f64 / 240.0).collect();
-            let periods: Vec<f64> = p.windows(2).map(|w| (w[1].0 - w[0].0) as f64 / 240.0).collect();
-            eprintln!("SERVO ch{ch} n={} widths_us={:?} periods_us(first 5)={:?}", p.len(), widths, &periods[..periods.len().min(5)]);
+            let periods: Vec<f64> = p
+                .windows(2)
+                .map(|w| (w[1].0 - w[0].0) as f64 / 240.0)
+                .collect();
+            eprintln!(
+                "SERVO ch{ch} n={} widths_us={:?} periods_us(first 5)={:?}",
+                p.len(),
+                widths,
+                &periods[..periods.len().min(5)]
+            );
         }
         if let Ok(out) = std::env::var("LABWIRED_SERVO_OUT") {
             let json: Vec<Vec<(u64, u64)>> = r.pulses.clone();

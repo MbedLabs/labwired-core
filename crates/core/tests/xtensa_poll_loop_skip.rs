@@ -22,14 +22,15 @@
 //! refused any skip while the secondary was active and the single-core one
 //! had no WAITI to skip, so both `skipped` assertions fail without it.
 
-#[cfg(all(test, feature = "event-scheduler"))]
+#![cfg(feature = "event-scheduler")]
+
 mod tests {
-    use crate::bus::SystemBus;
-    use crate::cpu::xtensa_lx7::XtensaLx7;
-    use crate::cpu::xtensa_sr::CCOUNT;
-    use crate::machine::AdvanceRequest;
-    use crate::system::xtensa::configure_xtensa_esp32;
-    use crate::{Bus, Cpu, Machine};
+    use labwired_core::bus::SystemBus;
+    use labwired_core::cpu::xtensa_lx7::XtensaLx7;
+    use labwired_core::cpu::xtensa_sr::CCOUNT;
+    use labwired_core::machine::AdvanceRequest;
+    use labwired_core::system::xtensa::configure_xtensa_esp32;
+    use labwired_core::{Bus, Cpu, Machine};
 
     const CODE: u64 = 0x4008_1000;
     const IDLE: u64 = 0x4008_2000;
@@ -106,7 +107,8 @@ mod tests {
         load(&mut bus, CODE, &FRAME);
         load(&mut bus, IDLE, &PARK);
         for (i, end) in PULSE_END.iter().enumerate() {
-            bus.write_u32(u64::from(DATA) + 64 + 4 * i as u64, *end).unwrap();
+            bus.write_u32(u64::from(DATA) + 64 + 4 * i as u64, *end)
+                .unwrap();
         }
         bus.write_u32(u64::from(DATA) + 80, TAIL_END).unwrap();
         bus.write_u32(u64::from(DATA) + 84, ACC_END).unwrap();
@@ -148,7 +150,10 @@ mod tests {
         let reference = run(dual, false);
         assert_eq!(reference.skipped, 0);
         // The program ran to the end in the reference run.
-        assert!(reference.records[11] != 0, "reference never reached the end");
+        assert!(
+            reference.records[11] != 0,
+            "reference never reached the end"
+        );
         assert_eq!(
             fast.records, reference.records,
             "the skip changed what the firmware recorded"
@@ -158,7 +163,10 @@ mod tests {
         // Each output dropped at the first iteration with dt >= its deadline.
         for (i, end) in PULSE_END.iter().enumerate() {
             let dt = fast.records[i];
-            assert!(dt >= *end && dt < end + 64, "output {i}: dt {dt} vs end {end}");
+            assert!(
+                dt >= *end && dt < end + 64,
+                "output {i}: dt {dt} vs end {end}"
+            );
         }
         // The skip covered most of the pulse and tail waiting (~480 k
         // cycles), and none of the two loops it must refuse (another ~24 k).
