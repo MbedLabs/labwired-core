@@ -37,10 +37,7 @@ fn every_cortex_m_descriptor_declares_systick() {
         if !is_cortex_m {
             continue;
         }
-        let systick = desc
-            .peripherals
-            .iter()
-            .find(|p| p.r#type == "systick");
+        let systick = desc.peripherals.iter().find(|p| p.r#type == "systick");
         match systick {
             Some(p) if p.base_address == 0xE000_E010 => {}
             Some(p) => missing.push(format!("{chip}: systick at {:#x}", p.base_address)),
