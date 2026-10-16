@@ -46,6 +46,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (GPIO32..36, GPIO39); the rest are byte-identical.
 
 ### Performance
+- A dual-core machine no longer runs in lockstep while the secondary core
+  busy-waits on CCOUNT and the primary is busy. The secondary's proven poll
+  loop is deferred: the primary runs alone, and the secondary catches up
+  when the deferral ends (before its CCOMPARE0 edge, when a byte its loop
+  reads changes, when an interrupt it takes becomes pending, or at the end of
+  the advance). Servo edge stamps are identical to a run without any skip.
+  The four-servo lab's native browser-path harness goes from 3.75x to 5.4x
+  real time.
 - Idle fast-forward also skips a proven CCOUNT busy-wait, on any core. A
   core in a loop that only reads CCOUNT, computes with it and compares it
   (`while (ESP.getCycleCount() - t0 < n) {}`, a servo pulse loop) counts as

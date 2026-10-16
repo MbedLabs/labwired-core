@@ -324,7 +324,6 @@ impl<C: Cpu> Machine<C> {
                 }
                 // The primary is busy: run it alone beside a secondary whose
                 // proven poll loop is deferred, rather than in lockstep.
-                #[cfg(feature = "event-scheduler")]
                 if !request.is_single() {
                     self.try_defer_secondary(skip_limit.unwrap_or(1 << 30));
                 }
