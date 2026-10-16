@@ -147,6 +147,16 @@ pub(crate) struct PadControlLink {
     pub(crate) control: crate::pins::PadControl,
 }
 
+/// An RTC_IO block and the GPIO port that follows its pad mux: both bus
+/// indices (see `SystemBus::rtc_io_link`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RtcIoLink {
+    /// Bus index of the RTC_IO block.
+    pub(crate) rtc: usize,
+    /// Bus index of the GPIO port.
+    pub(crate) gpio: usize,
+}
+
 /// Peripherals that name the pads they drive (nRF `PSEL`) and the pin ports
 /// that read those claims, resolved when a world `gpio_net` first joins a pad
 /// (`join_net_pads`). A write to an owner can move a pad between its GPIO
@@ -455,6 +465,11 @@ pub struct SystemBus {
     /// like the C3 IO_MUX one, and the port takes the decoded pulls. Empty
     /// on every other bus.
     pad_control_links: Vec<PadControlLink>,
+    /// The ESP32 / ESP32-S3 RTC_IO block and the GPIO port that took its
+    /// pads ([`Peripheral::attach_rtc_io_pads`](crate::Peripheral::attach_rtc_io_pads)),
+    /// resolved in `rebuild_peripheral_ranges`. A write to the block is
+    /// bracketed with the port's push capture. `None` on every other bus.
+    pub(crate) rtc_io_link: Option<RtcIoLink>,
     /// See [`PadClaimLinks`].
     pub(crate) pad_claim_links: PadClaimLinks,
     /// Per bus index: the [`PortId`](crate::pins::PortId) of a pin port,

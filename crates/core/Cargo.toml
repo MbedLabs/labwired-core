@@ -154,6 +154,7 @@ required-features = ["mlx90640-decode-test"]
 labwired-loader = { path = "../loader" }
 svd-ingestor = { path = "../svd-ingestor" }
 svd-parser = "0.14"
+jpeg-decoder = { version = "0.3", default-features = false }
 
 [[test]]
 name = "qemu_arm_core"
@@ -176,6 +177,11 @@ required-features = ["event-scheduler"]
 
 [[test]]
 name = "esp32_classic_ahb_fifo_wakes_uart"
+required-features = ["event-scheduler"]
+
+# #![cfg(feature = "event-scheduler")]
+[[test]]
+name = "xtensa_poll_loop_skip"
 required-features = ["event-scheduler"]
 
 # #![cfg(feature = "event-scheduler")]

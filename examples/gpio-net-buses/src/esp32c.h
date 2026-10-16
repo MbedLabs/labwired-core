@@ -18,6 +18,9 @@
 #define IO_MUX_BASE 0x60090000u
 #define SPI2_BASE   0x60081000u
 #define I2C0_BASE   0x60004000u
+#define GDMA_BASE   0x60080000u
+#define GDMA_OUT_CONF0_CH0 0x190u
+#define SRAM_BASE   0x40800000u
 #define RESULT ((volatile uint32_t *)0x40800100u)
 /* esp32c6 gpio_sig_map / PAC: FUNCn_IN_SEL_CFG pad [5:0], SEL bit 7. */
 #define SIG_I2C_SCL 45u
@@ -28,6 +31,9 @@
 #define IO_MUX_BASE 0x60009000u
 #define SPI2_BASE   0x60024000u
 #define I2C0_BASE   0x60013000u
+#define GDMA_BASE   0x6003F000u
+#define GDMA_OUT_CONF0_CH0 0x0D0u
+#define SRAM_BASE   0x3FC80000u
 #define RESULT ((volatile uint32_t *)0x3FC80100u)
 /* esp32c3 gpio_sig_map / PAC: FUNCn_IN_SEL_CFG pad [4:0], SEL bit 6. */
 #define SIG_I2C_SCL 53u
@@ -61,6 +67,7 @@
 #define SPI_USER1    SPI(0x14)
 #define SPI_MS_DLEN  SPI(0x1C)
 #define SPI_MISC     SPI(0x20)
+#define SPI_DMA_CONF SPI(0x30)
 #define SPI_INT_CLR  SPI(0x38)
 #define SPI_INT_RAW  SPI(0x3C)
 #define SPI_W(n)     SPI(0x98 + 4u * (n))
@@ -68,6 +75,57 @@
 #define SPI_SLAVE1   SPI(0xE4)
 #define SPI_CLK_GATE SPI(0xE8)
 #define SPI_USR      (1u << 24)
+/* SPI_DMA_CONF: DMA_RX_ENA 27, DMA_TX_ENA 28; RX_AFIFO_RST 29,
+ * BUF_AFIFO_RST 30, DMA_AFIFO_RST 31. */
+#define SPI_DMA_RX_ENA (1u << 27)
+#define SPI_DMA_TX_ENA (1u << 28)
+#define SPI_AFIFO_RST  (7u << 29)
+
+/* GDMA channel 0, the registers both chips place alike (IN_CONF0 0x70,
+ * IN_LINK 0x80, IN_PERI_SEL 0xA0, OUT_LINK 0xE0, OUT_PERI_SEL 0x100);
+ * OUT_CONF0 moved on the C6. PERI_SEL 0 = SPI2. LINK: the descriptor
+ * address's low 20 bits, START (IN bit 22, OUT bit 21). */
+#define GDMA(o)          REG(GDMA_BASE + (o))
+#define GDMA_IN_CONF0    GDMA(0x70)
+#define GDMA_IN_LINK     GDMA(0x80)
+#define GDMA_IN_PERI_SEL GDMA(0xA0)
+#define GDMA_OUT_CONF0   GDMA(GDMA_OUT_CONF0_CH0)
+#define GDMA_OUT_LINK    GDMA(0xE0)
+#define GDMA_OUT_PERI_SEL GDMA(0x100)
+#define GDMA_INLINK_START  (1u << 22)
+#define GDMA_OUTLINK_START (1u << 21)
+/* Linked-list descriptor dw0: owner 31, suc_eof 30, length 23:12, size 11:0. */
+#define DESC_OWNER   (1u << 31)
+#define DESC_SUC_EOF (1u << 30)
+#define DESC_LEN(n)  ((uint32_t)(n) << 12)
+/* SRAM the DMA firmware uses by address: the transmit and receive buffers
+ * and one descriptor for each direction. */
+#define TX_BUF   (SRAM_BASE + 0x200u)
+#define RX_BUF   (SRAM_BASE + 0x300u)
+#define OUT_DESC (SRAM_BASE + 0x400u)
+#define IN_DESC  (SRAM_BASE + 0x410u)
+
+/* One descriptor for each direction over `n` bytes, the SPI's DMA FIFOs
+ * reset and DMA enabled for both directions, both links bound to SPI2 and
+ * started: esp-idf's spi_hal_prepare_data order. */
+static inline void spi_dma_start(uint32_t n) {
+    REG(OUT_DESC) = DESC_OWNER | DESC_SUC_EOF | DESC_LEN(n) | n;
+    REG(OUT_DESC + 4u) = TX_BUF;
+    REG(OUT_DESC + 8u) = 0u;
+    REG(IN_DESC) = DESC_OWNER | n;
+    REG(IN_DESC + 4u) = RX_BUF;
+    REG(IN_DESC + 8u) = 0u;
+    GDMA_OUT_PERI_SEL = 0u;
+    GDMA_IN_PERI_SEL = 0u;
+    GDMA_IN_CONF0 = 1u;                         /* IN_RST */
+    GDMA_IN_CONF0 = 0u;
+    GDMA_OUT_CONF0 = 1u | (1u << 3);            /* OUT_RST, OUT_EOF_MODE */
+    GDMA_OUT_CONF0 = 1u << 3;
+    SPI_DMA_CONF = SPI_AFIFO_RST;
+    SPI_DMA_CONF = SPI_DMA_RX_ENA | SPI_DMA_TX_ENA;
+    GDMA_IN_LINK = GDMA_INLINK_START | (IN_DESC & 0xFFFFFu);
+    GDMA_OUT_LINK = GDMA_OUTLINK_START | (OUT_DESC & 0xFFFFFu);
+}
 #define SPI_UPDATE   (1u << 23)
 #define SPI_TRANS_DONE (1u << 12)
 

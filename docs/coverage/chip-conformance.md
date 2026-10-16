@@ -16,11 +16,11 @@ Reg match = verifiable cold-reset registers reproduced. "Excluded" = registers a
 | esp32s3-zero | **L1** | ✓ | 17 | — | — | firmware_survival::test_esp32s3_zero_tier1_survival |
 | stm32f401cdu6 | **L1** | ✓ | 45 | — | — | firmware_survival::test_stm32f401cdu6_demo_survival |
 | stm32f411ceu6 | **L1** | ✓ | 46 | — | — | firmware_survival::test_stm32f411_tier1_survival |
-| nrf51822 | **L1** | ✓ | 21 | — | — | firmware_survival::test_nrf51822_microbit_v1_smoke_survival |
-| nrf52832 | **L1** | ✓ | 16 | — | — | firmware_survival::test_nrf52832_demo_survival |
-| nrf52833 | **L1** | ✓ | 47 | — | — | firmware_survival::test_nrf52833_microbit_v2_smoke_survival |
-| nrf52840 | **L1** | ✓ | 50 | — | — | firmware_survival::test_nrf52840_demo_survival |
-| nrf5340 | **L1** | ✓ | 20 | — | — | firmware_survival::test_nrf5340_zephyr_survival |
+| nrf51822 | **L1** | ✓ | 22 | — | — | firmware_survival::test_nrf51822_microbit_v1_smoke_survival |
+| nrf52832 | **L1** | ✓ | 17 | — | — | firmware_survival::test_nrf52832_demo_survival |
+| nrf52833 | **L1** | ✓ | 48 | — | — | firmware_survival::test_nrf52833_microbit_v2_smoke_survival |
+| nrf52840 | **L1** | ✓ | 51 | — | — | firmware_survival::test_nrf52840_demo_survival |
+| nrf5340 | **L1** | ✓ | 21 | — | — | firmware_survival::test_nrf5340_zephyr_survival |
 | rp2040 | **L1** | ✓ | 22 | — | — | firmware_survival::test_rp2040_demo_survival |
 | stm32f103 | **L1** | ✓ | 31 | — | — | stm32f1_exec_oracle |
 | stm32f401 | **L1** | ✓ | 24 | — | — | firmware_survival::test_stm32f401_blinky_survival |
@@ -47,7 +47,7 @@ Reg match = verifiable cold-reset registers reproduced. "Excluded" = registers a
 | ra4m1 | **L1** | ✓ | 7 | — | — | firmware_survival::test_ra4m1_uno_r4_smoke_survival |
 | imxrt1064 | **L1** | ✓ | 6 | — | — | firmware_survival::test_imxrt1064_teensy41_smoke_survival |
 | stm32f746 | **L1** | ✓ | 17 | — | — | firmware_survival::test_stm32f746_discovery_smoke_survival |
-| stm32g071 | **L1** | ✓ | 40 | — | — | firmware_survival::test_nucleo_g071rb_smoke_survival |
+| stm32g071 | **L1** | ✓ | 41 | — | — | firmware_survival::test_nucleo_g071rb_smoke_survival |
 
 ## Declared platforms without a model
 

@@ -55,6 +55,22 @@ use std::sync::mpsc::{Receiver, Sender};
 /// Routing-aware controller families retain their existing attachment path.
 pub trait I2cSlaveHost {
     fn attach_slave(&mut self, device: Box<dyn I2cDevice>);
+
+    /// How this controller reaches pads through a GPIO output matrix, for a
+    /// controller on a part where any I²C can drive any pad (the ESP32
+    /// family). `None` — the default — for a controller with fixed pins.
+    /// See [`crate::peripherals::i2c_matrix`].
+    fn matrix_reach(&self) -> Option<crate::peripherals::i2c_matrix::I2cMatrixReach> {
+        None
+    }
+
+    /// Hand this controller the chip's live output matrix. Called once at bus
+    /// wiring time; ignored by a controller with fixed pins.
+    fn set_pad_matrix(
+        &mut self,
+        _matrix: std::sync::Arc<dyn crate::peripherals::i2c_matrix::PadOutMatrix>,
+    ) {
+    }
 }
 
 pub trait I2cDevice: Send {
@@ -654,6 +670,27 @@ pub trait GpioObserver: Send + Sync + std::fmt::Debug {
         _sim_cycle: u64,
     ) {
     }
+
+    /// Fired when the source that drives pad `pin` changes: the port's own
+    /// output latch, an LEDC channel, or another peripheral signal through a
+    /// pin matrix. A GPIO model that reports sources also calls this once per
+    /// pad when the observer is added, so an observer can tell "this pad is on
+    /// the latch" from "this port never says". `on_pin_change` sees only the
+    /// latch; a pad a peripheral drives moves without it. Default: ignored.
+    fn on_pad_source(&self, _pin: u8, _source: PadSource) {}
+}
+
+/// What drives a pad right now, as a GPIO model with a pin matrix reports it
+/// through [`GpioObserver::on_pad_source`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PadSource {
+    /// The port's output latch, or nothing (output driver off).
+    Latch,
+    /// LEDC channel `channel`, numbered as the chip's LEDC model numbers the
+    /// channels it reports to [`crate::peripherals::LedcDutyObserver`].
+    Ledc(u8),
+    /// Any other peripheral signal.
+    Peripheral,
 }
 
 // ── Tier 2 pin-drive collection ─────────────────────────────────────────────

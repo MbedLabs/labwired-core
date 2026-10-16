@@ -1333,6 +1333,7 @@ jobs:
           --test stm32l073_walk_differential
           --test stm32l476_walk_differential
           --test esp32_classic_ahb_fifo_wakes_uart
+          --test xtensa_poll_loop_skip
 
       # JIT-on vs interpreter on nRF TIMER0 / UART / WFI at tick 512. Needs
       # `jit` as well as `event-scheduler` (`required-features` on the target).

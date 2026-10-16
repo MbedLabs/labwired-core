@@ -197,6 +197,10 @@ mod exec;
 #[path = "xtensa_lx7/fp_assist.rs"]
 pub(crate) mod fp_assist;
 
+/// CCOUNT time-poll loop fast-forward (see the module doc).
+#[path = "xtensa_lx7/poll_loop.rs"]
+mod poll_loop;
+
 /// Offset of _KernelExceptionVector relative to VECBASE on ESP32-S3 LX7.
 ///
 /// Verified against Zephyr soc/xtensa/esp32s3/linker.ld:
@@ -426,6 +430,10 @@ pub struct XtensaLx7 {
     /// `boundary.rs` calls between peripheral ticks) never uses it.
     bus_irq_memo: Option<u32>,
     in_step_batch: bool,
+    /// Last `RSR CCOUNT` seen, for the time-poll loop skip.
+    poll: poll_loop::PollTracker,
+    /// The skip the last `poll_loop_skip_budget` proved, until applied.
+    poll_plan: Option<poll_loop::PollPlan>,
     /// JIT cache (Phase 3.2 pilot — issue #124).
     #[cfg(feature = "jit")]
     pub jit: Option<Box<crate::cpu::xtensa_jit::JitCache>>,
@@ -487,6 +495,8 @@ impl XtensaLx7 {
             cur_decode_gen: 1,
             bus_irq_memo: None,
             in_step_batch: false,
+            poll: poll_loop::PollTracker::default(),
+            poll_plan: None,
             #[cfg(feature = "jit")]
             jit: None,
             #[cfg(feature = "jit")]
@@ -2937,6 +2947,26 @@ impl Cpu for XtensaLx7 {
     }
     fn intlevel(&self) -> u8 {
         self.ps.intlevel()
+    }
+
+    fn poll_loop_anchor_ready(&self) -> bool {
+        self.poll_anchor_ready()
+    }
+
+    fn poll_loop_skip_budget(&mut self, bus: &dyn Bus, limit: u64) -> Option<(u64, u64)> {
+        self.poll_loop_budget(bus, limit)
+    }
+
+    fn fast_forward_poll_loop(&mut self, cycles: u64) -> bool {
+        self.apply_poll_loop_skip(cycles)
+    }
+
+    fn poll_loop_defer_changed(&self, bus: &dyn Bus) -> bool {
+        self.poll_defer_changed(bus)
+    }
+
+    fn poll_loop_catch_up(&mut self, bus: &dyn Bus, cycles: u64) -> bool {
+        self.poll_catch_up(bus, cycles)
     }
 
     fn is_parked_idle(&self) -> bool {

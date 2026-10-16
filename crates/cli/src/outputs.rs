@@ -41,6 +41,7 @@ pub(crate) fn write_outputs<C: labwired_core::Cpu>(
     logic_edges: Option<labwired_core::logic_capture::LogicEdgesResult>,
     gpio_pins: Option<Vec<labwired_core::logic_capture::GpioPinState>>,
     motors: Vec<labwired_core::bus::MotorSnapshot>,
+    analog_series: Option<labwired_core::analog::AnalogSeries>,
     stimuli: Vec<StimulusOutcome>,
     footprint: Option<artifacts::FootprintReport>,
     memory: Option<labwired_core::stack_paint::MainStackReport>,
@@ -119,6 +120,7 @@ pub(crate) fn write_outputs<C: labwired_core::Cpu>(
         logic_edges,
         gpio_pins,
         motors,
+        analog_series,
         stimuli,
         footprint,
         memory,
@@ -497,6 +499,7 @@ pub(crate) fn write_config_error_outputs(
         gpio_pins: None,
         // Nor any motor evidence: the run was rejected before a machine existed.
         motors: Vec::new(),
+        analog_series: None,
         // Nor any stimulus outcomes: the run was rejected before a machine
         // existed, so no stimulus was ever attempted.
         stimuli: Vec::new(),

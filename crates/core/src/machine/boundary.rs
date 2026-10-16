@@ -105,10 +105,7 @@ impl<C: Cpu> Machine<C> {
                 // is present so a mid-batch SW_SYS_RST latches and stops the
                 // window before more PRO instructions retire past the reset.
                 // Otherwise use step_batch for throughput.
-                let secondary_state = self
-                    .cpu_secondary
-                    .as_ref()
-                    .map(|s| s.secondary_execution_state());
+                let secondary_state = self.secondary_plan_state();
                 let parked_secondary =
                     secondary_state == Some(crate::SecondaryExecutionState::ParkedIdle);
                 let reset_held_secondary =
@@ -144,6 +141,26 @@ impl<C: Cpu> Machine<C> {
                         self.total_cycles += u64::from(retired);
                         primary_steps += retired;
 
+                        // A deferred secondary: this primary instruction may
+                        // have changed what its loop reads or raised an
+                        // interrupt it takes. Its lockstep steps before this
+                        // cycle saw neither; its step in this cycle, after
+                        // the primary's, sees both.
+                        let mut defer_ended = false;
+                        if self.secondary_defer.is_some()
+                            && self
+                                .cpu_secondary
+                                .as_ref()
+                                .is_some_and(|sec| sec.poll_loop_defer_changed(&self.bus))
+                        {
+                            self.end_secondary_defer(self.total_cycles - 1);
+                            if let Some(sec) = self.cpu_secondary.as_mut() {
+                                sec.step(&mut self.bus, &self.observers, &self.config)?;
+                                secondary_steps += 1;
+                            }
+                            defer_ended = true;
+                        }
+
                         // A reset-held APP CPU can be released by this primary
                         // instruction. Consume the request now, run APP once at
                         // the same boundary as the reference lockstep path, and
@@ -172,10 +189,20 @@ impl<C: Cpu> Machine<C> {
                         self.tick_peripherals_at_boundary();
                         #[cfg(feature = "event-scheduler")]
                         self.drain_scheduler_events();
+                        if defer_ended || self.check_secondary_defer() {
+                            break;
+                        }
                         if self.rtc_cntl_reset_pending() {
                             break;
                         }
                         if secondary_released {
+                            break;
+                        }
+                        // End the window at a poll-loop anchor so the idle
+                        // skip can try it (`Cpu::poll_loop_anchor_ready`).
+                        if self.config.idle_fast_forward_enabled
+                            && self.cpu.poll_loop_anchor_ready()
+                        {
                             break;
                         }
                     }
@@ -193,6 +220,11 @@ impl<C: Cpu> Machine<C> {
                             .step(&mut self.bus, &self.observers, &self.config)?;
                         n += 1;
                         if self.rtc_cntl_reset_pending() {
+                            break;
+                        }
+                        if self.config.idle_fast_forward_enabled
+                            && self.cpu.poll_loop_anchor_ready()
+                        {
                             break;
                         }
                     }

@@ -37,8 +37,15 @@
 //! controller shifts in from an idle bus. Then `USR` auto-clears (so the
 //! firmware's poll exits) and `SPI_TRANS_DONE` latches in `SPI_DMA_INT_RAW`.
 //!
-//! This is the CPU data path only; GDMA-coupled (descriptor-driven) transfers
-//! are not modeled here.
+//! ## GDMA data path (`SPI_DMA_CONF.DMA_TX_ENA` / `DMA_RX_ENA`)
+//!
+//! With DMA enabled the MOSI bytes come from what the GDMA OUT link bound to
+//! SPI2 pushed into the controller ([`Peripheral::gdma_out_load`]) and the
+//! MISO bytes go to its IN link instead of `W0..W15`, with no 64-byte limit.
+//! The transaction completes — `USR` clears and `SPI_TRANS_DONE` latches —
+//! when the GDMA has written the received bytes to memory
+//! ([`Peripheral::gdma_in_delivered`]), so firmware that sees it done finds
+//! its buffer filled. See [`crate::peripherals::esp_gdma`].
 //!
 //! `tick()` emits the controller's intr-matrix source while `INT_ST != 0`,
 //! mirroring the I²C / UART pattern; the bus routes it through the per-core
@@ -116,6 +123,14 @@ const MS_DATA_BITLEN: u32 = 0x0003_FFFF;
 const AFIFO_RST_BITS: u32 = 0xE000_0000;
 /// `SPI_SOFT_RESET` in `SLAVE` (bitpos 27, WT) — self-clearing.
 const SOFT_RESET_BIT: u32 = 1 << 27;
+/// `SPI_DMA_CONF.DMA_RX_ENA` / `DMA_TX_ENA` (bits 27 / 28): the data phase
+/// moves through the GDMA instead of `W0..W15`.
+const DMA_RX_ENA: u32 = 1 << 27;
+const DMA_TX_ENA: u32 = 1 << 28;
+/// `SPI_DMA_CONF.RX_AFIFO_RST` (bit 29) and `BUF_AFIFO_RST` / `DMA_AFIFO_RST`
+/// (bits 30 / 31, the transmit side).
+const RX_AFIFO_RST: u32 = 1 << 29;
+const TX_AFIFO_RST: u32 = (1 << 30) | (1 << 31);
 
 /// One word past the last architected register (`DATE` @ 0xF0).
 const NWORDS: usize = 0xF4 / 4;
@@ -196,6 +211,13 @@ pub struct Esp32c3Spi {
     net: crate::peripherals::esp_gpspi_net::GpSpiNet,
     /// Interrupt level last reported through a scheduler event in net mode.
     net_irq: crate::peripherals::esp_gpio_net::IrqLevelWatch,
+    /// GDMA coupling (`crate::peripherals::esp_gdma`): bytes the OUT link has
+    /// pushed into the transmit FIFO, not yet shifted out.
+    dma_tx: std::collections::VecDeque<u8>,
+    /// Bytes a DMA_RX_ENA transaction received, waiting for the IN link. The
+    /// transaction completes (`USR` clears, `TRANS_DONE`) when the GDMA has
+    /// written them to memory ([`Self::gdma_in_delivered`]).
+    dma_rx: Option<Vec<u8>>,
 }
 
 impl std::fmt::Debug for Esp32c3Spi {
@@ -235,7 +257,17 @@ impl Esp32c3Spi {
             external_can_poll_scheduled: false,
             net: Default::default(),
             net_irq: Default::default(),
+            dma_tx: Default::default(),
+            dma_rx: None,
         }
+    }
+
+    fn dma_tx_enabled(&self) -> bool {
+        self.reg(DMA_CONF) & DMA_TX_ENA != 0
+    }
+
+    fn dma_rx_enabled(&self) -> bool {
+        self.reg(DMA_CONF) & DMA_RX_ENA != 0
     }
 
     /// The shared pad-line cell for this controller's SCK/MOSI/CS, created on
@@ -409,6 +441,10 @@ impl Esp32c3Spi {
     /// (`SPI_MS_DATA_BITLEN` is bits-1). Capped at the 64-byte W buffer.
     fn transfer_bytes(&self) -> usize {
         let bits = (self.reg(MS_DLEN) & MS_DATA_BITLEN) as usize + 1;
+        if self.dma_tx_enabled() || self.dma_rx_enabled() {
+            // The GDMA data path is not limited to the W buffer.
+            return bits.div_ceil(8);
+        }
         (bits.div_ceil(8)).min(64)
     }
 
@@ -464,16 +500,32 @@ impl Esp32c3Spi {
         let framing = crate::peripherals::esp_gpspi_wire::framing(self.reg(MISC), self.reg(USER));
         let bit_time = self.bit_time_cycles();
         let now = self.clock.as_ref().map_or(0, |c| c.now());
+        let (dma_tx, dma_rx) = (self.dma_tx_enabled(), self.dma_rx_enabled());
+        let mut received = Vec::new();
         for i in 0..bytes {
             let off = W0 + (i as u64 / 4) * 4;
             let shift = (i % 4) * 8;
-            let mosi = ((self.reg(off) >> shift) & 0xFF) as u8;
+            // GDMA: the OUT link's bytes (zeros once it runs dry); else W.
+            let mosi = if dma_tx {
+                self.dma_tx.pop_front().unwrap_or(0)
+            } else {
+                ((self.reg(off) >> shift) & 0xFF) as u8
+            };
             // Narrate the byte the CPU put on the bus, at the point it goes out
             // — before the MISO response overwrites the W slot it came from.
             self.wire.push(mosi, framing, bit_time, now);
             let miso = self.exchange_byte(mosi);
-            let word = (self.reg(off) & !(0xFFu32 << shift)) | ((miso as u32) << shift);
-            self.set_reg_raw(off, word);
+            if dma_rx {
+                received.push(miso);
+            } else if i < 64 {
+                let word = (self.reg(off) & !(0xFFu32 << shift)) | ((miso as u32) << shift);
+                self.set_reg_raw(off, word);
+            }
+        }
+        if dma_rx {
+            // Complete once the GDMA IN link has the bytes in memory.
+            self.dma_rx = Some(received);
+            return;
         }
         // Clear the USR start bit (auto-clear on done) so `!(CMD & USR)` exits.
         let cmd = self.reg(CMD) & !USR_BIT;
@@ -499,9 +551,47 @@ impl crate::peripherals::esp_gpspi_net::GpSpiHost for Esp32c3Spi {
     fn bit_time(&self) -> Option<u64> {
         self.bit_time_cycles()
     }
+
+    fn dma_tx(&self) -> bool {
+        self.dma_tx_enabled()
+    }
+
+    fn dma_rx(&self) -> bool {
+        self.dma_rx_enabled()
+    }
+
+    fn take_dma_tx(&mut self, max: usize) -> Vec<u8> {
+        let n = max.min(self.dma_tx.len());
+        self.dma_tx.drain(..n).collect()
+    }
+
+    fn give_dma_rx(&mut self, bytes: Vec<u8>) {
+        self.dma_rx = Some(bytes);
+    }
 }
 
 impl Peripheral for Esp32c3Spi {
+    // ── GDMA coupling (`crate::peripherals::esp_gdma`) ──────────────────────
+
+    /// The GDMA OUT link bound to this controller (`PERI_SEL` = SPI2) pushed
+    /// `bytes` into its transmit FIFO.
+    fn gdma_out_load(&mut self, bytes: &[u8]) {
+        self.dma_tx.extend(bytes);
+    }
+
+    /// The bytes a finished DMA_RX_ENA transaction holds for the IN link.
+    fn gdma_in_take(&mut self) -> Option<Vec<u8>> {
+        self.dma_rx.take()
+    }
+
+    /// The IN link has the received bytes in memory: the transaction is
+    /// complete.
+    fn gdma_in_delivered(&mut self) {
+        let cmd = self.reg(CMD) & !USR_BIT;
+        self.set_reg_raw(CMD, cmd);
+        self.int_raw |= TRANS_DONE;
+    }
+
     fn spi_attached_devices(&self) -> Option<&Vec<Box<dyn crate::peripherals::device::SpiDevice>>> {
         Some(&self.attached_devices)
     }
@@ -616,9 +706,17 @@ impl Peripheral for Esp32c3Spi {
             }
             DMA_CONF => {
                 self.set_reg_masked(DMA_CONF, value);
-                // AFIFO reset strobes (bits 29/30/31) self-clear.
+                // AFIFO reset strobes (bits 29/30/31) self-clear, and empty
+                // the FIFO they name: drivers reset them before every
+                // transaction, ahead of starting the GDMA links.
                 let v = self.reg(DMA_CONF) & !AFIFO_RST_BITS;
                 self.set_reg_raw(DMA_CONF, v);
+                if value & TX_AFIFO_RST != 0 {
+                    self.dma_tx.clear();
+                }
+                if value & RX_AFIFO_RST != 0 {
+                    self.dma_rx = None;
+                }
             }
             SLAVE => {
                 self.set_reg_masked(SLAVE, value);

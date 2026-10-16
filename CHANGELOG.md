@@ -25,6 +25,154 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once its per-test records are summed. `labwired test --coverage` also writes
   `coverage.cobertura.xml` (valid against `coverage-04.dtd`) and names each
   run's `TN:` after its script.
+- STM32 DMA arbitration, F4 stream FIFOs, transfer errors, DMAMUX
+  generators and synchronisation, GDMA descriptor errors. Each STM32 DMA
+  controller (F1/L4/G0 `dma`, F4/F7 `stm32f4_dma`, H5/U5 `gpdma`) moves one
+  item per arbitration slot, to the channel or stream with the highest
+  software priority (`CCR.PL`, `SxCR.PL`, `CCR.PRIO`) and then the lowest
+  number; a request that loses the slot stays latched. An item that faults
+  on the bus sets `TEIF` (GPDMA `DTEF`) and disables the channel or stream
+  (bus plumbing: the bus tells the issuing controller,
+  `Peripheral::dma_transfer_error`). F4 streams model the 16-byte FIFO
+  (`DMDIS`, `FTH`, live `FS`, `PBURST` / `MBURST` INCR4/8/16, packing when
+  `PSIZE` ≠ `MSIZE`, `FEIF` for a forbidden `FTH` / `MBURST` / `MSIZE`
+  combination, an overrun or an underrun, `FEIE`), force `MSIZE` = `PSIZE`
+  and no bursts in direct mode, flush a P2M FIFO when `EN` is cleared (`EN`
+  reads 1 until the stream stops, `TCIF` set), and run memory-to-memory
+  through the FIFO (new `DmaDirection::Load` / `Store` items,
+  `Peripheral::dma_load_data`). The G0 DMAMUX request generators
+  (`RGxCR`) and synchronisation (`CxCR.SE`, `SYNC_ID`, `SPOL`, `NBREQ`,
+  `EGE`, `CSR` / `RGSR` overruns) take EXTI lines 0..15 (the G0 EXTI now
+  answers `exti_line_source`) and the channel events `dmamux_evt0..3`. The
+  ESP32-C3 / C6 GP-SPI2 GDMA path raises `IN_DSCR_ERR` / `OUT_DSCR_ERR`
+  (owner check, a descriptor, buffer or next link outside internal SRAM),
+  `IN_DSCR_EMPTY`, and `OUT_EOF` only for a `suc_eof` descriptor. New
+  end-to-end net test `env-spi-f4-dma.yaml` (F401 master: two streams
+  complete by priority, then SPI1 through the FIFOs in INCR4 bursts, against
+  the G071 DMA slave). Behaviour change: an F4 memory-to-memory transfer now
+  takes its FIFO drains as extra slots, and an F4 stream disabled by
+  software sets `TCIF` as on silicon.
+- OV3660 JPEG output. With `PIXFORMAT_JPEG` the `ov3660` part streams real
+  baseline JPEG frames (YCbCr 4:2:2, quantised by `COMPRESSION_CTRL07`)
+  instead of no frames, sized so `esp32-camera` finds SOI and EOI the way it
+  does on silicon (zero padding to the DMA block, a COM segment for the one
+  length its PSRAM path cannot size). Espressif's `take_picture` runs in JPEG
+  mode: 320x240 frames that decode with Pillow and `jpeg-decoder`. The encoder
+  is `peripherals/jpeg_baseline.rs`; `jpeg-decoder` is a new dev-dependency
+  for its tests.
+- RTC IO MUX and RTC GPIO on the classic ESP32 and the ESP32-S3
+  (`peripherals/esp_rtc_io.rs`, `esp32_rtc_io` at 0x3FF4_8400 replacing the
+  round-trip stub, `esp32s3_rtc_io` at 0x6000_8400 in place of the RTC_CNTL
+  catch-all). The SVD register map and reset values (unit-tested against the
+  vendored SVDs); a pad whose `MUX_SEL` is set is driven by
+  `RTC_GPIO_OUT` / `ENABLE` (+ `_W1TS` / `_W1TC`), `PAD_DRIVER` open drain
+  and `RUE` / `RDE` pulls instead of `GPIO_OUT` / `GPIO_ENABLE` and the GPIO
+  matrix, on a probe and on a world `gpio_net`; `RTC_GPIO_IN` and `GPIO_IN`
+  read it through `FUN_IE`; `RTC_GPIO_PINn.INT_TYPE` latches
+  `RTC_GPIO_STATUS` (no CPU interrupt: neither part routes it to one); the
+  classic `HOLD` bits freeze the RTC output stage. Classic RTC GPIO numbers
+  follow `rtc_io_desc` (GPIO0 is RTC_GPIO11, bit 25). The GPIO model of each
+  part takes the shared state through `Peripheral::rtc_io_pads` /
+  `attach_rtc_io_pads`, no downcast. `env-rtc-gpio-esp32-esp32s3.yaml` runs
+  RTC GPIO between the two parts and hands a pad from the RTC domain back to
+  the digital one.
+
+### Changed
+- Classic ESP32 RTC-capable pads (GPIO0, 2, 4, 12..15, 25..27, 32, 33) take
+  their pull from RTC_IO `RUE` / `RDE` in the digital domain too (ESP32
+  errata 3.6; ESP-IDF `gpio_pullup_en` writes them there), from the silicon
+  reset values on: GPIO0, GPIO14 and GPIO15 pulled up, GPIO2, GPIO4, GPIO12
+  and GPIO13 pulled down. A released input there now reads its pull and shows
+  it on a net, where it read the last outside level (0) before.
+- The `gpio-net-buses` Xtensa firmware clears RTC_IO `MUX_SEL` before using
+  an RTC-capable pad digitally, as `gpio_config()` does (`RTC_DIGITAL` in
+  `src/esp32x.inc`). The ELFs whose pads have an RTC function were rebuilt:
+  the S3 GP-SPI2 / I2C0 ones (GPIO8..13) and the classic bank-1 ones
+  (GPIO32..36, GPIO39); the rest are byte-identical.
+
+### Performance
+- A dual-core machine no longer runs in lockstep while the secondary core
+  busy-waits on CCOUNT and the primary is busy. The secondary's proven poll
+  loop is deferred: the primary runs alone, and the secondary catches up
+  when the deferral ends (before its CCOMPARE0 edge, when a byte its loop
+  reads changes, when an interrupt it takes becomes pending, or at the end of
+  the advance). Servo edge stamps are identical to a run without any skip.
+  The four-servo lab's native browser-path harness goes from 3.75x to 5.4x
+  real time.
+- Idle fast-forward also skips a proven CCOUNT busy-wait, on any core. A
+  core in a loop that only reads CCOUNT, computes with it and compares it
+  (`while (ESP.getCycleCount() - t0 < n) {}`, a servo pulse loop) counts as
+  idle: the Xtensa core proves one iteration is a pure function of the
+  CCOUNT value (read-only probe, taint per register, exact first change of
+  every compare) and the machine skips the steady iterations. The skip is a
+  whole number of iterations, ends on every core's CCOMPARE0 edge, and
+  leaves the same state as running them: servo edge stamps are identical to
+  a run without any skip. The four-servo trajectory lab (two cores, loopTask
+  on APP_CPU) goes from 0.03x to 2.0x real time in WASM (Node, 12 s).
+### Fixed
+- Idle fast-forward on a dual-core machine waits until BOTH cores are idle.
+  It skipped on the primary's WAITI alone, so an ESP32 sketch whose
+  `loopTask` runs on APP_CPU got about 1 % of the machine's cycles: a
+  CCOUNT-timed 20 ms servo frame took about 2 s of machine time in the
+  browser. A parked secondary's CCOUNT now moves with the skip.
+- Browser (WASM) classic-ESP32 boot runs the real esp_flash chip driver and
+  seeds `g_rom_flashchip`, as the shared Arduino profile does. Every
+  classic-ESP32 lab printed `No core dump partition found` and
+  `initArduino(): Failed to initialize NVS! Error: 261`; `Preferences` failed
+  in the browser and worked on silicon.
+- A servo without `ledc_channel` follows the LEDC channel the GPIO matrix
+  routes to its pad. Before, it observed all 16 channels, so every
+  `ledcWrite` moved every servo: four servos on GPIO25/26/27/33 (channels
+  0..3) all showed the angle of the last write. The classic ESP32 GPIO
+  reports each pad's source (`GpioObserver::on_pad_source`: latch, LEDC
+  channel, other peripheral). A port that does not report sources keeps the
+  old behaviour.
+- Classic ESP32 Arduino fast boot: the BROM `gpio_matrix_out` thunk now
+  writes `GPIO_FUNCn_OUT_SEL_CFG` (signal, `OUT_INV_SEL`, `OEN_INV_SEL`)
+  instead of returning without effect. `ledcAttachPin`, `spiAttach*` and
+  HardwareSerial pin attach call it through `pinMatrixOutAttach`, so on that
+  path a pad attached to LEDC stayed a plain GPIO and showed 0 edges. A
+  sketch with `ledcSetup(ch, 50, 14)` + `ledcAttachPin` + `ledcWrite` now
+  shows its 20.032 ms frames on the attached pads in `labwired test
+  --watch-gpio`.
+
+### Added
+- Every ESP32 / ESP32-S3 pad and bus controller instance on `gpio_net`s.
+  Bank-1 pads join nets like bank 0: classic GPIO32..39 and S3 GPIO32..48
+  take outside levels in `GPIO_IN1`, drive `GPIO_OUT1` / `GPIO_ENABLE1` (bit
+  `pad - 32`), latch `GPIO_STATUS1` per `INT_TYPE` (`GPIO_ACPU_INT1` /
+  `GPIO_PCPU_INT1`, the same GPIO interrupt source), and carry peripheral
+  lines through the GPIO matrix, which indexes `FUNCn_OUT_SEL_CFG` and
+  `FUNCn_IN_SEL_CFG`'s pad field by the pad number itself. Classic
+  GPIO34..39 stay input-only: `ENABLE1` stores but never drives them, and
+  they feed matrix inputs. The S3 GP-SPI3 (`SPI3_*` 66/67/68/71) and I2C1
+  (`I2CEXT1_*` 91/92) and the classic I2C1 (`I2CEXT1_*` 95/96) now run the
+  bit-level net engines S3 SPI2 / I2C0 and classic I2C0 host. The classic
+  I2C1 is on the bus at 0x3FF6_7000 (interrupt source 50, AHB TX FIFO alias
+  0x6002_701C); before, nothing answered there. Tested against an STM32G071
+  both ways round on bank-1 pads (S3 SPI3 on GPIO34..37, I2C1 on GPIO41/42;
+  classic I2C1 on GPIO32/33, VSPI / HSPI with GPIO34..36 taking lines in),
+  and plain GPIO between a classic ESP32 and an ESP32-S3 on GPIO32/39 and
+  GPIO40/41 (`examples/gpio-net-buses`, `docs/howto/gpio-nets.md`).
+- OV3660 camera on the ESP32-S3 (`type: ov3660`, `docs/boards/esp32s3.md`
+  "Camera (DVP)"). The part answers SCCB at 0x3C (16-bit register addresses,
+  chip ID 0x3660, software reset) and streams frames over DVP into LCD_CAM's
+  camera slave, which now feeds GDMA's IN channel (`PERI_SEL = 5`) with the
+  VSYNC / `IN_SUC_EOF` sequence `esp32-camera`'s `cam_hal` counts. Frames
+  follow the window and format the driver programs (RGB565, YUV422, Y8);
+  the scene is synthetic and stimulus-driven (`pattern`, `brightness`,
+  `motion`). Espressif's `take_picture` example runs unmodified apart from
+  board pins. JPEG is not modelled (no frames). Under the event scheduler
+  the camera's GDMA pump runs from its own wake-ups rather than the
+  per-boundary bus-tick pass, so the CPU keeps batching while frames flow
+  (camera-to-ST7789 preview: ~3x faster per frame). Tested in
+  `tests/esp32s3_camera_dvp.rs`.
+- ESP32-S3 I²C slaves reach the GPIO matrix: a part attached with a pad
+  `route:` can ask for twins on the chip's other I²C controllers, which claim
+  its address only while the firmware routes that controller's SCL/SDA to the
+  part's pads. The `ov3660` uses it, so a camera the canvas names on `i2c0`
+  answers `esp32-camera`'s I2C1 as on silicon.
+
 - Hardware chip select on `gpio_net`s for more parts. The STM32L476 SPI pad
   table routes NSS (SPI1 PA4/PA15/PE12 and SPI2 PB9/PB12/PD0 on AF5, SPI3
   PA4/PA15 on AF6), and the STM32G474, STM32WB55 and STM32L073 get their own
@@ -42,6 +190,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says. Tested in `examples/gpio-net-buses` (`env-spi-l4-nss.yaml` on an L476
   and a G474 pair, `env-spi-nrf52-spim3.yaml` against a G071 on hardware
   NSS), each re-run with the nodes swapped and with 37 ns rounds.
+- ESP32-S3 and classic ESP32 SPI and I²C on `gpio_net`s, bit by bit at the
+  pads (`docs/howto/gpio-nets.md`, "Buses over nets";
+  `examples/gpio-net-buses`, `tests/world_gpio_net_buses.rs`):
+  - The S3 and classic GPIO matrices hand net levels to peripheral inputs
+    through `FUNCn_IN_SEL_CFG` (S3 at 0x154, classic `GPIO_FUNCn_IN_SEL_CFG`
+    at 0x130, now stored and masked to its 8 writable bits; pad [5:0], `SEL`
+    bit 7 on both), and a pad routed out drives what the peripheral's line
+    drives (released, input, open drain or push-pull), as the C3/C6 do.
+  - The S3 GP-SPI2 and I2C0 run the chip-neutral `esp_gpspi_net` and
+    `esp_i2c_net` engines (S3 signals `FSPICLK/D/Q/CS0` 101/103/102/110,
+    `I2CEXT0_SCL/SDA` 89/90; I²C timing from `CLK_CONF` at a 240 MHz core).
+  - The classic VSPI and HSPI answer `esp_gpspi_net` through a translated
+    view of the classic SPI register file (`SPI_CMD.USR` 18, `SPI_USER`,
+    `SPI_CTRL2`, `SPI_MOSI/MISO_DLEN`, `SPI_PIN`, `SPI_SLAVE.SLAVE_MODE` /
+    `TRANS_DONE`, `SPI_SLV_RD_BIT`, `W0` at 0x80). HSPI (`spi2`,
+    0x3FF6_4000) is now on the classic bus, bound to its own matrix signals
+    (8..11) beside VSPI's (63..68); both SPI cells carry MISO.
+  - The classic I2C0 runs `esp_i2c_net` with the classic opcodes and APB
+    timing; with no `SCL_STRETCH_CONF` its target sends 0xFF from an empty
+    TX FIFO rather than stretching.
+  - Test firmware is hand-written Xtensa assembly (`src/esp32x_*.S`): LLVM 18
+    assembles Xtensa but neither compiles C for it nor links it, so
+    `build.sh` assembles with `llvm-mc` and `src/xtensa_elf.py` places the
+    relocation-free object at IRAM. Tested against an STM32G071 both ways
+    round on each part, including an address NACK, a slow G071 target
+    holding either controller and a slow S3 target stretching the G071's
+    clock, each re-run with the nodes swapped and with 37 ns rounds.
+- SPI DMA, STM32 and ESP32-C3/C6, including over `gpio_net`s
+  (`docs/howto/gpio-nets.md`, "SPI DMA"). The STM32 classic and FIFO SPI raise
+  DMA requests from `CR2.TXDMAEN` (TXE; the FIFO port while its TX FIFO is at
+  or below half full) and `RXDMAEN` (RXNE, following `FRXTH`), each held until
+  the `DR` access that answers it; `LDMA_TX` sends one frame from the last
+  packed half-word item and `LDMA_RX` requests the odd last byte below the
+  16-bit threshold, both from the DMA's end-of-transfer notice
+  (`DmaRequest::remaining`, `Peripheral::dma_access_notice`). Requests reach
+  the chip's DMA through its own routing registers
+  (`Peripheral::dma_route_request`): F1 fixed channels and L4 `CSELR`
+  (`dma`, `config.requests`), F4 `SxCR.CHSEL` (`stm32f4_dma`), and the new
+  G0 DMAMUX model (`dmamux`, `DMAMUX_CxCR.DMAREQ_ID`, 0x4002_0800 on the
+  G071). Routes are declared for the G071, F103, F401, F407 and L476. The
+  ESP32-C3 GDMA is a behavioral model now (`esp32c3_gdma`, was a declarative
+  register file): descriptor lists in RAM, channels bound to the GP-SPI2
+  (`PERI_SEL` = 0) feed `SPI_DMA_CONF.DMA_TX_ENA` / `DMA_RX_ENA`
+  transactions, `MEM_TRANS_EN` copies memory to memory, `INT_RAW` / `ST` /
+  `ENA` / `CLR` per channel on matrix sources 44..46. The ESP32-C6 GDMA
+  couples its SPI2 channels the same way. A DMA transaction completes
+  (`USR` clears, `SPI_TRANS_DONE`) once the IN link holds the data. Tested
+  end to end over nets (`examples/gpio-net-buses`, `env-spi-dma.yaml`,
+  `env-spi-esp32c3-dma*.yaml`, clang-built firmware): a G071 DMA master and
+  a G071 DMA slave, and an ESP32-C3 / C6 GDMA master and slave against a
+  G071 DMA slave and master, each with nodes swapped and 37 ns rounds.
 - Classic ESP32 LEDC drives its pads. Each of the 16 channels generates its
   PWM waveform (TRM §14.2: REF_TICK / APB / RTC8M source, Q8 `DIV_NUM`,
   `2^DUTY_RES` period, `HPOINT`/`DUTY`, duty latched at the next overflow,
@@ -172,6 +371,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at low addresses; a sequence starting where another ends is found.
 - Plain C function names were passed through the C++ demangler (`f` became
   `float`, `d` became `double`).
+- ESP32-S3 LCD_CAM `CAM_CTRL1`: `CAM_START` is bit 29 and `CAM_RESET` bit 30
+  (with `CAM_AFIFO_RESET` at 31), per the SVD. They were modelled swapped, so
+  the camera driver's start was read as a reset pulse and capture never ran.
+- GDMA IN descriptors are filled regardless of their owner bit when
+  `IN_CHECK_OWNER` is clear, as on silicon, so a circular RX ring keeps
+  filling after its first lap (used by the camera path).
+- ESP32-S3 / C3 GP-SPI logic-analyzer narration no longer re-narrates a held
+  burst on every cycle while it cannot fit (`LevelsOnly`); it waits for the
+  cycles it was short. A large `SPI.writeBytes` (a camera frame to a
+  display at 40 MHz) made the run quadratic in the burst length. A wire
+  nobody records (no logic-capture tap, no `gpio_net`) now narrates only a
+  burst's last byte, which leaves the lines exactly where the whole burst
+  would; a tap or a net still gets every edge.
+- STM32 DMA peripheral transfers move data. The channel (`dma`) and stream
+  (`stm32f4_dma`) models emitted a memory-to-peripheral item as a write of 0
+  and a peripheral-to-memory item as a read whose value was dropped; every
+  item is now a copy at its `PSIZE` / `MSIZE` widths (one 16-bit access for a
+  half-word item, so a FIFO SPI `DR` read pops two bytes). A peripheral
+  channel no longer moves an item when it is enabled, only on its
+  peripheral's request; the channel model's `PINC` / `MINC` strides decode
+  `PSIZE` / `MSIZE` from the right bits; an F4 stream clears `SxCR.EN` at the
+  end of a non-circular transfer; and a word (or half-word) store to a DMA
+  register is one write, so a `CCR` with `EN` and `MEM2MEM` written together
+  starts as memory-to-memory.
 - A peripheral answering a `gpio_net` edge on a timed core (the nRF52's
   Cortex-M4) stamped its answer with the bus cycle, which lags the core
   between peripheral ticks: the answer's time then depended on the world's

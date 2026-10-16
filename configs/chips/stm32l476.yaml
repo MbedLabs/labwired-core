@@ -236,6 +236,14 @@ peripherals:
     irq: 11
     config:
       debug_schema: "../peripherals/stm32l476/dma1.yaml"
+      # Peripheral requests as [channel, CSELR selector] (RM0351 Table 41,
+      # DMA1 requests): SPI1_RX ch2 / SPI1_TX ch3 (CxS = 1), SPI2_RX ch4 /
+      # SPI2_TX ch5 (CxS = 1).
+      requests:
+        spi1_rx: [2, 1]
+        spi1_tx: [3, 1]
+        spi2_rx: [4, 1]
+        spi2_tx: [5, 1]
 
   - id: "dma2"
     type: "dma"
@@ -244,6 +252,13 @@ peripherals:
     irq: 56
     config:
       debug_schema: "../peripherals/stm32l476/dma2.yaml"
+      # RM0351 Table 42, DMA2 requests: SPI3_RX ch1 / SPI3_TX ch2 (CxS = 3),
+      # SPI1_RX ch3 / SPI1_TX ch4 (CxS = 4).
+      requests:
+        spi3_rx: [1, 3]
+        spi3_tx: [2, 3]
+        spi1_rx: [3, 4]
+        spi1_tx: [4, 4]
 
   - id: "pwr"
     type: "pwr"

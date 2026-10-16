@@ -76,18 +76,19 @@ fn same_on_every_driver<T: PartialEq + std::fmt::Debug>(
 }
 
 /// Where a node's firmware leaves its results: SRAM 0x2000_0100 on the
-/// STM32s and the RP2040, DRAM 0x3FC8_0100 on an ESP32-C3 and HP SRAM
-/// 0x4080_0100 on an ESP32-C6 (nodes named `esp...`).
+/// STM32s and the RP2040; on the ESP nodes (named `esp...`) DRAM
+/// 0x3FC8_0100 on an ESP32-C3, HP SRAM 0x4080_0100 on an ESP32-C6, DRAM
+/// 0x3FCE_0100 on an ESP32-S3 and SRAM2 0x3FFC_0100 on a classic ESP32 —
+/// the first of them the node's memory map has.
 fn result_base(world: &World, id: &str) -> u32 {
     if !id.starts_with("esp") {
         return 0x2000_0100;
     }
     let m = &world.machines[id];
-    if m.read_memory(0x3FC8_0100, 4).is_ok() {
-        0x3FC8_0100
-    } else {
-        0x4080_0100
-    }
+    [0x3FC8_0100, 0x4080_0100, 0x3FCE_0100, 0x3FFC_0100]
+        .into_iter()
+        .find(|&base| m.read_memory(base, 4).is_ok())
+        .expect("an ESP result area")
 }
 
 fn result(world: &World, id: &str, words: usize) -> Vec<u32> {
@@ -371,6 +372,121 @@ mod spi {
         // Nobody drives the master's MISO wire any more: it reads the pull.
         let a = result(&world, "a", 8);
         assert_eq!(&a[..4], &[0, 0, 0, 0]);
+    }
+}
+
+/// SPI with DMA on both ends (`src/spi_dma_master.c`, `src/spi_dma_slave.c`):
+/// SPI1's TXDMAEN / RXDMAEN requests reach DMA1 through the G0's DMAMUX, and
+/// neither CPU touches DR. The bytes still cross bit by bit at the pads.
+mod spi_dma {
+    use super::*;
+
+    pub(super) const MASTER_TX: [u8; 8] = [0xA5, 0x3C, 0x5A, 0xC3, 0x0F, 0xF0, 0x81, 0x7E];
+    pub(super) const SLAVE_TX: [u8; 8] = [0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88];
+    /// DMA1_ISR with channels 1 and 2 complete: GIF | TCIF | HTIF on each.
+    pub(super) const ISR_BOTH_DONE: u32 = 0x77;
+
+    #[test]
+    fn a_dma_master_and_a_dma_slave_exchange_a_buffer_bit_by_bit() {
+        let mut world = build("env-spi-dma.yaml", |s| s);
+        run_us(&mut world, 1500);
+
+        let a = result(&world, "a", 16);
+        assert_eq!(a[15], 1, "master finished: {a:x?}");
+        assert_eq!(
+            &a[..8],
+            SLAVE_TX.map(u32::from).as_slice(),
+            "the master's RX channel moved what the slave put on MISO"
+        );
+        assert_eq!(a[8], ISR_BOTH_DONE, "both channels complete");
+        assert_eq!((a[9], a[10]), (0, 0), "CNDTR drained");
+        assert_eq!(
+            a[11] & 0x1FFF,
+            0x0002,
+            "SR: TXE, FIFOs empty, no OVR, not busy"
+        );
+
+        let b = result(&world, "b", 16);
+        assert_eq!(b[15], 1, "slave finished: {b:x?}");
+        assert_eq!(
+            &b[..8],
+            MASTER_TX.map(u32::from).as_slice(),
+            "the slave's RX channel moved what the master put on MOSI"
+        );
+        assert_eq!(b[8], ISR_BOTH_DONE);
+        assert_eq!((b[9], b[10]), (0, 0));
+        assert_eq!(b[11] & (1 << 6), 0, "no OVR");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        // 8 frames x 8 bits x 2 SCK edges, back to back.
+        assert_eq!(net(&reports, "sck").edges, 128);
+        assert_eq!(net(&reports, "cs").edges, 2);
+        assert!(net(&reports, "cs").level, "deselected at the end");
+        assert_eq!(net(&reports, "mosi").edges, data_edges(&MASTER_TX, false));
+        // MISO: the eight answers. After the last one the slave's FIFO is
+        // empty and it shifts its last received bit pattern (MSB of 0x7E,
+        // a 0), then the pull-down: no further edge, as 0x88 ends in 0.
+        assert_eq!(net(&reports, "miso").edges, data_edges(&SLAVE_TX, false));
+    }
+
+    #[test]
+    fn the_dma_exchange_does_not_depend_on_node_order_or_round_size() {
+        assert_order_and_round_independent("env-spi-dma.yaml", |s| s, ["a", "b"], 1500, 16);
+    }
+
+    /// STM32F401 DMA2 (src/f4_spi_dma_master.c): two memory-to-memory
+    /// streams started together complete in priority order, not start order;
+    /// then SPI1 moves both directions through the stream FIFOs in half-word
+    /// INCR4 bursts against the G071 DMA slave, byte-exact over the nets.
+    #[test]
+    fn f4_streams_complete_by_priority_and_spi_moves_through_fifo_bursts() {
+        let mut world = build("env-spi-f4-dma.yaml", |s| s);
+        run_us(&mut world, 2500);
+
+        let a = result(&world, "a", 16);
+        assert_eq!(a[15], 1, "master finished: {a:x?}");
+        assert_eq!(
+            (a[0], a[1]),
+            (1, 0),
+            "stream 1 (PL very high) completes before stream 0 (PL low)"
+        );
+        // Stream 0 started first (NDTR < 64) and then stood still while
+        // stream 1 ran: sharing the slots, it would have finished first.
+        assert!(
+            (1..64).contains(&a[2]),
+            "stream 0 waited while stream 1 ran: NDTR {} of 64 left",
+            a[2]
+        );
+        assert_eq!(a[3], 1, "both memory-to-memory copies byte-exact");
+        assert_eq!(
+            &a[4..12],
+            SLAVE_TX.map(u32::from).as_slice(),
+            "the RX stream packed what the slave put on MISO"
+        );
+        // LISR: TCIF and HTIF of streams 2 and 3, no FEIF / TEIF / DMEIF.
+        assert_eq!(a[12], (0b11 << 20) | (0b11 << 26), "LISR {:#x}", a[12]);
+        assert_eq!(a[13], 0, "both NDTR drained");
+        assert_eq!(a[14] & 0x1C3, 0x2, "SR: TXE, not busy, no OVR / RXNE");
+
+        let b = result(&world, "b", 16);
+        assert_eq!(b[15], 1, "slave finished: {b:x?}");
+        assert_eq!(
+            &b[..8],
+            MASTER_TX.map(u32::from).as_slice(),
+            "the TX stream unpacked its half-word burst onto MOSI"
+        );
+        assert_eq!(b[11] & (1 << 6), 0, "no OVR on the slave");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        assert_eq!(net(&reports, "sck").edges, 128);
+        assert_eq!(net(&reports, "mosi").edges, data_edges(&MASTER_TX, false));
+    }
+
+    #[test]
+    fn the_f4_fifo_exchange_does_not_depend_on_node_order_or_round_size() {
+        assert_order_and_round_independent("env-spi-f4-dma.yaml", |s| s, ["a", "b"], 2500, 16);
     }
 }
 
@@ -2110,5 +2226,503 @@ mod nrf52_spim3 {
             600,
             8,
         );
+    }
+}
+
+/// The ESP32-S3 GP-SPI2 and I2C0, and the classic ESP32 VSPI (master), HSPI
+/// (slave) and I2C0, against the STM32G071, both ways round, routed through
+/// each part's GPIO matrix (`env-spi-esp32s3*.yaml`, `env-spi-esp32*.yaml`,
+/// `env-i2c-...`; firmware `src/esp32x_*.S`, hand-written Xtensa assembly
+/// of the `esp32c_*.c` sequences). The same, on bank-1 pads (GPIO32 and up),
+/// for the second controller of a kind: the S3's GP-SPI3 and I2C1 and the
+/// classic part's I2C1, and the classic VSPI / HSPI with the input-only
+/// GPIO34..36 taking lines in. Plain GPIO on bank-1 pads between the two
+/// Xtensa parts.
+mod esp32_xtensa {
+    use super::*;
+
+    const MASTER_TX: [u8; 4] = [0xA5, 0x3C, 0x5A, 0xC3];
+    const SLAVE_TX: [u8; 4] = [0x81, 0x82, 0x83, 0x84];
+
+    /// An Xtensa part: its env-file name and the flag word bit that says a
+    /// transaction is done (`SPI_DMA_INT_RAW.TRANS_DONE` on the S3,
+    /// `SPI_SLAVE.TRANS_DONE` on the classic part).
+    #[derive(Clone, Copy)]
+    struct Chip {
+        name: &'static str,
+        trans_done: u32,
+        /// The part's I2C pads: (SDA, SCL).
+        i2c_pads: (u8, u8),
+        /// What tells the env files of this variant apart: `(spi, i2c)`.
+        variant: (&'static str, &'static str),
+    }
+
+    const S3: Chip = Chip {
+        name: "esp32s3",
+        trans_done: 1 << 12,
+        i2c_pads: (8, 9),
+        variant: ("", ""),
+    };
+    const CLASSIC: Chip = Chip {
+        name: "esp32",
+        trans_done: 1 << 4,
+        i2c_pads: (21, 22),
+        variant: ("", ""),
+    };
+    /// The S3's GP-SPI3 (GPIO34..37) and I2C1 (GPIO41 SDA, GPIO42 SCL), on
+    /// bank-1 pads.
+    const S3_HI: Chip = Chip {
+        name: "esp32s3",
+        trans_done: 1 << 12,
+        i2c_pads: (41, 42),
+        variant: ("-spi3", "-i2c1"),
+    };
+    /// The classic part's VSPI master / HSPI slave on bank-1 pads (the
+    /// input-only GPIO34..36 taking lines in), and its I2C1 on GPIO32 (SDA)
+    /// / GPIO33 (SCL).
+    const CLASSIC_HI: Chip = Chip {
+        name: "esp32",
+        trans_done: 1 << 4,
+        i2c_pads: (32, 33),
+        variant: ("-hi", "-i2c1"),
+    };
+
+    fn env(kind: &str, chip: Chip, suffix: &str) -> String {
+        let variant = if kind == "spi" {
+            chip.variant.0
+        } else {
+            chip.variant.1
+        };
+        format!("env-{kind}-{}{variant}{suffix}.yaml", chip.name)
+    }
+
+    fn spi_master(chip: Chip) {
+        let mut world = build(&env("spi", chip, ""), |s| s);
+        run_us(&mut world, 1000);
+        let esp = result(&world, "esp", 8);
+        assert_eq!(esp[7], 1, "master finished: {esp:x?}");
+        assert_eq!(
+            &esp[..4],
+            SLAVE_TX.map(u32::from).as_slice(),
+            "W0 holds what the slave put on MISO"
+        );
+        assert_ne!(esp[4] & chip.trans_done, 0, "TRANS_DONE: {esp:x?}");
+        let b = result(&world, "b", 8);
+        assert_eq!(&b[..4], MASTER_TX.map(u32::from).as_slice());
+        assert_eq!((b[4], b[5]), (4, 0), "one RXNE per byte, no OVR");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        assert_eq!(net(&reports, "sck").edges, 64);
+        // CS0 frames the whole transaction.
+        assert_eq!(net(&reports, "cs").edges, 2);
+        assert!(net(&reports, "cs").level, "deselected at the end");
+        assert_eq!(net(&reports, "mosi").edges, data_edges(&MASTER_TX, false));
+        // MISO: the four answers, then the next queued answer's MSB (0x85)
+        // at the last trailing edge, then the pull-down once CS rises.
+        assert_eq!(
+            net(&reports, "miso").edges,
+            data_edges(&SLAVE_TX, false) + 2
+        );
+    }
+
+    fn spi_slave(chip: Chip) {
+        let mut world = build(&env("spi", chip, "-slave"), |s| s);
+        run_us(&mut world, 1000);
+        let b = result(&world, "b", 8);
+        assert_eq!(b[7], 1, "master finished: {b:x?}");
+        assert_eq!(&b[..4], SLAVE_TX.map(u32::from).as_slice());
+        let esp = result(&world, "esp", 8);
+        assert_eq!(esp[7], 1, "slave finished: {esp:x?}");
+        assert_eq!(&esp[..4], MASTER_TX.map(u32::from).as_slice());
+        assert_eq!(esp[4], 32, "bits received");
+        assert_ne!(esp[5] & chip.trans_done, 0, "TRANS_DONE when CS rose");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        assert_eq!(net(&reports, "sck").edges, 64);
+        assert_eq!(net(&reports, "cs").edges, 2);
+        assert_eq!(net(&reports, "mosi").edges, data_edges(&MASTER_TX, false));
+        // The slave drives MISO only while selected: its four answers, then
+        // the pull-down when it lets go.
+        let mut miso = bits_of(&SLAVE_TX, false);
+        miso.push(false);
+        assert_eq!(net(&reports, "miso").edges, edges_of(&miso, false));
+    }
+
+    fn i2c_controller(chip: Chip, target: &str) -> World {
+        let target = target.to_string();
+        let mut world = build(&env("i2c", chip, ""), |s| {
+            s.replace("firmware/i2c-target.elf", &format!("firmware/{target}"))
+        });
+        run_us(&mut world, 3000);
+        let esp = result(&world, "esp", 8);
+        let b = result(&world, "b", 8);
+        assert_eq!(esp[7], 1, "controller finished: {esp:x?} target {b:x?}");
+        assert_eq!(esp[2], 0, "0x42 ACKed the write");
+        assert_eq!(
+            &esp[..2],
+            &[0xDE, 0xAD],
+            "read back through a repeated START"
+        );
+        assert_eq!(esp[3], 1, "nobody at 0x50: NACK");
+        assert_eq!(esp[4], 2, "two transfers ended by TRANS_COMPLETE");
+
+        assert_eq!(b[0], 2, "the target saw its two transfers end");
+        assert_eq!(&b[1..3], &[0xDE, 0xAD]);
+        assert_eq!(b[3], 4, "pointer + 2 data, then the pointer again");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        let scl = net(&reports, "scl");
+        assert!(
+            scl.level && net(&reports, "sda").level,
+            "bus idle at the end"
+        );
+        // Address + 3; address + 1, address + 2 (repeated START); address +
+        // 1 at 0x50, NACKed after the address.
+        assert_eq!(scl.edges, 2 * (9 * 10 + 1 + 3), "{scl:#?}");
+        world
+    }
+
+    fn i2c_target(chip: Chip, slow: bool) -> World {
+        let mut world = build(&env("i2c", chip, "-target"), |s| {
+            if slow {
+                s.replace("-target.elf", "-target-slow.elf")
+            } else {
+                s
+            }
+        });
+        run_us(&mut world, 3000);
+        let a = result(&world, "b", 8);
+        let esp = result(&world, "esp", 8);
+        assert_eq!(a[7], 1, "controller finished: {a:x?} target {esp:x?}");
+        assert_eq!(a[2], 0, "0x42 ACKed the write");
+        assert_eq!(&a[..2], &[0xDE, 0xAD], "read back through a repeated START");
+        assert_eq!(a[3], 1, "nobody at 0x50: NACKF");
+        assert_eq!(a[4], 3);
+
+        assert_eq!(
+            esp[0], 2,
+            "TRANS_COMPLETE for its two transfers only: {esp:x?}"
+        );
+        assert_eq!(&esp[1..3], &[0xDE, 0xAD]);
+        assert_eq!(esp[3], 4, "pointer + 2 data, then the pointer again");
+        assert_eq!(esp[4], 2, "two bytes read from it");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        let scl = net(&reports, "scl");
+        assert!(scl.level && net(&reports, "sda").level);
+        assert_eq!(scl.edges, 2 * (9 * 10 + 1 + 3), "{scl:#?}");
+        world
+    }
+
+    #[test]
+    fn an_esp32s3_master_clocks_a_g071_slave() {
+        spi_master(S3);
+    }
+
+    #[test]
+    fn a_g071_master_clocks_an_esp32s3_slave() {
+        spi_slave(S3);
+    }
+
+    #[test]
+    fn a_classic_esp32_vspi_master_clocks_a_g071_slave() {
+        spi_master(CLASSIC);
+    }
+
+    #[test]
+    fn a_g071_master_clocks_a_classic_esp32_hspi_slave() {
+        spi_slave(CLASSIC);
+    }
+
+    #[test]
+    fn an_esp32s3_controller_writes_and_reads_a_g071_target() {
+        i2c_controller(S3, "i2c-target.elf");
+    }
+
+    #[test]
+    fn a_classic_esp32_controller_writes_and_reads_a_g071_target() {
+        i2c_controller(CLASSIC, "i2c-target.elf");
+    }
+
+    /// The G071 slow target stretches SCL; each controller's own SCL low
+    /// period is 1200 CPU cycles (S3: 200 ticks of 40 MHz at 240 MHz;
+    /// classic: 400 APB cycles of 80 MHz).
+    #[test]
+    fn a_slow_g071_target_holds_the_xtensa_controllers_by_stretching_scl() {
+        for chip in [S3, CLASSIC, S3_HI, CLASSIC_HI] {
+            let world = i2c_controller(chip, "i2c-target-slow.elf");
+            let held = longest_low(&world, "esp", chip.i2c_pads.1);
+            assert!(held > 2 * 1200, "{}: SCL held low {held} cycles", chip.name);
+        }
+    }
+
+    #[test]
+    fn a_g071_controller_writes_and_reads_an_esp32s3_target() {
+        i2c_target(S3, false);
+    }
+
+    #[test]
+    fn a_g071_controller_writes_and_reads_a_classic_esp32_target() {
+        i2c_target(CLASSIC, false);
+    }
+
+    #[test]
+    fn a_slow_esp32s3_target_holds_the_g071_controller_by_stretching_scl() {
+        let world = i2c_target(S3, true);
+        // The G071's own SCL low period is (SCLL + 1) x 8 = 128 cycles.
+        let held = longest_low(&world, "b", 6);
+        assert!(held > 4 * 128, "SCL held low {held} cycles");
+    }
+
+    #[test]
+    fn xtensa_buses_do_not_depend_on_node_order_or_round_size() {
+        for chip in [S3, CLASSIC] {
+            for env_file in [env("spi", chip, ""), env("spi", chip, "-slave")] {
+                assert_order_and_round_independent(&env_file, |s| s, ["esp", "b"], 1000, 8);
+            }
+            for env_file in [env("i2c", chip, ""), env("i2c", chip, "-target")] {
+                assert_order_and_round_independent(&env_file, |s| s, ["esp", "b"], 3000, 8);
+            }
+        }
+    }
+
+    // ── second instances, bank-1 pads ──────────────────────────────────────
+
+    #[test]
+    fn an_esp32s3_spi3_master_on_bank_one_pads_clocks_a_g071_slave() {
+        spi_master(S3_HI);
+    }
+
+    #[test]
+    fn a_g071_master_clocks_an_esp32s3_spi3_slave_on_bank_one_pads() {
+        spi_slave(S3_HI);
+    }
+
+    #[test]
+    fn a_classic_esp32_vspi_master_on_bank_one_pads_clocks_a_g071_slave() {
+        // MISO comes in on GPIO34, which has no output stage at all.
+        spi_master(CLASSIC_HI);
+    }
+
+    #[test]
+    fn a_g071_master_clocks_a_classic_esp32_hspi_slave_through_input_only_pads() {
+        spi_slave(CLASSIC_HI);
+    }
+
+    #[test]
+    fn an_esp32s3_i2c1_controller_on_bank_one_pads_writes_and_reads_a_g071_target() {
+        i2c_controller(S3_HI, "i2c-target.elf");
+    }
+
+    #[test]
+    fn a_classic_esp32_i2c1_controller_on_gpio32_33_writes_and_reads_a_g071_target() {
+        i2c_controller(CLASSIC_HI, "i2c-target.elf");
+    }
+
+    #[test]
+    fn a_g071_controller_writes_and_reads_an_esp32s3_i2c1_target_on_bank_one_pads() {
+        i2c_target(S3_HI, false);
+    }
+
+    #[test]
+    fn a_g071_controller_writes_and_reads_a_classic_esp32_i2c1_target_on_gpio32_33() {
+        i2c_target(CLASSIC_HI, false);
+    }
+
+    #[test]
+    fn a_slow_esp32s3_i2c1_target_holds_the_g071_controller_by_stretching_scl() {
+        let world = i2c_target(S3_HI, true);
+        let held = longest_low(&world, "b", 6);
+        assert!(held > 4 * 128, "SCL held low {held} cycles");
+    }
+
+    #[test]
+    fn bank_one_buses_do_not_depend_on_node_order_or_round_size() {
+        for chip in [S3_HI, CLASSIC_HI] {
+            for env_file in [env("spi", chip, ""), env("spi", chip, "-slave")] {
+                assert_order_and_round_independent(&env_file, |s| s, ["esp", "b"], 1000, 8);
+            }
+            for env_file in [env("i2c", chip, ""), env("i2c", chip, "-target")] {
+                assert_order_and_round_independent(&env_file, |s| s, ["esp", "b"], 3000, 8);
+            }
+        }
+    }
+
+    /// Plain GPIO on bank-1 pads, classic ESP32 against ESP32-S3
+    /// (`env-gpio-esp32-esp32s3.yaml`, `src/esp32x_gpio_hi.S`): OUT1 /
+    /// ENABLE1 drive the pad onto the net, the other part reads it in IN1
+    /// and latches each edge in STATUS1 — the classic part on its
+    /// input-only GPIO39.
+    #[test]
+    fn bank_one_gpio_pads_hand_a_level_between_a_classic_esp32_and_an_esp32s3() {
+        const ENV: &str = "env-gpio-esp32-esp32s3.yaml";
+        let mut world = build(ENV, |s| s);
+        run_us(&mut world, 400);
+        for node in ["esp", "esps3"] {
+            let r = result(&world, node, 8);
+            assert_eq!(r[7], 1, "{node} finished: {r:x?}");
+            assert_eq!(r[0], 4, "{node}: four rounds");
+            assert_eq!(r[1], 8, "{node}: every edge latched STATUS1: {r:x?}");
+            assert_eq!(r[2], 0, "{node}: STATUS1 clear when armed");
+        }
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        for name in ["a2b", "b2a"] {
+            let n = net(&reports, name);
+            assert_eq!(n.edges, 8, "{n:#?}");
+            assert!(!n.level, "{name} low at the end");
+        }
+        assert_order_and_round_independent(ENV, |s| s, ["esp", "esps3"], 400, 8);
+    }
+
+    /// RTC GPIO across nets, classic ESP32 against ESP32-S3
+    /// (`env-rtc-gpio-esp32-esp32s3.yaml`, `src/esp32x_rtc_gpio.S`): pads the
+    /// RTC IO MUX owns (`MUX_SEL` = 1) driven by `RTC_GPIO_OUT` / `ENABLE`
+    /// and read in `RTC_GPIO_IN`, every edge latched in `RTC_GPIO_STATUS` by
+    /// `RTC_GPIO_PINn.INT_TYPE`; the classic open drain released to the S3's
+    /// `RUE` pull-up. Then the hand-off: a digital output on GPIO27 that the
+    /// RTC IO MUX owns does not reach the net until `MUX_SEL` clears.
+    #[test]
+    fn rtc_gpio_pads_hand_a_level_between_a_classic_esp32_and_an_esp32s3() {
+        const ENV: &str = "env-rtc-gpio-esp32-esp32s3.yaml";
+        let mut world = build(ENV, |s| s);
+        run_us(&mut world, 400);
+        let esp = result(&world, "esp", 8);
+        let s3 = result(&world, "esps3", 8);
+        for (node, r) in [("esp", &esp), ("esps3", &s3)] {
+            assert_eq!(r[7], 1, "{node} finished: {r:x?}");
+            assert_eq!(r[0], 4, "{node}: four rounds");
+            // Four rounds and the hand-off round: ten waits, each on an
+            // edge its RTC_GPIO_STATUS bit latched.
+            assert_eq!(r[1], 10, "{node}: every edge latched: {r:x?}");
+            assert_eq!(r[2], 0, "{node}: STATUS clear when armed");
+        }
+        // The classic part: GPIO27 reads 0 in GPIO_IN while the RTC IO MUX
+        // owns it (TOUCH_PAD7.FUN_IE clear), its own driven 1 once digital.
+        assert_eq!((esp[4], esp[3]), (0, 1), "classic GPIO_IN bit 27: {esp:x?}");
+        // The S3 sampled the hand-off net low, then high, and its GPIO6
+        // latched the rising edge (INT_TYPE 1).
+        assert_eq!((s3[3], s3[4], s3[5]), (0, 1, 1), "S3 hand-off: {s3:x?}");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        // a2b: high on the S3's reset pull-up, low once the classic open
+        // drain holds 0, then a release and a drive per round (5 rounds).
+        // b2a: the same, from the S3's digital pull-up to its RTC output.
+        for name in ["a2b", "b2a"] {
+            let n = net(&reports, name);
+            assert_eq!(n.edges, 1 + 2 * 5, "{n:#?}");
+            assert!(!n.level, "{name} low at the end");
+        }
+        // handoff: the S3's reset pull-up, its RDE, then the classic digital
+        // 1 once MUX_SEL cleared: the pad never carried it before.
+        let h = net(&reports, "handoff");
+        assert_eq!(h.edges, 2, "{h:#?}");
+        assert!(h.level, "the digital output carried at the end");
+        assert_order_and_round_independent(ENV, |s| s, ["esp", "esps3"], 400, 8);
+    }
+}
+
+/// The ESP32-C3 / C6 GP-SPI2 moving its data by GDMA (`src/esp32c_spi_dma_*.c`)
+/// against a G071 moving its own by DMA (`src/spi_dma_*.c`), both roles.
+mod esp32c3_dma {
+    use super::esp32c3::c6;
+    use super::spi_dma::{ISR_BOTH_DONE, MASTER_TX, SLAVE_TX};
+    use super::*;
+
+    /// `SPI_DMA_INT_RAW.TRANS_DONE`.
+    const TRANS_DONE: u32 = 1 << 12;
+    /// The IN descriptor after the transfer: back with the CPU (owner 0),
+    /// `suc_eof`, 8 bytes received into its 8-byte buffer.
+    const IN_DESC_DONE: u32 = (1 << 30) | (8 << 12) | 8;
+
+    fn same(yaml: String) -> String {
+        yaml
+    }
+
+    fn spi_dma_master(chip: fn(String) -> String) {
+        let mut world = build("env-spi-esp32c3-dma.yaml", chip);
+        run_us(&mut world, 1500);
+        let esp = result(&world, "esp", 16);
+        assert_eq!(esp[15], 1, "master finished: {esp:x?}");
+        assert_eq!(
+            &esp[..8],
+            SLAVE_TX.map(u32::from).as_slice(),
+            "the IN descriptor's buffer holds what the slave put on MISO"
+        );
+        assert_ne!(esp[8] & TRANS_DONE, 0, "TRANS_DONE");
+        assert_eq!(esp[9], IN_DESC_DONE, "IN descriptor written back");
+        let b = result(&world, "b", 16);
+        assert_eq!(b[15], 1, "slave finished: {b:x?}");
+        assert_eq!(&b[..8], MASTER_TX.map(u32::from).as_slice());
+        assert_eq!(b[8], ISR_BOTH_DONE);
+        assert_eq!((b[9], b[10]), (0, 0));
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        assert_eq!(net(&reports, "sck").edges, 128);
+        // CS0 frames the whole transaction.
+        assert_eq!(net(&reports, "cs").edges, 2);
+        assert!(net(&reports, "cs").level, "deselected at the end");
+        assert_eq!(net(&reports, "mosi").edges, data_edges(&MASTER_TX, false));
+        // The G071's eight answers; its FIFO is then empty and it shifts the
+        // MSB of the last byte it received (0x7E: 0), then the pull-down.
+        assert_eq!(net(&reports, "miso").edges, data_edges(&SLAVE_TX, false));
+    }
+
+    fn spi_dma_slave(chip: fn(String) -> String) {
+        let mut world = build("env-spi-esp32c3-dma-slave.yaml", chip);
+        run_us(&mut world, 1500);
+        let b = result(&world, "b", 16);
+        assert_eq!(b[15], 1, "master finished: {b:x?}");
+        assert_eq!(&b[..8], SLAVE_TX.map(u32::from).as_slice());
+        assert_eq!(b[8], ISR_BOTH_DONE);
+        let esp = result(&world, "esp", 16);
+        assert_eq!(esp[15], 1, "slave finished: {esp:x?}");
+        assert_eq!(&esp[..8], MASTER_TX.map(u32::from).as_slice());
+        assert_eq!(esp[8], 64, "SLAVE1.DATA_BITLEN");
+        assert_ne!(esp[9] & TRANS_DONE, 0, "TRANS_DONE when CS rose");
+        assert_eq!(esp[10], IN_DESC_DONE);
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        assert_eq!(net(&reports, "sck").edges, 128);
+        assert_eq!(net(&reports, "cs").edges, 2);
+        assert_eq!(net(&reports, "mosi").edges, data_edges(&MASTER_TX, false));
+        // The slave drives MISO only while selected: its eight answers (0x88
+        // ends in 0), then the pull-down when it lets go.
+        assert_eq!(net(&reports, "miso").edges, data_edges(&SLAVE_TX, false));
+    }
+
+    #[test]
+    fn an_esp32c3_gdma_master_exchanges_a_buffer_with_a_g071_dma_slave() {
+        spi_dma_master(same);
+    }
+
+    #[test]
+    fn a_g071_dma_master_exchanges_a_buffer_with_an_esp32c3_gdma_slave() {
+        spi_dma_slave(same);
+    }
+
+    #[test]
+    fn an_esp32c6_gdma_master_exchanges_a_buffer_with_a_g071_dma_slave() {
+        spi_dma_master(c6);
+    }
+
+    #[test]
+    fn a_g071_dma_master_exchanges_a_buffer_with_an_esp32c6_gdma_slave() {
+        spi_dma_slave(c6);
+    }
+
+    #[test]
+    fn gdma_exchanges_do_not_depend_on_node_order_or_round_size() {
+        for env in ["env-spi-esp32c3-dma.yaml", "env-spi-esp32c3-dma-slave.yaml"] {
+            assert_order_and_round_independent(env, same, ["esp", "b"], 1500, 16);
+        }
+        assert_order_and_round_independent("env-spi-esp32c3-dma.yaml", c6, ["esp", "b"], 1500, 16);
     }
 }
