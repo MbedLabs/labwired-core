@@ -17,8 +17,8 @@ The models column is a content digest over everything that board's `models` list
 | `nucleo-l073rz` | 🟢 silicon-verified | 2026-08-09 | `daebe60faf92691b` | ⚠ drift acked 2026-10-15, expires 2026-11-14 (re-capture pending) |
 | `stm32f103` | 🟢 silicon-verified | 2026-08-09 | `8b721264ff611bfb` | ⚠ drift acked 2026-10-15, expires 2026-11-14 (re-capture pending) |
 | `stm32f407` | 🟢 silicon-smoke | 2026-06-20 | `e7ec04a6fec9f00f` | ⚠ drift acked 2026-10-15, expires 2026-11-14 (re-capture pending) |
-| `esp32s3` | 🟢 silicon-verified | 2026-08-09 | `e3242f531262e159` | ⚠ drift acked 2026-10-15, expires 2026-11-14 (re-capture pending) |
-| `esp32s3-zero` | 🔵 sim-validated (deep model, no HW diff) | — | `595ebf56ca37f171` | no silicon capture |
+| `esp32s3` | 🟢 silicon-verified | 2026-08-09 | `b9d64e9080f3c0aa` | ⚠ drift acked 2026-10-15, expires 2026-11-14 (re-capture pending) |
+| `esp32s3-zero` | 🔵 sim-validated (deep model, no HW diff) | — | `cce55ed8a035ee11` | no silicon capture |
 | `stm32f401` | 🟡 smoke-manual | — | `dd75e3dba1382421` | no silicon capture |
 | `stm32wba52` | 🟡 smoke-manual | — | `c216501260aba08e` | no silicon capture |
 | `nrf52832` | ⚪ structural | — | `5fb0ed98f506f0e2` | no silicon capture |
@@ -32,7 +32,7 @@ The models column is a content digest over everything that board's `models` list
 | `nucleo-u545re` | 🔵 sim-validated (deep model, no HW diff) | — | `bf0940390b76cbed` | no silicon capture |
 | `stm32f411ceu6` | 🔵 sim-validated (deep model, no HW diff) | — | `a523700f38b681f4` | no silicon capture |
 | `brd2709a` | 🟡 smoke-manual | — | `1e19e0d8b5f58338` | no silicon capture |
-| `esp32` | ⚪ structural | — | `c12d235a83b52ee5` | no silicon capture |
+| `esp32` | ⚪ structural | — | `18cf2938bbe0e968` | no silicon capture |
 | `mkw41z4` | 🔵 sim-validated (deep model, no HW diff) | — | `c9a136a71b9013b0` | no silicon capture |
 | `stm32f405` | 🔵 sim-validated (deep model, no HW diff) | — | `b062e93e7f7db91a` | no silicon capture |
 | `stm32f767` | 🔵 sim-validated (deep model, no HW diff) | — | `8fa62ce805f658aa` | no silicon capture |

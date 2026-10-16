@@ -76,18 +76,19 @@ fn same_on_every_driver<T: PartialEq + std::fmt::Debug>(
 }
 
 /// Where a node's firmware leaves its results: SRAM 0x2000_0100 on the
-/// STM32s and the RP2040, DRAM 0x3FC8_0100 on an ESP32-C3 and HP SRAM
-/// 0x4080_0100 on an ESP32-C6 (nodes named `esp...`).
+/// STM32s and the RP2040; on the ESP nodes (named `esp...`) DRAM
+/// 0x3FC8_0100 on an ESP32-C3, HP SRAM 0x4080_0100 on an ESP32-C6, DRAM
+/// 0x3FCE_0100 on an ESP32-S3 and SRAM2 0x3FFC_0100 on a classic ESP32 —
+/// the first of them the node's memory map has.
 fn result_base(world: &World, id: &str) -> u32 {
     if !id.starts_with("esp") {
         return 0x2000_0100;
     }
     let m = &world.machines[id];
-    if m.read_memory(0x3FC8_0100, 4).is_ok() {
-        0x3FC8_0100
-    } else {
-        0x4080_0100
-    }
+    [0x3FC8_0100, 0x4080_0100, 0x3FCE_0100, 0x3FFC_0100]
+        .into_iter()
+        .find(|&base| m.read_memory(base, 4).is_ok())
+        .expect("an ESP result area")
 }
 
 fn result(world: &World, id: &str, words: usize) -> Vec<u32> {
@@ -2171,6 +2172,238 @@ mod nrf52_spim3 {
             600,
             8,
         );
+    }
+}
+
+/// The ESP32-S3 GP-SPI2 and I2C0, and the classic ESP32 VSPI (master), HSPI
+/// (slave) and I2C0, against the STM32G071, both ways round, routed through
+/// each part's GPIO matrix (`env-spi-esp32s3*.yaml`, `env-spi-esp32*.yaml`,
+/// `env-i2c-...`; firmware `src/esp32x_*.S`, hand-written Xtensa assembly
+/// of the `esp32c_*.c` sequences).
+mod esp32_xtensa {
+    use super::*;
+
+    const MASTER_TX: [u8; 4] = [0xA5, 0x3C, 0x5A, 0xC3];
+    const SLAVE_TX: [u8; 4] = [0x81, 0x82, 0x83, 0x84];
+
+    /// An Xtensa part: its env-file name and the flag word bit that says a
+    /// transaction is done (`SPI_DMA_INT_RAW.TRANS_DONE` on the S3,
+    /// `SPI_SLAVE.TRANS_DONE` on the classic part).
+    #[derive(Clone, Copy)]
+    struct Chip {
+        name: &'static str,
+        trans_done: u32,
+        /// The part's I2C pads: (SDA, SCL).
+        i2c_pads: (u8, u8),
+    }
+
+    const S3: Chip = Chip {
+        name: "esp32s3",
+        trans_done: 1 << 12,
+        i2c_pads: (8, 9),
+    };
+    const CLASSIC: Chip = Chip {
+        name: "esp32",
+        trans_done: 1 << 4,
+        i2c_pads: (21, 22),
+    };
+
+    fn env(kind: &str, chip: Chip, suffix: &str) -> String {
+        format!("env-{kind}-{}{suffix}.yaml", chip.name)
+    }
+
+    fn spi_master(chip: Chip) {
+        let mut world = build(&env("spi", chip, ""), |s| s);
+        run_us(&mut world, 1000);
+        let esp = result(&world, "esp", 8);
+        assert_eq!(esp[7], 1, "master finished: {esp:x?}");
+        assert_eq!(
+            &esp[..4],
+            SLAVE_TX.map(u32::from).as_slice(),
+            "W0 holds what the slave put on MISO"
+        );
+        assert_ne!(esp[4] & chip.trans_done, 0, "TRANS_DONE: {esp:x?}");
+        let b = result(&world, "b", 8);
+        assert_eq!(&b[..4], MASTER_TX.map(u32::from).as_slice());
+        assert_eq!((b[4], b[5]), (4, 0), "one RXNE per byte, no OVR");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        assert_eq!(net(&reports, "sck").edges, 64);
+        // CS0 frames the whole transaction.
+        assert_eq!(net(&reports, "cs").edges, 2);
+        assert!(net(&reports, "cs").level, "deselected at the end");
+        assert_eq!(net(&reports, "mosi").edges, data_edges(&MASTER_TX, false));
+        // MISO: the four answers, then the next queued answer's MSB (0x85)
+        // at the last trailing edge, then the pull-down once CS rises.
+        assert_eq!(
+            net(&reports, "miso").edges,
+            data_edges(&SLAVE_TX, false) + 2
+        );
+    }
+
+    fn spi_slave(chip: Chip) {
+        let mut world = build(&env("spi", chip, "-slave"), |s| s);
+        run_us(&mut world, 1000);
+        let b = result(&world, "b", 8);
+        assert_eq!(b[7], 1, "master finished: {b:x?}");
+        assert_eq!(&b[..4], SLAVE_TX.map(u32::from).as_slice());
+        let esp = result(&world, "esp", 8);
+        assert_eq!(esp[7], 1, "slave finished: {esp:x?}");
+        assert_eq!(&esp[..4], MASTER_TX.map(u32::from).as_slice());
+        assert_eq!(esp[4], 32, "bits received");
+        assert_ne!(esp[5] & chip.trans_done, 0, "TRANS_DONE when CS rose");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        assert_eq!(net(&reports, "sck").edges, 64);
+        assert_eq!(net(&reports, "cs").edges, 2);
+        assert_eq!(net(&reports, "mosi").edges, data_edges(&MASTER_TX, false));
+        // The slave drives MISO only while selected: its four answers, then
+        // the pull-down when it lets go.
+        let mut miso = bits_of(&SLAVE_TX, false);
+        miso.push(false);
+        assert_eq!(net(&reports, "miso").edges, edges_of(&miso, false));
+    }
+
+    fn i2c_controller(chip: Chip, target: &str) -> World {
+        let target = target.to_string();
+        let mut world = build(&env("i2c", chip, ""), |s| {
+            s.replace("firmware/i2c-target.elf", &format!("firmware/{target}"))
+        });
+        run_us(&mut world, 3000);
+        let esp = result(&world, "esp", 8);
+        let b = result(&world, "b", 8);
+        assert_eq!(esp[7], 1, "controller finished: {esp:x?} target {b:x?}");
+        assert_eq!(esp[2], 0, "0x42 ACKed the write");
+        assert_eq!(
+            &esp[..2],
+            &[0xDE, 0xAD],
+            "read back through a repeated START"
+        );
+        assert_eq!(esp[3], 1, "nobody at 0x50: NACK");
+        assert_eq!(esp[4], 2, "two transfers ended by TRANS_COMPLETE");
+
+        assert_eq!(b[0], 2, "the target saw its two transfers end");
+        assert_eq!(&b[1..3], &[0xDE, 0xAD]);
+        assert_eq!(b[3], 4, "pointer + 2 data, then the pointer again");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        let scl = net(&reports, "scl");
+        assert!(
+            scl.level && net(&reports, "sda").level,
+            "bus idle at the end"
+        );
+        // Address + 3; address + 1, address + 2 (repeated START); address +
+        // 1 at 0x50, NACKed after the address.
+        assert_eq!(scl.edges, 2 * (9 * 10 + 1 + 3), "{scl:#?}");
+        world
+    }
+
+    fn i2c_target(chip: Chip, slow: bool) -> World {
+        let mut world = build(&env("i2c", chip, "-target"), |s| {
+            if slow {
+                s.replace("-i2c-target.elf", "-i2c-target-slow.elf")
+            } else {
+                s
+            }
+        });
+        run_us(&mut world, 3000);
+        let a = result(&world, "b", 8);
+        let esp = result(&world, "esp", 8);
+        assert_eq!(a[7], 1, "controller finished: {a:x?} target {esp:x?}");
+        assert_eq!(a[2], 0, "0x42 ACKed the write");
+        assert_eq!(&a[..2], &[0xDE, 0xAD], "read back through a repeated START");
+        assert_eq!(a[3], 1, "nobody at 0x50: NACKF");
+        assert_eq!(a[4], 3);
+
+        assert_eq!(
+            esp[0], 2,
+            "TRANS_COMPLETE for its two transfers only: {esp:x?}"
+        );
+        assert_eq!(&esp[1..3], &[0xDE, 0xAD]);
+        assert_eq!(esp[3], 4, "pointer + 2 data, then the pointer again");
+        assert_eq!(esp[4], 2, "two bytes read from it");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        let scl = net(&reports, "scl");
+        assert!(scl.level && net(&reports, "sda").level);
+        assert_eq!(scl.edges, 2 * (9 * 10 + 1 + 3), "{scl:#?}");
+        world
+    }
+
+    #[test]
+    fn an_esp32s3_master_clocks_a_g071_slave() {
+        spi_master(S3);
+    }
+
+    #[test]
+    fn a_g071_master_clocks_an_esp32s3_slave() {
+        spi_slave(S3);
+    }
+
+    #[test]
+    fn a_classic_esp32_vspi_master_clocks_a_g071_slave() {
+        spi_master(CLASSIC);
+    }
+
+    #[test]
+    fn a_g071_master_clocks_a_classic_esp32_hspi_slave() {
+        spi_slave(CLASSIC);
+    }
+
+    #[test]
+    fn an_esp32s3_controller_writes_and_reads_a_g071_target() {
+        i2c_controller(S3, "i2c-target.elf");
+    }
+
+    #[test]
+    fn a_classic_esp32_controller_writes_and_reads_a_g071_target() {
+        i2c_controller(CLASSIC, "i2c-target.elf");
+    }
+
+    /// The G071 slow target stretches SCL; each controller's own SCL low
+    /// period is 1200 CPU cycles (S3: 200 ticks of 40 MHz at 240 MHz;
+    /// classic: 400 APB cycles of 80 MHz).
+    #[test]
+    fn a_slow_g071_target_holds_the_xtensa_controllers_by_stretching_scl() {
+        for chip in [S3, CLASSIC] {
+            let world = i2c_controller(chip, "i2c-target-slow.elf");
+            let held = longest_low(&world, "esp", chip.i2c_pads.1);
+            assert!(held > 2 * 1200, "{}: SCL held low {held} cycles", chip.name);
+        }
+    }
+
+    #[test]
+    fn a_g071_controller_writes_and_reads_an_esp32s3_target() {
+        i2c_target(S3, false);
+    }
+
+    #[test]
+    fn a_g071_controller_writes_and_reads_a_classic_esp32_target() {
+        i2c_target(CLASSIC, false);
+    }
+
+    #[test]
+    fn a_slow_esp32s3_target_holds_the_g071_controller_by_stretching_scl() {
+        let world = i2c_target(S3, true);
+        // The G071's own SCL low period is (SCLL + 1) x 8 = 128 cycles.
+        let held = longest_low(&world, "b", 6);
+        assert!(held > 4 * 128, "SCL held low {held} cycles");
+    }
+
+    #[test]
+    fn xtensa_buses_do_not_depend_on_node_order_or_round_size() {
+        for chip in [S3, CLASSIC] {
+            for env_file in [env("spi", chip, ""), env("spi", chip, "-slave")] {
+                assert_order_and_round_independent(&env_file, |s| s, ["esp", "b"], 1000, 8);
+            }
+            for env_file in [env("i2c", chip, ""), env("i2c", chip, "-target")] {
+                assert_order_and_round_independent(&env_file, |s| s, ["esp", "b"], 3000, 8);
+            }
+        }
     }
 }
 

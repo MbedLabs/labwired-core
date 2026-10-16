@@ -120,6 +120,51 @@ const SIG_VSPICLK: u32 = 63;
 /// latch fallback.
 const SIG_VSPID: u32 = 65;
 const SIG_VSPICS0: u32 = 68;
+/// `VSPIQ_IN_IDX` / `VSPIQ_OUT_IDX` (`gpio_sig_map.h` :140): VSPI's MISO.
+/// Bound only for a controller that can take part in a world `gpio_net`,
+/// whose cell has a MISO line (an input of a master, the output of a slave).
+const SIG_VSPIQ: u32 = 64;
+/// The **HSPI** (SPI2) group, `gpio_sig_map.h` :34..:40: `HSPICLK` 8,
+/// `HSPIQ` 9, `HSPID` 10, `HSPICS0` 11, in and out alike.
+const SIG_HSPICLK: u32 = 8;
+const SIG_HSPIQ: u32 = 9;
+const SIG_HSPID: u32 = 10;
+const SIG_HSPICS0: u32 = 11;
+
+/// One GP-SPI's matrix signals: `[CLK, D (MOSI), CS0, Q (MISO)]`, with the
+/// names the pads report.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SpiSignals {
+    sigs: [u32; 4],
+    names: [&'static str; 4],
+}
+
+/// VSPI (`spi3`, the controller Arduino's `SPI` drives).
+pub(crate) const VSPI_SIGNALS: SpiSignals = SpiSignals {
+    sigs: [SIG_VSPICLK, SIG_VSPID, SIG_VSPICS0, SIG_VSPIQ],
+    names: ["SPI3_SCK", "SPI3_MOSI", "SPI3_CS", "SPI3_MISO"],
+};
+
+/// HSPI (`spi2`).
+pub(crate) const HSPI_SIGNALS: SpiSignals = SpiSignals {
+    sigs: [SIG_HSPICLK, SIG_HSPID, SIG_HSPICS0, SIG_HSPIQ],
+    names: ["SPI2_SCK", "SPI2_MOSI", "SPI2_CS", "SPI2_MISO"],
+};
+
+/// `GPIO_FUNC0_IN_SEL_CFG_REG` = `DR_REG_GPIO_BASE + 0x0130`, one word per
+/// input signal (256), up to `FUNC255` at 0x052C (esp-idf
+/// `soc/esp32/include/soc/gpio_reg.h`; `esp32.svd` FUNC%s_IN_SEL_CFG dim 256).
+const FUNC_IN_SEL: u64 = 0x130;
+const FUNC_IN_SEL_END: u64 = FUNC_IN_SEL + 256 * 4;
+/// Writable bits: `IN_SEL` [5:0], `IN_INV_SEL` (6), `SIG_IN_SEL` (7).
+const FUNC_IN_SEL_WMASK: u32 = 0xFF;
+/// The classic `FUNCn_IN_SEL_CFG` encoding: pad in [5:0], `SIG_IN_SEL` (route
+/// through the matrix rather than the signal's IO_MUX pad) at bit 7.
+const IN_SEL_LAYOUT: crate::peripherals::esp_gpio_net::InSelLayout =
+    crate::peripherals::esp_gpio_net::InSelLayout {
+        pad_mask: 0x3F,
+        sel_bit: 1 << 7,
+    };
 
 /// GPIO-matrix OUTPUT signal indices of the three UART transmitters — esp-idf
 /// `soc/esp32/include/soc/gpio_sig_map.h` :46 `U0TXD_OUT_IDX`, :52
@@ -204,7 +249,7 @@ fn esp32_out_signal_name(idx: u32) -> Option<&'static str> {
         SIG_I2CEXT0_SCL => "I2CEXT0_SCL",
         SIG_I2CEXT0_SDA => "I2CEXT0_SDA",
         SIG_VSPICLK => "VSPICLK",
-        64 => "VSPIQ", // VSPI MISO — named, never bound (nothing drives it)
+        SIG_VSPIQ => "VSPIQ", // VSPI MISO: a slave on a net drives it
         SIG_VSPID => "VSPID",
         SIG_VSPICS0 => "VSPICS0",
         95 => "I2CEXT1_SCL",
@@ -260,6 +305,17 @@ pub struct Esp32Gpio {
     /// an analyzer clipped to any classic-ESP32 pin read a flat line while the
     /// C3 and S3 worked.
     out_sel: [u32; PAD_COUNT as usize],
+    /// `GPIO_FUNCn_IN_SEL_CFG` per peripheral input signal (0..255), masked
+    /// to [`FUNC_IN_SEL_WMASK`]. Signal-indexed: one pad can feed several
+    /// inputs.
+    in_sel: Box<[u32; 256]>,
+    /// Peripheral input signals bound to wire lines (`FUNCn_IN_SEL_CFG`).
+    in_routes: crate::peripherals::esp_gpio_net::MatrixInputs,
+    /// GPIO0..31 on a world `gpio_net` ([`PinPort::join_wire`]).
+    net_pads: u32,
+    /// Outside levels that reached a pad an input signal reads, for the bus
+    /// to hand to the line's peripheral (`Peripheral::take_wire_input_edges`).
+    wire_edges: Vec<crate::peripherals::pad_lines::WireInputEdge>,
     /// Pads bound to peripheral wires, resolved against this port's live output
     /// matrix through the ONE shared seam (`peripherals::pad_routing`). Empty —
     /// and free — on a bus with no classic-ESP32 I²C controller.
@@ -294,6 +350,10 @@ impl Esp32Gpio {
             ext_mask: 0,
             irq_watch: Default::default(),
             out_sel: [FUNC_OUT_SEL_RESET; PAD_COUNT as usize],
+            in_sel: Box::new([0; 256]),
+            in_routes: Default::default(),
+            net_pads: 0,
+            wire_edges: Vec::new(),
             pad_routes: PadRoutes::new(),
             watch: None,
             cycle: 0,
@@ -470,8 +530,14 @@ impl Esp32Gpio {
         if pin >= PAD_COUNT {
             return None;
         }
-        if let Some(level) = self.pad_routes.level(pin, |p| self.matrix_signal(p)) {
-            return Some(level);
+        // A routed line its peripheral does not drive right now (released
+        // open drain, an SPI slave's MISO while deselected) leaves the pad
+        // to the outside, as `GPIO_IN` reads it.
+        if let Some((cell, line)) = self.pad_routes.active_line(pin, |p| self.matrix_signal(p)) {
+            if cell.drives(line) || pin >= 32 {
+                return Some(cell.level(line));
+            }
+            return Some(self.in_data & (1u32 << pin) != 0);
         }
         if pin < 32 {
             Some((self.pad_level_bank0() & (1u32 << pin)) != 0)
@@ -503,6 +569,18 @@ impl Esp32Gpio {
                 "I2CEXT0_SDA",
             );
         }
+        // The controller reads both lines back through the input matrix
+        // (open drain: it sees the wire it drives, and the other chips).
+        self.in_routes.bind(
+            SIG_I2CEXT0_SCL,
+            &lines,
+            crate::peripherals::esp32::i2c::LINE_SCL,
+        );
+        self.in_routes.bind(
+            SIG_I2CEXT0_SDA,
+            &lines,
+            crate::peripherals::esp32::i2c::LINE_SDA,
+        );
     }
 
     /// Bind the VSPI (SPI3) master's SCK/MOSI/CS wire to every output-capable
@@ -513,23 +591,113 @@ impl Esp32Gpio {
     /// matrix routes ANY peripheral signal to ANY output-capable pad, so every
     /// pad is bound to all three signals and the selector picks the live one.
     ///
-    /// MISO (`VSPIQ`, index 64) is deliberately unbound — see
-    /// [`crate::peripherals::esp_gpspi_wire`]. A bound-but-undriven pad reports
-    /// a confident idle level that looks authoritative, which is worse than the
-    /// latch fallback it would replace.
-    pub(crate) fn bind_spi_lines(&mut self, lines: &Arc<crate::peripherals::pad_lines::PadLines>) {
-        use crate::peripherals::esp_gpspi_wire::{LINE_CS, LINE_MOSI, LINE_SCK};
+    /// A cell with a MISO line (a controller that can be a master or a slave
+    /// on a world `gpio_net`, `esp_gpspi_net`) also carries MISO out of a
+    /// slave, and every line in through `FUNCn_IN_SEL_CFG`: SCK, MOSI and CS
+    /// for a slave, MISO for a master. MISO starts as an input line, so a
+    /// routed pad shows what the outside holds there, never a made-up idle
+    /// level; see [`crate::peripherals::esp_gpspi_wire`].
+    ///
+    /// `signals` names the controller: [`VSPI_SIGNALS`] or [`HSPI_SIGNALS`].
+    pub(crate) fn bind_spi_lines(
+        &mut self,
+        lines: &Arc<crate::peripherals::pad_lines::PadLines>,
+        signals: SpiSignals,
+    ) {
+        use crate::peripherals::esp_gpspi_wire::{LINE_CS, LINE_MISO, LINE_MOSI, LINE_SCK};
+        let with_miso = lines.names().len() > LINE_MISO;
+        let line_of = [LINE_SCK, LINE_MOSI, LINE_CS, LINE_MISO];
+        let count = if with_miso { 4 } else { 3 };
         for pin in 0..PAD_COUNT {
             if VALID_OUTPUT_PADS & (1u64 << pin) == 0 {
                 continue;
             }
-            self.pad_routes
-                .bind(lines, pin, Some(SIG_VSPICLK), LINE_SCK, "SPI3_SCK");
-            self.pad_routes
-                .bind(lines, pin, Some(SIG_VSPID), LINE_MOSI, "SPI3_MOSI");
-            self.pad_routes
-                .bind(lines, pin, Some(SIG_VSPICS0), LINE_CS, "SPI3_CS");
+            for ((&sig, &line), &name) in signals
+                .sigs
+                .iter()
+                .zip(&line_of)
+                .zip(&signals.names)
+                .take(count)
+            {
+                self.pad_routes.bind(lines, pin, Some(sig), line, name);
+            }
         }
+        if with_miso {
+            for (&sig, &line) in signals.sigs.iter().zip(&line_of) {
+                self.in_routes.bind(sig, lines, line);
+            }
+        }
+    }
+
+    /// `FUNCn_IN_SEL_CFG` of input signal `sig`.
+    fn in_sel_word(&self, sig: u32) -> u32 {
+        self.in_sel.get(sig as usize).copied().unwrap_or(0)
+    }
+
+    /// The level the outside holds on pad `pin` (GPIO0..31), if any.
+    fn external_level(&self, pin: u8) -> Option<bool> {
+        let mask = 1u32 << (pin & 31);
+        (pin < 32 && self.ext_mask & mask != 0).then_some(self.in_data & mask != 0)
+    }
+
+    /// After a routing write or a pad joining a net: every peripheral input
+    /// takes the outside level of the pad it now reads, and every wire line
+    /// routed (in or out) to a net pad becomes a net line.
+    fn sync_net_routes(&mut self) {
+        if self.in_routes.is_empty() && self.net_pads == 0 {
+            return;
+        }
+        let mut edges = Vec::new();
+        {
+            let in_sel = |sig: u32| self.in_sel_word(sig);
+            self.in_routes.sync(
+                in_sel,
+                IN_SEL_LAYOUT,
+                |pin| self.external_level(pin),
+                &mut edges,
+            );
+            if self.net_pads != 0 {
+                let net = self.net_pads;
+                self.in_routes.mark_on_net(in_sel, IN_SEL_LAYOUT, |pin| {
+                    pin < 32 && net & (1 << pin) != 0
+                });
+                for pin in 0..32u8 {
+                    if net & (1 << pin) == 0 {
+                        continue;
+                    }
+                    if let Some((cell, line)) =
+                        self.pad_routes.active_line(pin, |p| self.matrix_signal(p))
+                    {
+                        if !cell.on_net(line) {
+                            cell.mark_on_net(line);
+                        }
+                    }
+                }
+            }
+        }
+        // Only a world net delivers these; off one they would pile up.
+        if self.net_pads != 0 {
+            self.wire_edges.extend(edges);
+        }
+    }
+
+    /// Hand an outside level on `pin` to every input signal reading it.
+    fn deliver_wire_input(&mut self, pin: u8) {
+        if self.in_routes.is_empty() || self.net_pads == 0 {
+            return;
+        }
+        let Some(level) = self.external_level(pin) else {
+            return;
+        };
+        let mut edges = Vec::new();
+        self.in_routes.deliver(
+            pin,
+            level,
+            |sig| self.in_sel_word(sig),
+            IN_SEL_LAYOUT,
+            &mut edges,
+        );
+        self.wire_edges.extend(edges);
     }
 
     /// Bind one UART's TX wire to every output-capable pad the matrix can route
@@ -623,10 +791,18 @@ impl Esp32Gpio {
         }
         if let Some(sig) = self.matrix_signal(pin) {
             if sig != SIG_GPIO_OUT {
+                // The peripheral says what its output stage does: a line it
+                // drives drives the pad; a released or input line does not.
                 return self
                     .pad_routes
-                    .level(pin, |p| self.matrix_signal(p))
-                    .map(PadDriver::drive);
+                    .active_line(pin, |p| self.matrix_signal(p))
+                    .map(|(cell, line)| {
+                        if cell.drives(line) {
+                            PadDriver::drive(cell.level(line))
+                        } else {
+                            PadDriver::OFF
+                        }
+                    });
             }
         }
         if !self.output_driver_on(pin) {
@@ -745,6 +921,10 @@ impl Esp32Gpio {
             off if Self::out_sel_index(off).is_some() => {
                 self.out_sel[Self::out_sel_index(off).expect("guarded by the match")]
             }
+            // GPIO_FUNC0..255_IN_SEL_CFG at 0x130 + signal*4.
+            off if (FUNC_IN_SEL..FUNC_IN_SEL_END).contains(&off) => {
+                self.in_sel[((off - FUNC_IN_SEL) / 4) as usize]
+            }
             _ => {
                 crate::census_reg!("esp32.gpio:Esp32Gpio", word_off, "read");
                 0
@@ -759,6 +939,11 @@ impl Esp32Gpio {
         let before = self.pad_level_bank0();
         self.write_word_inner(word_off, value);
         self.latch_input_edges(before);
+        // A routing write may have moved an input signal to another pad, or
+        // handed a net pad to a peripheral line.
+        if matches!(word_off, 0x20..=0x34 | FUNC_IN_SEL..FUNC_OUT_SEL_END) {
+            self.sync_net_routes();
+        }
     }
 
     fn write_word_inner(&mut self, word_off: u64, value: u32) {
@@ -810,6 +995,9 @@ impl Esp32Gpio {
             off if Self::out_sel_index(off).is_some() => {
                 let idx = Self::out_sel_index(off).expect("guarded by the match");
                 self.out_sel[idx] = value & FUNC_OUT_SEL_WMASK;
+            }
+            off if (FUNC_IN_SEL..FUNC_IN_SEL_END).contains(&off) => {
+                self.in_sel[((off - FUNC_IN_SEL) / 4) as usize] = value & FUNC_IN_SEL_WMASK;
             }
             _ => {
                 crate::census_reg!("esp32.gpio:Esp32Gpio", word_off, "write");
@@ -879,10 +1067,22 @@ impl PinPort for Esp32Gpio {
             }
             s.latch_input_edges(before);
         });
+        self.deliver_wire_input(pin);
         Some(InputChange {
             before: before & bit != 0,
             after: self.pad_level_bank0() & bit != 0,
         })
+    }
+
+    /// `pin` joined a world `gpio_net`: a wire line routed to it (now, or
+    /// whenever firmware routes one) shares a wire with other chips.
+    fn join_wire(&mut self, pin: u8) {
+        if pin < 32 {
+            self.net_pads |= 1 << pin;
+            crate::pins::watch_begin(self);
+            self.sync_net_routes();
+            crate::pins::watch_end(self);
+        }
     }
 
     /// `GPIO_IN` / `GPIO_IN1`: the pad level, so a driven output reads back.
@@ -1137,6 +1337,10 @@ impl Peripheral for Esp32Gpio {
         self.anchor_tick = tick_now;
     }
 
+    fn take_wire_input_edges(&mut self) -> Vec<crate::peripherals::pad_lines::WireInputEdge> {
+        std::mem::take(&mut self.wire_edges)
+    }
+
     fn as_any(&self) -> Option<&dyn std::any::Any> {
         Some(self)
     }
@@ -1150,6 +1354,42 @@ impl Peripheral for Esp32Gpio {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    /// `GPIO_FUNCn_IN_SEL_CFG` (0x130 + 4 * signal) keeps its eight
+    /// writable bits, and a pad on a net routed in to VSPI's MISO (`VSPIQ`,
+    /// 64) hands the level the net presents to that line; routed out as a
+    /// slave's MISO it drives only while the line does.
+    #[test]
+    fn a_pad_routed_to_vspiq_carries_the_line_both_ways() {
+        use crate::peripherals::esp_gpspi_wire::{LINE_MISO, SPI_NET_LINES};
+        use crate::peripherals::pad_lines::{LineDrive, PadLines};
+        let mut g = Esp32Gpio::new();
+        g.write_u32(0x130 + 4 * 64, 0xFFFF_FFFF).unwrap();
+        assert_eq!(g.read_u32(0x130 + 4 * 64).unwrap(), 0xFF);
+        let wire = Arc::new(PadLines::new(SPI_NET_LINES, &[false, false, true, false]));
+        wire.set_mode(LINE_MISO, LineDrive::Input);
+        g.bind_spi_lines(&wire, VSPI_SIGNALS);
+        g.join_wire(19);
+        // SIG_IN_SEL clear: the signal takes its IO_MUX pad, not the matrix.
+        g.write_u32(0x130 + 4 * 64, 19).unwrap();
+        g.set_external(19, External::Level(true));
+        assert!(g.take_wire_input_edges().is_empty());
+        g.write_u32(0x130 + 4 * 64, (1 << 7) | 19).unwrap();
+        assert!(wire.on_net(LINE_MISO), "routed in from a net pad");
+        let edges = g.take_wire_input_edges();
+        assert_eq!(edges.len(), 1);
+        assert_eq!((edges[0].line, edges[0].level), (LINE_MISO, true));
+        g.set_external(19, External::Level(false));
+        let edges = g.take_wire_input_edges();
+        assert_eq!((edges[0].line, edges[0].level), (LINE_MISO, false));
+        // Routed out instead (a slave's MISO): released while the line is an
+        // input, driven once the slave drives it.
+        g.write_u32(0x530 + 4 * 19, 64).unwrap();
+        g.write_u32(0x24, 1 << 19).unwrap();
+        assert_eq!(g.driver(19).unwrap().out, crate::pins::Out::Off);
+        wire.drive_line(LINE_MISO, LineDrive::PushPull, true);
+        assert_eq!(g.driver(19).unwrap().out, crate::pins::Out::High);
+    }
 
     #[derive(Debug, Default)]
     struct TestObserver {

@@ -119,6 +119,16 @@ const NUM_CMDS: usize = 8;
 /// axis is CPU cycles at 240 MHz — the reset-default 3:1 ratio.
 const CORE_PER_APB: u64 = 3;
 
+/// The S3's CPU clock, XTAL and RC_FAST: the I²C source clock
+/// (`CLK_CONF.SCLK_SEL`, 0 XTAL, 1 RC_FAST) against the engine's cycle axis,
+/// for the bit-level net engine's timing.
+const CPU_CLK_HZ: u64 = 240_000_000;
+const XTAL_CLK_HZ: u64 = 40_000_000;
+const RC_FAST_CLK_HZ: u64 = 17_500_000;
+/// Scheduler token whose firing makes the interrupt matrix re-derive this
+/// controller's level after a net edge latched an interrupt bit.
+const NET_IRQ_TOKEN: u32 = u32::MAX - 1;
+
 pub struct Esp32s3I2c {
     ctr: u32,
     sr: u32,
@@ -165,6 +175,17 @@ pub struct Esp32s3I2c {
 
     /// Bus-published cycle clock (walk-free level export).
     clock: Option<CycleClock>,
+
+    /// The bit-level engine that owns SCL/SDA while the GPIO matrix routes
+    /// one of them to a pad on a world `gpio_net`
+    /// ([`crate::peripherals::esp_i2c_net`]). Off a net the command list
+    /// runs instantly, as below.
+    net: crate::peripherals::esp_i2c_net::EspI2cNet,
+    /// `SR` bits the net engine owns (RESP_REC, SLAVE_RW, ARB_LOST,
+    /// BUS_BUSY, SLAVE_ADDRESSED, STRETCH_CAUSE).
+    net_sr: u32,
+    /// Interrupt level last reported through a scheduler event in net mode.
+    net_irq: crate::peripherals::esp_gpio_net::IrqLevelWatch,
 }
 
 impl Esp32s3I2c {
@@ -209,6 +230,9 @@ impl Esp32s3I2c {
             reg_date: 0x2007_0201,
 
             clock: None,
+            net: Default::default(),
+            net_sr: 0,
+            net_irq: Default::default(),
         }
     }
 
@@ -304,6 +328,9 @@ impl Esp32s3I2c {
         const SR_STRETCH_CAUSE_RESET: u32 = 0x0000_C000;
         let rx = (self.core.rx_len() as u32) & 0x3F;
         let tx = (self.tx_fifo.len() as u32) & 0x3F;
+        if self.net_mode() {
+            return self.net_sr | (rx << 8) | (tx << 18);
+        }
         (self.sr & SR_RESP_REC) | SR_STRETCH_CAUSE_RESET | (rx << 8) | (tx << 18)
     }
 
@@ -321,6 +348,158 @@ impl Esp32s3I2c {
     /// the master selected.
     fn find_slave_by_address(&mut self, address: u8) -> Option<usize> {
         self.core.find_by_address(address, &RouteGate::All)
+    }
+}
+
+impl Esp32s3I2c {
+    /// `true` while the GPIO matrix routes SCL or SDA to a pad on a world
+    /// `gpio_net`: the net engine owns the wire.
+    fn net_mode(&self) -> bool {
+        self.wire.on_net()
+    }
+
+    fn net_now(&self) -> u64 {
+        self.clock.as_ref().map_or(0, CycleClock::now)
+    }
+
+    /// Run `f` with the net engine, this model as its register host, and the
+    /// wire, stamping the wire's reports with `now`.
+    fn with_net<R>(
+        &mut self,
+        now: u64,
+        f: impl FnOnce(&mut crate::peripherals::esp_i2c_net::EspI2cNet, &mut Self, &PadLines) -> R,
+    ) -> Option<R> {
+        let pads = self.wire.lines_arc()?;
+        let mut net = std::mem::take(&mut self.net);
+        pads.set_stamp(Some(now));
+        let r = f(&mut net, self, &pads);
+        pads.set_stamp(None);
+        self.net = net;
+        Some(r)
+    }
+
+    /// Transfers this controller ended with STOP as a master on a net.
+    pub fn net_master_transfers(&self) -> u64 {
+        self.net.master_transfers()
+    }
+
+    /// Transfers that addressed this controller as a slave on a net.
+    pub fn net_slave_transfers(&self) -> u64 {
+        self.net.slave_transfers()
+    }
+
+    /// The register writes the net engine acts on.
+    fn net_write(&mut self, offset: u64, value: u32) {
+        let now = self.net_now();
+        self.with_net(now, |net, host, pads| {
+            match offset {
+                REG_CTR => {
+                    if value & CTR_FSM_RST != 0 {
+                        net.reset(pads);
+                    }
+                    if value & CTR_TRANS_START_BIT != 0 {
+                        net.start(host, now, pads);
+                    }
+                }
+                REG_DATA => net.tx_written(host, now, pads),
+                REG_SCL_STRETCH_CONF
+                    if value & crate::peripherals::esp_i2c_net::STRETCH_CLR != 0 =>
+                {
+                    net.stretch_clear(host, now, pads)
+                }
+                _ => {}
+            }
+            net.after_write(host, now, pads);
+        });
+    }
+
+    fn net_step(&mut self, now: u64) {
+        if self.net.deadline().is_some_and(|d| d <= now) {
+            self.with_net(now, |net, host, pads| net.step(host, now, pads));
+        }
+    }
+}
+
+impl crate::peripherals::esp_i2c_net::EspI2cHost for Esp32s3I2c {
+    fn ctr(&self) -> u32 {
+        self.ctr
+    }
+
+    fn slave_addr(&self) -> u32 {
+        self.slave_addr
+    }
+
+    fn fifo_conf(&self) -> u32 {
+        self.fifo_conf
+    }
+
+    fn stretch_conf(&self) -> u32 {
+        self.reg_scl_stretch_conf
+    }
+
+    fn cmd(&self, i: usize) -> u32 {
+        self.cmds.get(i).copied().unwrap_or(0)
+    }
+
+    fn set_cmd(&mut self, i: usize, value: u32) {
+        if let Some(slot) = self.cmds.get_mut(i) {
+            *slot = value;
+        }
+    }
+
+    fn cmd_count(&self) -> usize {
+        NUM_CMDS
+    }
+
+    fn tx_pop(&mut self) -> Option<u8> {
+        self.tx_fifo.pop_front()
+    }
+
+    fn rx_push(&mut self, byte: u8) -> bool {
+        if self.core.rx_len() >= FIFO_CAPACITY {
+            return false;
+        }
+        self.core.rx_push(byte);
+        true
+    }
+
+    fn rx_len(&self) -> usize {
+        self.core.rx_len()
+    }
+
+    fn raise(&mut self, bits: u32) {
+        self.int_raw |= bits;
+    }
+
+    fn sr_update(&mut self, set: u32, clear: u32) {
+        self.net_sr = (self.net_sr & !clear) | set;
+    }
+
+    /// The S3 timing registers count I²C source-clock ticks (`CLK_CONF`:
+    /// XTAL or RC_FAST over `SCLK_DIV_NUM + 1` plus the fractional
+    /// `DIV_B / DIV_A`), each field plus one, and the high period adds
+    /// `SCL_WAIT_HIGH_PERIOD` (TRM §29.4.6, the C3's layout).
+    fn timing(&self) -> crate::peripherals::i2c_bitbus::Timing {
+        let clk = self.reg_clk_conf;
+        let div_num = u64::from(clk & 0xFF) + 1;
+        let div_a = u64::from((clk >> 8) & 0x3F);
+        let div_b = u64::from((clk >> 14) & 0x3F);
+        let src_hz = if clk & (1 << 20) != 0 {
+            RC_FAST_CLK_HZ
+        } else {
+            XTAL_CLK_HZ
+        };
+        let (a, b) = if div_a == 0 { (1, 0) } else { (div_a, div_b) };
+        let num = CPU_CLK_HZ * (div_num * a + b);
+        let den = src_hz * a;
+        let cycles = |ticks: u32| (u64::from(ticks) * num).div_ceil(den.max(1));
+        let high =
+            (self.reg_scl_high_period & 0x1FF) + ((self.reg_scl_high_period >> 9) & 0x7F) + 1;
+        crate::peripherals::i2c_bitbus::Timing::new(
+            cycles((self.reg_scl_low_period & 0x1FF) + 1),
+            cycles(high),
+            cycles((self.reg_sda_hold & 0x1FF) + 1),
+        )
     }
 }
 
@@ -421,6 +600,12 @@ impl Peripheral for Esp32s3I2c {
 
         match offset {
             REG_SCL_LOW_PERIOD => masked_write(&mut self.reg_scl_low_period, value, 0x0000_01FF),
+            // On a net the engine runs the command list on the wire
+            // (`net_write` below); TRANS_START, FSM_RST and CONF_UPGATE are
+            // strobes that never read back.
+            REG_CTR if self.net_mode() => {
+                self.ctr = value & !(CTR_TRANS_START_BIT | CTR_FSM_RST | CTR_CONF_UPGATE);
+            }
             REG_CTR => {
                 self.ctr = value;
                 if value & CTR_TRANS_START_BIT != 0 {
@@ -493,10 +678,74 @@ impl Peripheral for Esp32s3I2c {
                 crate::census_reg!("esp32s3.i2c:Esp32s3I2c", offset, "write");
             } // Accept-and-ignore (unmapped offsets)
         }
+        if self.net_mode() {
+            // SLAVE_SCL_STRETCH_CLR is write-1, it never reads back.
+            self.reg_scl_stretch_conf &= !crate::peripherals::esp_i2c_net::STRETCH_CLR;
+            self.net_write(offset, value);
+        }
         Ok(())
     }
 
+    fn wire_input_edge(&mut self, line: usize, level: bool, cycle: u64) -> bool {
+        if !self.net_mode() {
+            return false;
+        }
+        self.with_net(cycle, |net, host, pads| {
+            net.on_edge(host, line, level, cycle, pads)
+        });
+        true
+    }
+
+    fn sync_to(&mut self, now: u64) {
+        self.net_step(now);
+    }
+
+    /// On a net: the engine's next timed step, and one event per change of
+    /// the interrupt level a net edge latched, so the interrupt matrix
+    /// re-derives its sources. Off a net nothing is scheduled.
+    fn take_scheduled_events(&mut self) -> Vec<(u64, u32)> {
+        if !self.net_mode() {
+            return Vec::new();
+        }
+        let now = self.net_now();
+        let mut events = Vec::new();
+        if let Some(ev) = self.net.take_event(now) {
+            events.push(ev);
+        }
+        if self
+            .net_irq
+            .take(self.int_raw & self.int_ena != 0)
+            .is_some()
+        {
+            events.push((0, NET_IRQ_TOKEN));
+        }
+        events
+    }
+
+    fn on_event(
+        &mut self,
+        event_token: u32,
+        sched: &mut crate::sched::EventScheduler,
+        _bus: &mut dyn crate::Bus,
+    ) -> crate::sched::EventResult {
+        if event_token == crate::peripherals::esp_i2c_net::NET_TOKEN {
+            let now = sched.now();
+            let next = self
+                .with_net(now, |net, host, pads| net.on_event(host, now, pads))
+                .flatten();
+            return crate::sched::EventResult {
+                reschedule_delay: next,
+                ..Default::default()
+            };
+        }
+        crate::sched::EventResult::default()
+    }
+
     fn tick(&mut self) -> PeripheralTickResult {
+        if self.net.deadline().is_some() {
+            let now = self.net_now();
+            self.net_step(now);
+        }
         let mut explicit = Vec::new();
         // LEVEL interrupt: assert the I2C0 source every tick while any enabled
         // INT bit is set, mirroring real silicon (INT_RAW stays asserted until the

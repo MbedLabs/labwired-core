@@ -14,7 +14,9 @@
 //! runs instead. It is chip-neutral: the host model answers the
 //! [`GpSpiHost`] calls from its own register file, and every offset and bit
 //! below is the same on the ESP32-C3, C6 and S3 GP-SPI (esp32c3 / esp32c6 /
-//! esp32s3 PAC `spi2`).
+//! esp32s3 PAC `spi2`). The classic ESP32 SPI (HSPI / VSPI) is the older IP
+//! with the same fields elsewhere; its model answers through a translated
+//! view of its own registers (`esp32::spi`), so nothing here is classic.
 //!
 //! * **Lines.** SCK (`FSPICLK`), MOSI (`FSPID`), CS (`FSPICS0`) and MISO
 //!   (`FSPIQ`), each routed through the matrix in both directions
