@@ -434,6 +434,60 @@ mod spi_dma {
     fn the_dma_exchange_does_not_depend_on_node_order_or_round_size() {
         assert_order_and_round_independent("env-spi-dma.yaml", |s| s, ["a", "b"], 1500, 16);
     }
+
+    /// STM32F401 DMA2 (src/f4_spi_dma_master.c): two memory-to-memory
+    /// streams started together complete in priority order, not start order;
+    /// then SPI1 moves both directions through the stream FIFOs in half-word
+    /// INCR4 bursts against the G071 DMA slave, byte-exact over the nets.
+    #[test]
+    fn f4_streams_complete_by_priority_and_spi_moves_through_fifo_bursts() {
+        let mut world = build("env-spi-f4-dma.yaml", |s| s);
+        run_us(&mut world, 2500);
+
+        let a = result(&world, "a", 16);
+        assert_eq!(a[15], 1, "master finished: {a:x?}");
+        assert_eq!(
+            (a[0], a[1]),
+            (1, 0),
+            "stream 1 (PL very high) completes before stream 0 (PL low)"
+        );
+        // Stream 0 started first (NDTR < 64) and then stood still while
+        // stream 1 ran: sharing the slots, it would have finished first.
+        assert!(
+            (1..64).contains(&a[2]),
+            "stream 0 waited while stream 1 ran: NDTR {} of 64 left",
+            a[2]
+        );
+        assert_eq!(a[3], 1, "both memory-to-memory copies byte-exact");
+        assert_eq!(
+            &a[4..12],
+            SLAVE_TX.map(u32::from).as_slice(),
+            "the RX stream packed what the slave put on MISO"
+        );
+        // LISR: TCIF and HTIF of streams 2 and 3, no FEIF / TEIF / DMEIF.
+        assert_eq!(a[12], (0b11 << 20) | (0b11 << 26), "LISR {:#x}", a[12]);
+        assert_eq!(a[13], 0, "both NDTR drained");
+        assert_eq!(a[14] & 0x1C3, 0x2, "SR: TXE, not busy, no OVR / RXNE");
+
+        let b = result(&world, "b", 16);
+        assert_eq!(b[15], 1, "slave finished: {b:x?}");
+        assert_eq!(
+            &b[..8],
+            MASTER_TX.map(u32::from).as_slice(),
+            "the TX stream unpacked its half-word burst onto MOSI"
+        );
+        assert_eq!(b[11] & (1 << 6), 0, "no OVR on the slave");
+
+        let reports = world.gpio_net_reports();
+        no_contention(&reports);
+        assert_eq!(net(&reports, "sck").edges, 128);
+        assert_eq!(net(&reports, "mosi").edges, data_edges(&MASTER_TX, false));
+    }
+
+    #[test]
+    fn the_f4_fifo_exchange_does_not_depend_on_node_order_or_round_size() {
+        assert_order_and_round_independent("env-spi-f4-dma.yaml", |s| s, ["a", "b"], 2500, 16);
+    }
 }
 
 /// SPI frame shapes (modes 1-3, LSB first) and the slave's transmit side

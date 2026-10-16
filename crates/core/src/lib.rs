@@ -103,6 +103,15 @@ pub enum DmaDirection {
     Read,
     Write,
     Copy,
+    /// A DMA FIFO filling from its source port: read `transform.src_width`
+    /// bytes at `src_addr` (one access when aligned) and hand the value,
+    /// little-endian, back to the DMA that issued the item
+    /// ([`Peripheral::dma_load_data`]). `addr` is unused.
+    Load,
+    /// A DMA FIFO draining to its destination port: write the low
+    /// `transform.dst_width` bytes of the value at `addr` (one access when
+    /// aligned). `src_addr` is unused.
+    Store(u32),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1804,11 +1813,35 @@ pub trait Peripheral: std::fmt::Debug + Send {
     /// `SxCR.CHSEL`, L4 `CSELR`, G0/G4/WB `DMAMUX_CxCR.DMAREQ_ID`). Default:
     /// not a DMA controller, routes nothing.
     fn dma_route_request(&self, _request: &str, _out: &mut Vec<DmaRoute>) {}
+    /// Request multiplexer only: a request this peripheral routed to its
+    /// output `channel` (the 1-based [`DmaRoute::channel`] it answered with)
+    /// is about to be forwarded. `false` holds it back (STM32 DMAMUX request
+    /// synchronisation); the multiplexer then forwards it later as one of its
+    /// own `dma_signals` ([`Self::dma_mux_output`]). Default: forward.
+    fn dma_mux_forward(&mut self, _channel: u32) -> bool {
+        true
+    }
+    /// Request multiplexer only: the DMA channel one of this peripheral's
+    /// own `dma_signals` requests on (a request it held, or generated, and
+    /// now forwards). Default: `None` — the signal is an ordinary peripheral
+    /// request line ([`DMA_SIGNAL_TX`] / [`DMA_SIGNAL_RX`]).
+    fn dma_mux_output(&self, _signal: u32) -> Option<DmaRoute> {
+        None
+    }
     /// A peripheral-paced DMA item is about to access this peripheral at
     /// `offset`: `read` when the peripheral is the item's source (a receive),
     /// `remaining` the items the channel still has after this one (see
     /// [`DmaRequest::remaining`]). Default: ignored.
     fn dma_access_notice(&mut self, _offset: u64, _read: bool, _remaining: u32) {}
+    /// A [`DmaDirection::Load`] item this DMA controller issued has read
+    /// `value` (little-endian, `transform.src_width` bytes) from its source:
+    /// the data now enters the controller's FIFO. Default: not a FIFO DMA.
+    fn dma_load_data(&mut self, _item: &DmaRequest, _value: u32) {}
+    /// A DMA item this controller issued faulted on the bus (an unmapped
+    /// address: the bus error a DMA reports as a transfer error, STM32
+    /// `TEIF` / GPDMA `DTEF`). The bus calls it on the issuer right after
+    /// the failed access. Default: ignored.
+    fn dma_transfer_error(&mut self, _item: &DmaRequest) {}
     /// Espressif GDMA → GP-SPI: an OUT link bound to this controller pushed
     /// `bytes` into its transmit FIFO. Default: not a GDMA-coupled SPI.
     fn gdma_out_load(&mut self, _bytes: &[u8]) {}
@@ -4897,10 +4930,11 @@ impl<C: Cpu> Machine<C> {
                 }
             }
         }
-        if !result.dma_requests.is_empty() {
-            if let Err(e) = self.bus.execute_dma(&result.dma_requests) {
-                tracing::warn!("on_event execute_dma failed: {e:?}");
-            }
+        // Each item runs on behalf of its issuer, which hears about a FIFO
+        // load's data and about a bus error (`Peripheral::dma_load_data` /
+        // `dma_transfer_error`).
+        for req in &result.dma_requests {
+            self.bus.execute_dma_for(peripheral_idx, req);
         }
     }
 

@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- STM32 DMA arbitration, F4 stream FIFOs, transfer errors, DMAMUX
+  generators and synchronisation, GDMA descriptor errors. Each STM32 DMA
+  controller (F1/L4/G0 `dma`, F4/F7 `stm32f4_dma`, H5/U5 `gpdma`) moves one
+  item per arbitration slot, to the channel or stream with the highest
+  software priority (`CCR.PL`, `SxCR.PL`, `CCR.PRIO`) and then the lowest
+  number; a request that loses the slot stays latched. An item that faults
+  on the bus sets `TEIF` (GPDMA `DTEF`) and disables the channel or stream
+  (bus plumbing: the bus tells the issuing controller,
+  `Peripheral::dma_transfer_error`). F4 streams model the 16-byte FIFO
+  (`DMDIS`, `FTH`, live `FS`, `PBURST` / `MBURST` INCR4/8/16, packing when
+  `PSIZE` ≠ `MSIZE`, `FEIF` for a forbidden `FTH` / `MBURST` / `MSIZE`
+  combination, an overrun or an underrun, `FEIE`), force `MSIZE` = `PSIZE`
+  and no bursts in direct mode, flush a P2M FIFO when `EN` is cleared (`EN`
+  reads 1 until the stream stops, `TCIF` set), and run memory-to-memory
+  through the FIFO (new `DmaDirection::Load` / `Store` items,
+  `Peripheral::dma_load_data`). The G0 DMAMUX request generators
+  (`RGxCR`) and synchronisation (`CxCR.SE`, `SYNC_ID`, `SPOL`, `NBREQ`,
+  `EGE`, `CSR` / `RGSR` overruns) take EXTI lines 0..15 (the G0 EXTI now
+  answers `exti_line_source`) and the channel events `dmamux_evt0..3`. The
+  ESP32-C3 / C6 GP-SPI2 GDMA path raises `IN_DSCR_ERR` / `OUT_DSCR_ERR`
+  (owner check, a descriptor, buffer or next link outside internal SRAM),
+  `IN_DSCR_EMPTY`, and `OUT_EOF` only for a `suc_eof` descriptor. New
+  end-to-end net test `env-spi-f4-dma.yaml` (F401 master: two streams
+  complete by priority, then SPI1 through the FIFOs in INCR4 bursts, against
+  the G071 DMA slave). Behaviour change: an F4 memory-to-memory transfer now
+  takes its FIFO drains as extra slots, and an F4 stream disabled by
+  software sets `TCIF` as on silicon.
 - OV3660 JPEG output. With `PIXFORMAT_JPEG` the `ov3660` part streams real
   baseline JPEG frames (YCbCr 4:2:2, quantised by `COMPRESSION_CTRL07`)
   instead of no frames, sized so `esp32-camera` finds SOI and EOI the way it
