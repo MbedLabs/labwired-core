@@ -72,6 +72,7 @@ pub static KITS: &[&'static dyn PeripheralKit] = &[
     // `analog_plant_migration_parity` sweeps each one's full input range
     // against the arithmetic the deleted model performed.
     &components::declarative_analog::NTC_THERMISTOR_KIT,
+    &components::declarative_analog::TMP36_KIT,
     &components::declarative_analog::POTENTIOMETER_KIT,
     &components::declarative_analog::LIPO_CHARGER_KIT,
     &components::declarative_analog::LDR_KIT,
