@@ -606,6 +606,92 @@ impl Rig for Esp32s3 {
     }
 }
 
+/// A pad the RTC IO MUX owns (`MUX_SEL` and `FUN_IE` set), driven through
+/// the RTC_IO block: the classic part's GPIO25 (RTC_GPIO6, `PAD_DAC1`, bit
+/// 20), or with `s3` the S3's GPIO5 (RTC_GPIO5, `TOUCH_PAD5`, bit 15). The
+/// RTC_IO write moves the GPIO port's pad without touching the GPIO block,
+/// so it is bracketed for push capture, as the bus does.
+#[derive(Default)]
+struct EspRtc {
+    s3: bool,
+    rtc: Option<crate::peripherals::esp_rtc_io::EspRtcIo>,
+}
+impl EspRtc {
+    /// `(pad register, MUX_SEL | FUN_IE, RTC GPIO bit, RTC_GPIO_PINn)`.
+    fn regs(&self) -> (u64, u32, u32, u64) {
+        if self.s3 {
+            (0x84 + 4 * 5, (1 << 19) | (1 << 13), 1 << 15, 0x28 + 4 * 5)
+        } else {
+            (0x84, (1 << 17) | (1 << 11), 1 << 20, 0x28 + 4 * 6)
+        }
+    }
+    fn rtc_write(&mut self, port: &mut dyn Peripheral, off: u64, value: u32) {
+        let rtc = self.rtc.as_mut().expect("built");
+        watch_begin(port.pins_mut().expect("pin port"));
+        w32(rtc, off, value);
+        watch_end(port.pins_mut().expect("pin port"));
+    }
+}
+impl Rig for EspRtc {
+    fn name(&self) -> &'static str {
+        if self.s3 {
+            "Esp32s3Gpio RTC GPIO"
+        } else {
+            "Esp32Gpio RTC GPIO"
+        }
+    }
+    fn pin(&self) -> u8 {
+        if self.s3 {
+            5
+        } else {
+            25
+        }
+    }
+    fn build(&mut self) -> Box<dyn Peripheral> {
+        use crate::peripherals::esp_rtc_io::EspRtcIo;
+        let mut rtc = if self.s3 {
+            EspRtcIo::new_esp32s3()
+        } else {
+            EspRtcIo::new_esp32()
+        };
+        let mut gpio: Box<dyn Peripheral> = if self.s3 {
+            Box::new(crate::peripherals::esp32s3::gpio::Esp32s3Gpio::new())
+        } else {
+            Box::new(crate::peripherals::esp32::gpio::Esp32Gpio::new())
+        };
+        assert!(gpio.attach_rtc_io_pads(rtc.rtc_io_pads().expect("RTC_IO")));
+        let (pad, on, _, _) = self.regs();
+        w32(&mut rtc, pad, on);
+        self.rtc = Some(rtc);
+        gpio
+    }
+    fn set_mode(&mut self, port: &mut dyn Peripheral, _pin: u8, mode: Mode) -> bool {
+        const RUE: u32 = 1 << 27;
+        const RDE: u32 = 1 << 28;
+        let (pad, on, bit, pin_reg) = self.regs();
+        match mode {
+            Mode::Input(pull) => {
+                self.rtc_write(port, 0x14, bit); // RTC_GPIO_ENABLE_W1TC
+                let pull = match pull {
+                    Pull::None => 0,
+                    Pull::Up => RUE,
+                    Pull::Down => RDE,
+                };
+                self.rtc_write(port, pad, on | pull);
+            }
+            Mode::PushPull(level) | Mode::OpenDrain(level) => {
+                self.rtc_write(port, pad, on);
+                let od = matches!(mode, Mode::OpenDrain(_));
+                self.rtc_write(port, pin_reg, if od { 1 << 2 } else { 0 });
+                // RTC_GPIO_OUT_W1TS / _W1TC, then RTC_GPIO_ENABLE_W1TS.
+                self.rtc_write(port, if level { 0x04 } else { 0x08 }, bit);
+                self.rtc_write(port, 0x10, bit);
+            }
+        }
+        true
+    }
+}
+
 // ── Declarative `GPIO` descriptor ────────────────────────────────────────────
 
 struct Declarative;
@@ -674,6 +760,11 @@ fn rigs() -> Vec<Box<dyn Rig>> {
         Box::new(Esp32s3::default()),
         Box::new(Esp32s3 {
             bank1: true,
+            ..Default::default()
+        }),
+        Box::new(EspRtc::default()),
+        Box::new(EspRtc {
+            s3: true,
             ..Default::default()
         }),
         Box::new(Declarative),
@@ -873,9 +964,10 @@ fn every_model_input_register_reads_its_pull() {
         }
         pulled_models += usize::from(pulled);
     }
-    // STM32 v2/f1, nRF52, Kinetis, EFR32, SAM, RA, i.MX RT, ATmega, ESP32-C3/S3.
+    // STM32 v2/f1, nRF52, Kinetis, EFR32, SAM, RA, i.MX RT, ATmega, ESP32-C3/S3,
+    // and the RTC GPIO of the classic ESP32 and the S3.
     assert!(
-        pulled_models >= 11,
+        pulled_models >= 13,
         "pulls exercised on {pulled_models} models"
     );
 }

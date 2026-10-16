@@ -1322,6 +1322,32 @@ pub trait Peripheral: std::fmt::Debug + Send {
         false
     }
 
+    /// RTC IO capability (ESP32 / ESP32-S3 `RTC_IO`): the RTC IO MUX state
+    /// this block shares with its part's GPIO model, which stays the pads'
+    /// only pin port and asks it which domain owns each pad. The bus hands it
+    /// over at attach ([`Self::attach_rtc_io_pads`]) and brackets every write
+    /// to this block with the GPIO port's push capture. Default: not an RTC
+    /// IO block.
+    fn rtc_io_pads(&self) -> Option<std::sync::Arc<crate::peripherals::esp_rtc_io::RtcIoPads>> {
+        None
+    }
+
+    /// GPIO capability: follow the RTC IO MUX `pads` (see
+    /// [`Self::rtc_io_pads`]). `true` when this port took them (an ESP32 /
+    /// ESP32-S3 GPIO model of the same part). Default: refused.
+    fn attach_rtc_io_pads(
+        &mut self,
+        _pads: std::sync::Arc<crate::peripherals::esp_rtc_io::RtcIoPads>,
+    ) -> bool {
+        false
+    }
+
+    /// GPIO capability: a write to the attached RTC IO block just completed;
+    /// pads may have moved between the digital and the RTC domain. The bus
+    /// calls it inside the push-capture bracket of that write. Default:
+    /// nothing to do.
+    fn rtc_io_written(&mut self) {}
+
     /// True when a READ of this peripheral can clear the status flag behind
     /// its level IRQ (STM32 input capture: reading CCRx clears CCxIF). The
     /// bus then reconciles the NVIC pend after the read, as it does after

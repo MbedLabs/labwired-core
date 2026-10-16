@@ -302,6 +302,7 @@ impl SystemBus {
             rp2040_io_bank0_idx: None,
             rp2040_sio_idx: None,
             pad_control_links: Vec::new(),
+            rtc_io_link: None,
             pad_claim_links: Default::default(),
             pin_port_ids: Vec::new(),
             rcc_idx: None,

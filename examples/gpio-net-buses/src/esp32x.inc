@@ -164,6 +164,82 @@
     .set IOMUX_SCL, 4 + 4 * PAD_SCL
 .endif
 
+/* RTC_IO (RTC IO MUX + RTC GPIO): esp-idf soc/<chip>/include/soc/
+ * rtc_io_reg.h, the vendored SVDs. RTC GPIO n is bit RTC_SHIFT + n of
+ * RTC_GPIO_OUT / ENABLE / STATUS / IN: 14 + n on the classic part, 10 + n on
+ * the S3. Every pad register's MUX_SEL resets to 0 (digital). */
+.ifdef CHIP_ESP32
+    .set RTCIO_BASE, 0x3FF48400
+    .set RTC_SHIFT, 14
+.else
+    .set RTCIO_BASE, 0x60008400
+    .set RTC_SHIFT, 10
+.endif
+    .set RTC_GPIO_OUT_W1TS, RTCIO_BASE + 0x04
+    .set RTC_GPIO_OUT_W1TC, RTCIO_BASE + 0x08
+    .set RTC_GPIO_ENABLE_W1TS, RTCIO_BASE + 0x10
+    .set RTC_GPIO_STATUS, RTCIO_BASE + 0x18
+    .set RTC_GPIO_STATUS_W1TC, RTCIO_BASE + 0x20
+    .set RTC_GPIO_IN, RTCIO_BASE + 0x24
+    .set RTC_GPIO_PIN0, RTCIO_BASE + 0x28
+
+/* The pad register and MUX_SEL bit of GPIO `pad`, as RTC_PAD_REG /
+ * RTC_PAD_MUX; RTC_PAD_REG = 0 for a pad with no RTC function. Classic:
+ * esp-idf soc/esp32/rtc_io_periph.c (SENSOR_PADS 0x7C for GPIO36..39,
+ * ADC_PAD 0x80 for GPIO34/35, PAD_DAC1/2 0x84/0x88 for GPIO25/26,
+ * XTAL_32K_PAD 0x8C for GPIO32/33, TOUCH_PAD0..7 0x94.. for GPIO4, 0, 2,
+ * 15, 13, 12, 14, 27). S3: GPIO0..21, TOUCH_PAD0..14 at 0x84 + 4n,
+ * XTAL_32P/32N, PAD_DAC1/2, RTC_PAD19..21 from 0xC0 on, MUX_SEL bit 19. */
+.macro RTC_PAD pad
+    .set RTC_PAD_REG, 0
+    .set RTC_PAD_MUX, 19
+.ifdef CHIP_ESP32
+  .if \pad >= 36 && \pad <= 39
+    .set RTC_PAD_REG, 0x7C
+    .set RTC_PAD_MUX, 27 - (\pad - 36)
+  .elseif \pad == 34
+    .set RTC_PAD_REG, 0x80
+    .set RTC_PAD_MUX, 29
+  .elseif \pad == 35
+    .set RTC_PAD_REG, 0x80
+    .set RTC_PAD_MUX, 28
+  .elseif \pad == 25 || \pad == 26
+    .set RTC_PAD_REG, 0x84 + 4 * (\pad - 25)
+    .set RTC_PAD_MUX, 17
+  .elseif \pad == 32
+    .set RTC_PAD_REG, 0x8C
+    .set RTC_PAD_MUX, 17
+  .elseif \pad == 33
+    .set RTC_PAD_REG, 0x8C
+    .set RTC_PAD_MUX, 18
+  .elseif \pad == 4
+    .set RTC_PAD_REG, 0x94
+  .elseif \pad == 0
+    .set RTC_PAD_REG, 0x98
+  .elseif \pad == 2
+    .set RTC_PAD_REG, 0x9C
+  .elseif \pad == 15
+    .set RTC_PAD_REG, 0xA0
+  .elseif \pad == 13
+    .set RTC_PAD_REG, 0xA4
+  .elseif \pad == 12
+    .set RTC_PAD_REG, 0xA8
+  .elseif \pad == 14
+    .set RTC_PAD_REG, 0xAC
+  .elseif \pad == 27
+    .set RTC_PAD_REG, 0xB0
+  .endif
+.else
+  .if \pad <= 14
+    .set RTC_PAD_REG, 0x84 + 4 * \pad
+  .elseif \pad <= 18
+    .set RTC_PAD_REG, 0xC0 + 4 * (\pad - 15)
+  .elseif \pad <= 21
+    .set RTC_PAD_REG, 0xD0 + 4 * (\pad - 19)
+  .endif
+.endif
+.endm
+
     .set GPIO_OUT_W1TS, GPIO_BASE + 0x08
     .set GPIO_OUT1_W1TS, GPIO_BASE + 0x14
     .set GPIO_OUT1_W1TC, GPIO_BASE + 0x18
@@ -300,9 +376,24 @@
 .endif
 .endm
 
+/* Hand an RTC-capable `pad` to the digital IO_MUX: clear its RTC_IO
+ * MUX_SEL, read-modify-write, as ESP-IDF's gpio_config() does through
+ * rtc_gpio_deinit() before using a pad digitally (and esp-hal's pin init).
+ * Nothing for a pad with no RTC function. Uses a3, a4. */
+.macro RTC_DIGITAL pad
+    RTC_PAD \pad
+.if RTC_PAD_REG
+    RD a4, RTCIO_BASE + RTC_PAD_REG
+    LI a3, ~(1 << RTC_PAD_MUX)
+    and a4, a4, a3
+    WRR RTCIO_BASE + RTC_PAD_REG, a4
+.endif
+.endm
+
 /* Route `pad` (IO_MUX word at `iomux`) as a matrix output of `sig`. FUNCn
  * takes the pad number itself, in either bank. */
 .macro MATRIX_OUT pad, iomux, sig, padbits
+    RTC_DIGITAL \pad
     WR IO_MUX_BASE + \iomux, PAD_MATRIX | \padbits
     WR GPIO_BASE + GPIO_OUT_SEL0 + 4 * \pad, \sig
     OE_ON \pad
@@ -310,6 +401,7 @@
 
 /* Route input `sig` from `pad` (output stage off). */
 .macro MATRIX_IN pad, iomux, sig
+    RTC_DIGITAL \pad
     WR IO_MUX_BASE + \iomux, PAD_MATRIX
     OE_OFF \pad
     WR GPIO_BASE + GPIO_IN_SEL0 + 4 * \sig, IN_SEL | \pad

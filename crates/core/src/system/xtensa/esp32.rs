@@ -677,13 +677,12 @@ pub fn configure_xtensa_esp32(bus: &mut SystemBus) -> XtensaLx7 {
 
     // Catch-all stubs for the rest of the APB peripheral block
     // (0x3FF4A000–0x3FF6FFFF). ESP32 packs ~30 peripherals here
-    // (RTC_IO, SAR ADC, I2S0/1, BB, UART1/2, I2C0/1, MCPWM, PCNT, RMT,
+    // (SAR ADC, I2S0/1, BB, UART1/2, I2C0/1, MCPWM, PCNT, RMT,
     // LEDC, etc). Most are touched briefly during esp-idf init; round-
     // trip stubs satisfy the access pattern even without modeling
     // any specific peripheral semantics.
     for (name, base) in [
         ("sdio_host", 0x3FF4_A000u64),
-        ("rtcio", 0x3FF4_8400), // sub-range of RTC_CNTL window, leave 4 KiB span
         ("sar_adc", 0x3FF4_C000),
         ("i2s0", 0x3FF4_F000),
         // uart1 (0x3FF5_0000) and uart2 (0x3FF6_E000) are the real Esp32Uart
@@ -948,6 +947,13 @@ pub(crate) const ESP32_PERIPHERALS: &[(&str, &str, u64, u64, Option<u32>)] = &[
     ("twai",     "esp32_twai",     0x3FF6_B000, 0x1000, None),
     ("mcpwm0",   "esp32_mcpwm",    0x3FF5_E000, 0x1000, None),
     ("host_slc", "esp32_sdio",     0x3FF5_8000, 0x1000, None),
+    // RTC IO MUX + RTC GPIO (TRM §6.11-6.13, `DR_REG_RTCIO_BASE`). The block
+    // is 0xCC bytes; the window stays the 4 KiB the catch-all stub it
+    // replaces always had, so what answers 0x3FF4_8900..0x3FF4_8FFF (SENS
+    // past the `sens_sar_adc` model) is unchanged: `EspRtcIo` keeps that tail
+    // as round-trip storage. `sens_sar_adc` (0x3FF4_8800) and `io_mux`
+    // (0x3FF4_9000) still win their ranges by the greatest-start rule.
+    ("rtcio",    "esp32_rtc_io",   0x3FF4_8400, 0x1000, None),
 ];
 
 /// `GPIO_FUNC0_OUT_SEL_CFG_REG` (`DR_REG_GPIO_BASE` 0x3FF4_4000 + 0x530), stride 4.

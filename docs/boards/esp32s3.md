@@ -149,9 +149,20 @@ simulator fast-forwards idle time: VSYNC waits until a captured frame has
 been handed to GDMA, and GDMA moves no bytes past an `IN_SUC_EOF` the CPU
 has not acknowledged.
 
+## RTC IO MUX
+
+`rtc_io` (0x6000_8400) models the RTC IO MUX and RTC GPIO: GPIO0..21 =
+RTC_GPIO0..21 at bit `10 + n`. A pad whose `MUX_SEL` is set is driven by
+`RTC_GPIO_OUT` / `RTC_GPIO_ENABLE` (open drain with `RTC_GPIO_PINn.PAD_DRIVER`,
+`RUE` / `RDE` pulls) instead of `GPIO_OUT` / `GPIO_ENABLE` and the GPIO
+matrix, and `RTC_GPIO_IN` / `GPIO_IN` read it through its `FUN_IE`;
+`RTC_GPIO_PINn.INT_TYPE` latches `RTC_GPIO_STATUS`, which reaches no CPU
+interrupt (none on silicon either). The pad holds (`RTC_CNTL_PAD_HOLD_REG`)
+are not modelled. See [GPIO nets](../howto/gpio-nets.md#rtc-io-esp32-and-esp32-s3).
+
 ## Not yet modeled (commonly expected on ESP32-S3)
 
-Still absent from the model: **WIFI / BT controller**, **RTC_IO**,
+Still absent from the model: **WIFI / BT controller**,
 **XTS_AES**, **TEMP_SENSOR**, **APB_CTRL**, **PSRAM cache controller**,
 **FPU coprocessor**.
 

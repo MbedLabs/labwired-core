@@ -61,6 +61,12 @@
     .global _start
 _start:
     LI a14, RESULT
+    /* Both pads digital: on the classic part GPIO32 (X32P) and GPIO39
+     * (SENSE4) have an RTC function, so clear their RTC_IO MUX_SEL first,
+     * as gpio_config() does (rtc_gpio_deinit). The S3's GPIO40/41 have
+     * none. */
+    RTC_DIGITAL OUT_PAD
+    RTC_DIGITAL IN_PAD
     WR IO_MUX_BASE + IOMUX_OUT, PAD_MATRIX
     WR IO_MUX_BASE + IOMUX_IN, PAD_MATRIX
     /* Out: the OUT1 latch, low, driving. In: output stage off. */

@@ -1232,6 +1232,68 @@ impl SystemBus {
         }
     }
 
+    /// Hand the RTC_IO block's pad state to the GPIO port of the same part
+    /// and remember both indices for [`Self::begin_rtc_io_write`]. Called
+    /// from `rebuild_peripheral_ranges`, so the link follows the peripheral
+    /// list; with no RTC_IO block (every bus but the ESP32 / ESP32-S3 ones)
+    /// it stays `None`. Capability calls, no downcast: the block names its
+    /// pads ([`Peripheral::rtc_io_pads`](crate::Peripheral::rtc_io_pads)) and
+    /// the port takes them only if they are its part's.
+    pub(crate) fn rebuild_rtc_io_link(&mut self) {
+        self.rtc_io_link = None;
+        let Some((rtc, pads)) = self
+            .peripherals
+            .iter()
+            .enumerate()
+            .find_map(|(i, p)| p.dev.rtc_io_pads().map(|pads| (i, pads)))
+        else {
+            return;
+        };
+        let gpio = self
+            .peripherals
+            .iter_mut()
+            .position(|p| p.dev.attach_rtc_io_pads(pads.clone()));
+        if let Some(gpio) = gpio {
+            self.rtc_io_link = Some(super::RtcIoLink { rtc, gpio });
+        }
+    }
+
+    /// Bracket a write to the RTC_IO block: a `MUX_SEL`, `RTC_GPIO_OUT` /
+    /// `ENABLE`, `PAD_DRIVER`, pull or `HOLD` write moves the GPIO port's pads
+    /// without touching the GPIO block, so the port's push capture is
+    /// snapshotted first. One compare on every other write. Returns the GPIO
+    /// port's index for [`Self::finish_rtc_io_write`].
+    #[inline]
+    pub(crate) fn begin_rtc_io_write(&mut self, idx: usize) -> Option<usize> {
+        let link = self.rtc_io_link?;
+        if link.rtc != idx {
+            return None;
+        }
+        crate::pins::watch_begin(self.peripherals.get_mut(link.gpio)?.dev.pins_mut()?);
+        Some(link.gpio)
+    }
+
+    /// Complete a successful RTC_IO write started by
+    /// [`Self::begin_rtc_io_write`]: the port re-derives its routing
+    /// ([`Peripheral::rtc_io_written`](crate::Peripheral::rtc_io_written)),
+    /// reports what moved, and on a world net hands the net's levels to
+    /// lines a pad handed back to the matrix now carries.
+    pub(crate) fn finish_rtc_io_write(&mut self, gpio: Option<usize>) {
+        let Some(gpio) = gpio else {
+            return;
+        };
+        let Some(p) = self.peripherals.get_mut(gpio) else {
+            return;
+        };
+        p.dev.rtc_io_written();
+        if let Some(port) = p.dev.pins_mut() {
+            crate::pins::watch_end(port);
+        }
+        if self.wire_inputs_live {
+            self.deliver_wire_input_edges(gpio);
+        }
+    }
+
     /// Bracket a C3 IO_MUX write with GPIO push-capture sampling. A `FUN_WPU`
     /// write changes an input pad electrically even though the GPIO register
     /// block itself is not written, so the usual GPIO-local write hooks would
