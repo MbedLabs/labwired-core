@@ -181,6 +181,11 @@ required-features = ["event-scheduler"]
 
 # #![cfg(feature = "event-scheduler")]
 [[test]]
+name = "xtensa_poll_loop_skip"
+required-features = ["event-scheduler"]
+
+# #![cfg(feature = "event-scheduler")]
+[[test]]
 name = "board_batch_width"
 required-features = ["event-scheduler"]
 

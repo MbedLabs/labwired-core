@@ -7069,8 +7069,17 @@ boards:
     # tests/esp32s3_camera_dvp.rs (incl. the I2C1-through-matrix test),
     # world_gpio_net_buses, and the lib suites. Approved by the maintainer.
     # ACK, NOT A CAPTURE.
+    # Same day, labwired-core#1396: the shared Xtensa core (xtensa_lx7.rs,
+    # new xtensa_lx7/poll_loop.rs, one hook in exec/system.rs RSR) gains the
+    # CCOUNT poll-loop skip. It changes no register, reset value or readback:
+    # `RSR CCOUNT` only records its PC, and a skip leaves the state running
+    # the iterations would leave (tests/xtensa_poll_loop_skip.rs compares
+    # records, CCOUNT and machine cycles with the skip on and off). Ran: core
+    # lib (event-scheduler), esp32s3_smp_yield_latency,
+    # esp32s3_irq_cache_differential, esp32s3_walk_differential, xtensa_exec,
+    # xtensa_lx7. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-16
-    drift_ack_digest: 47615d801478ee0e882e94931da0176c0a2bf1e0dcb6d096b77ccd560f24c4d3
+    drift_ack_digest: 2a3c0381dedaefeab6362f0aa9aaea44ed83dcc63aebf0d8154011c2043a6aa8
 
   - id: esp32s3-zero
     # Board variant of esp32s3: same silicon (LX7), 4 MiB flash / 480 KiB RAM.

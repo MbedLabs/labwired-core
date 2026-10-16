@@ -170,6 +170,13 @@ impl<C: Cpu> Machine<C> {
                         if secondary_released {
                             break;
                         }
+                        // End the window at a poll-loop anchor so the idle
+                        // skip can try it (`Cpu::poll_loop_anchor_ready`).
+                        if self.config.idle_fast_forward_enabled
+                            && self.cpu.poll_loop_anchor_ready()
+                        {
+                            break;
+                        }
                     }
                     return Ok(CoreProgress {
                         primary_steps,
@@ -185,6 +192,11 @@ impl<C: Cpu> Machine<C> {
                             .step(&mut self.bus, &self.observers, &self.config)?;
                         n += 1;
                         if self.rtc_cntl_reset_pending() {
+                            break;
+                        }
+                        if self.config.idle_fast_forward_enabled
+                            && self.cpu.poll_loop_anchor_ready()
+                        {
                             break;
                         }
                     }
