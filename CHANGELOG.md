@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- Idle fast-forward on a dual-core machine waits until BOTH cores are idle.
+  It skipped on the primary's WAITI alone, so an ESP32 sketch whose
+  `loopTask` runs on APP_CPU got about 1 % of the machine's cycles: a
+  CCOUNT-timed 20 ms servo frame took about 2 s of machine time in the
+  browser. A parked secondary's CCOUNT now moves with the skip.
+- Browser (WASM) classic-ESP32 boot runs the real esp_flash chip driver and
+  seeds `g_rom_flashchip`, as the shared Arduino profile does. Every
+  classic-ESP32 lab printed `No core dump partition found` and
+  `initArduino(): Failed to initialize NVS! Error: 261`; `Preferences` failed
+  in the browser and worked on silicon.
 - A servo without `ledc_channel` follows the LEDC channel the GPIO matrix
   routes to its pad. Before, it observed all 16 channels, so every
   `ledcWrite` moved every servo: four servos on GPIO25/26/27/33 (channels

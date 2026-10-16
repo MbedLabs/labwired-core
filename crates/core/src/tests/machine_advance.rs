@@ -1209,6 +1209,63 @@ fn idle_fast_forward_is_reconciled_in_report_and_cpu() {
     assert_eq!(machine.idle_fast_forward_cycles_skipped, 5);
 }
 
+/// The skip moves machine time without stepping either core. With the
+/// secondary running (an ESP32 loopTask on APP_CPU while PRO_CPU sits in
+/// WAITI), a skip takes that time away from it: the primary's idle budget
+/// alone must not skip.
+#[cfg(feature = "event-scheduler")]
+#[test]
+fn idle_fast_forward_waits_for_an_active_secondary() {
+    let mut bus = SystemBus::new();
+    bus.peripherals.clear();
+    let mut machine = Machine::new(
+        CountingCpu {
+            idle_budget: Some(5),
+            ..Default::default()
+        },
+        bus,
+    )
+    .with_secondary_cpu(CountingCpu::default());
+    machine.config.idle_fast_forward_enabled = true;
+
+    let report = machine.advance(AdvanceRequest::run(Some(5))).unwrap();
+
+    assert_eq!(
+        report.idle_cycles, 0,
+        "an active secondary must run, not be skipped"
+    );
+    assert_eq!(machine.idle_fast_forward_cycles_skipped, 0);
+    assert_eq!(machine.cpu_secondary.as_ref().unwrap().steps, 5);
+}
+
+/// Both cores parked: the skip runs, and the parked secondary's clock moves
+/// with it (its CCOUNT is the FreeRTOS tick source on APP_CPU).
+#[cfg(feature = "event-scheduler")]
+#[test]
+fn idle_fast_forward_moves_a_parked_secondary_with_the_primary() {
+    let mut bus = SystemBus::new();
+    bus.peripherals.clear();
+    let mut machine = Machine::new(
+        CountingCpu {
+            idle_budget: Some(5),
+            ..Default::default()
+        },
+        bus,
+    )
+    .with_secondary_cpu(CountingCpu {
+        parked: true,
+        idle_budget: Some(u64::MAX),
+        ..Default::default()
+    });
+    machine.config.idle_fast_forward_enabled = true;
+
+    let report = machine.advance(AdvanceRequest::run(Some(5))).unwrap();
+
+    assert_eq!(report.idle_cycles, 5);
+    assert_eq!(machine.cpu.idle_skipped, 5);
+    assert_eq!(machine.cpu_secondary.as_ref().unwrap().idle_skipped, 5);
+}
+
 #[cfg(feature = "event-scheduler")]
 #[test]
 fn ignored_breakpoint_does_not_block_idle_fast_forward() {
