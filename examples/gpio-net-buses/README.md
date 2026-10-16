@@ -41,6 +41,15 @@ pull-up reading 1.
 | `env-spi-esp32-slave.yaml` | classic ESP32 HSPI slave (W buffer), same pads | G071 SPI1 master | `cs`, `sck`, `miso`, `mosi` |
 | `env-i2c-esp32.yaml` | classic ESP32 I2C0 controller (GPIO21 SDA, GPIO22 SCL), 100 kHz | G071 I2C1 target at 0x42 | `scl`, `sda` (pull-up) |
 | `env-i2c-esp32-target.yaml` | classic ESP32 I2C0 target at 0x42, TX FIFO kept loaded ahead of reads | G071 I2C1 controller | `scl`, `sda` (pull-up) |
+| `env-spi-esp32s3-spi3.yaml` | ESP32-S3 GP-SPI3 master on bank-1 pads (GPIO36 SCK, GPIO35 MOSI, GPIO37 MISO, GPIO34 CS0) | G071 SPI1 slave | `cs`, `sck`, `miso`, `mosi` |
+| `env-spi-esp32s3-spi3-slave.yaml` | ESP32-S3 GP-SPI3 slave, same pads | G071 SPI1 master | `cs`, `sck`, `miso`, `mosi` |
+| `env-i2c-esp32s3-i2c1.yaml` | ESP32-S3 I2C1 controller on bank-1 pads (GPIO41 SDA, GPIO42 SCL) | G071 I2C1 target at 0x42 | `scl`, `sda` (pull-up) |
+| `env-i2c-esp32s3-i2c1-target.yaml` | ESP32-S3 I2C1 target at 0x42, same pads | G071 I2C1 controller | `scl`, `sda` (pull-up) |
+| `env-i2c-esp32-i2c1.yaml` | classic ESP32 I2C1 controller (0x3FF6_7000) on GPIO32 SDA, GPIO33 SCL | G071 I2C1 target at 0x42 | `scl`, `sda` (pull-up) |
+| `env-i2c-esp32-i2c1-target.yaml` | classic ESP32 I2C1 target at 0x42, same pads | G071 I2C1 controller | `scl`, `sda` (pull-up) |
+| `env-spi-esp32-hi.yaml` | classic ESP32 VSPI master, GPIO33 SCK, GPIO32 MOSI, GPIO34 MISO (input-only pad), GPIO5 CS0 | G071 SPI1 slave | `cs`, `sck`, `miso`, `mosi` |
+| `env-spi-esp32-hi-slave.yaml` | classic ESP32 HSPI slave, SCK / MOSI / CS0 in on the input-only GPIO34 / GPIO35 / GPIO36, MISO out on GPIO33 | G071 SPI1 master | `cs`, `sck`, `miso`, `mosi` |
+| `env-gpio-esp32-esp32s3.yaml` | classic ESP32, plain GPIO: out GPIO32, in GPIO39 (input-only) | ESP32-S3, plain GPIO: in GPIO40, out GPIO41 | `a2b`, `b2a` (pull-down) |
 
 SPI: the master sends `A5 3C 5A C3` and receives `81 82 83 84`, which the
 slave queues from its SPI interrupt (or preloads in its FIFO, on the RP2040).
@@ -73,7 +82,9 @@ the tests swap the system and firmware into the `esp32c3` environments).
 `esp32c3-esp-hal/` holds esp-hal 1.1 SPI and I2C master applications that run
 the same exchanges through esp-hal's own drivers. The ESP32-S3 and the classic
 ESP32 run them from hand-written Xtensa assembly (`src/esp32x_*.S`,
-`src/esp32x.inc`; `--defsym CHIP_ESP32=1` for the classic part): LLVM 18's
+`src/esp32x.inc`; `--defsym CHIP_ESP32=1` for the classic part,
+`--defsym INST1=1` for the S3's GP-SPI3 / I2C1 and the classic I2C1,
+`--defsym PADS_HI=1` for bank-1 pads): LLVM 18's
 Xtensa backend assembles but does not compile C or link, so `build.sh` runs
 `llvm-mc` and `src/xtensa_elf.py` wraps the relocation-free object into an
 ELF loaded at IRAM.

@@ -1,4 +1,4 @@
-/* ESP32-S3 GP-SPI2 (or --defsym CHIP_ESP32=1: classic ESP32 VSPI) master on
+/* ESP32-S3 GP-SPI2 (INST1: GP-SPI3; or --defsym CHIP_ESP32=1: classic ESP32 VSPI) master on
  * gpio nets, register level: full duplex (DOUTDIN, USR_MOSI, USR_MISO),
  * mode 0, CS0 framing the whole transfer with CS_SETUP / CS_HOLD, SCK =
  * 80 MHz / (16 * 50) = 100 kHz. The sequence of esp32c_spi_master.c.

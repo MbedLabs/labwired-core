@@ -17,6 +17,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   --watch-gpio`.
 
 ### Added
+- Every ESP32 / ESP32-S3 pad and bus controller instance on `gpio_net`s.
+  Bank-1 pads join nets like bank 0: classic GPIO32..39 and S3 GPIO32..48
+  take outside levels in `GPIO_IN1`, drive `GPIO_OUT1` / `GPIO_ENABLE1` (bit
+  `pad - 32`), latch `GPIO_STATUS1` per `INT_TYPE` (`GPIO_ACPU_INT1` /
+  `GPIO_PCPU_INT1`, the same GPIO interrupt source), and carry peripheral
+  lines through the GPIO matrix, which indexes `FUNCn_OUT_SEL_CFG` and
+  `FUNCn_IN_SEL_CFG`'s pad field by the pad number itself. Classic
+  GPIO34..39 stay input-only: `ENABLE1` stores but never drives them, and
+  they feed matrix inputs. The S3 GP-SPI3 (`SPI3_*` 66/67/68/71) and I2C1
+  (`I2CEXT1_*` 91/92) and the classic I2C1 (`I2CEXT1_*` 95/96) now run the
+  bit-level net engines S3 SPI2 / I2C0 and classic I2C0 host. The classic
+  I2C1 is on the bus at 0x3FF6_7000 (interrupt source 50, AHB TX FIFO alias
+  0x6002_701C); before, nothing answered there. Tested against an STM32G071
+  both ways round on bank-1 pads (S3 SPI3 on GPIO34..37, I2C1 on GPIO41/42;
+  classic I2C1 on GPIO32/33, VSPI / HSPI with GPIO34..36 taking lines in),
+  and plain GPIO between a classic ESP32 and an ESP32-S3 on GPIO32/39 and
+  GPIO40/41 (`examples/gpio-net-buses`, `docs/howto/gpio-nets.md`).
 - OV3660 camera on the ESP32-S3 (`type: ov3660`, `docs/boards/esp32s3.md`
   "Camera (DVP)"). The part answers SCCB at 0x3C (16-bit register addresses,
   chip ID 0x3660, software reset) and streams frames over DVP into LCD_CAM's

@@ -2,6 +2,11 @@
  * gpio-net-buses Xtensa firmware needs. Assembled with --defsym CHIP_ESP32=1
  * for the classic ESP32, without it for the ESP32-S3.
  *
+ * --defsym INST1=1 picks the second controller of a kind: S3 GP-SPI3 and
+ * I2C1, classic I2C1 (classic SPI is VSPI master / HSPI slave either way).
+ * --defsym PADS_HI=1 moves the pads to bank 1 (GPIO32 and up: OUT1 /
+ * ENABLE1 / IN1 at bit pad - 32, PINn and FUNCn by the pad number itself).
+ *
  * Hand-written assembly: LLVM 18 assembles Xtensa (llvm-mc -triple=xtensa,
  * the core ISA, call0 ABI) but generates no code for it and ld.lld cannot
  * link it, so there is no C here; build.sh assembles each source to a
@@ -18,6 +23,14 @@
  *   classic  VSPI (master) / HSPI (slave)  GPIO18 SCK, GPIO23 MOSI,
  *            GPIO19 MISO, GPIO5 CS0
  *            I2C0  GPIO21 SDA, GPIO22 SCL (open drain, PAD_DRIVER)
+ * PADS_HI:
+ *   S3       SPI   GPIO36 SCK, GPIO35 MOSI, GPIO37 MISO, GPIO34 CS0
+ *            I2C   GPIO41 SDA, GPIO42 SCL
+ *   classic  GPIO34..39 are input-only, so the pads depend on the role:
+ *            VSPI master  GPIO33 SCK, GPIO32 MOSI, GPIO34 MISO, GPIO5 CS0
+ *            HSPI slave   GPIO34 SCK, GPIO35 MOSI, GPIO33 MISO, GPIO36 CS0
+ *            (a source sets SPI_ROLE_SLAVE before the include)
+ *            I2C   GPIO32 SDA, GPIO33 SCL
  */
 
 .ifdef CHIP_ESP32
@@ -30,7 +43,11 @@
     /* MCU_SEL [14:12] = 2 (GPIO), FUN_DRV [11:10] = 2, FUN_IE (9). */
     .set PAD_MATRIX, (2 << 12) | (2 << 10) | (1 << 9)
     .set RESULT, 0x3FFC0100
+.ifdef INST1
+    .set I2C0, 0x3FF67000           /* I2C1 (I2C_EXT1) */
+.else
     .set I2C0, 0x3FF53000
+.endif
     .set SPI_MASTER, 0x3FF65000     /* VSPI (SPI3) */
     .set SPI_SLAVE, 0x3FF64000      /* HSPI (SPI2) */
     /* gpio_sig_map.h */
@@ -42,8 +59,38 @@
     .set SIG_S_Q, 9                 /* HSPIQ */
     .set SIG_S_D, 10                /* HSPID */
     .set SIG_S_CS0, 11              /* HSPICS0 */
+.ifdef INST1
+    .set SIG_I2C_SCL, 95            /* I2CEXT1_SCL */
+    .set SIG_I2C_SDA, 96            /* I2CEXT1_SDA */
+.else
     .set SIG_I2C_SCL, 29
     .set SIG_I2C_SDA, 30
+.endif
+.ifdef PADS_HI
+  .ifdef SPI_ROLE_SLAVE
+    .set PAD_SCK, 34
+    .set PAD_MOSI, 35
+    .set PAD_MISO, 33
+    .set PAD_CS, 36
+    .set IOMUX_SCK, 0x14
+    .set IOMUX_MOSI, 0x18
+    .set IOMUX_MISO, 0x20
+    .set IOMUX_CS, 0x04
+  .else
+    .set PAD_SCK, 33
+    .set PAD_MOSI, 32
+    .set PAD_MISO, 34
+    .set PAD_CS, 5
+    .set IOMUX_SCK, 0x20
+    .set IOMUX_MOSI, 0x1C
+    .set IOMUX_MISO, 0x14
+    .set IOMUX_CS, 0x6C
+  .endif
+    .set PAD_SDA, 32
+    .set PAD_SCL, 33
+    .set IOMUX_SDA, 0x1C
+    .set IOMUX_SCL, 0x20
+.else
     .set PAD_SCK, 18
     .set PAD_MOSI, 23
     .set PAD_MISO, 19
@@ -57,6 +104,7 @@
     .set IOMUX_CS, 0x6C
     .set IOMUX_SDA, 0x7C
     .set IOMUX_SCL, 0x80
+.endif
 .else
 /* ── ESP32-S3 (esp-idf soc/esp32s3/include/soc/*.h, TRM) ───────────────── */
     .set GPIO_BASE, 0x60004000
@@ -67,6 +115,18 @@
     /* MCU_SEL [14:12] = 1 (GPIO), FUN_DRV [11:10] = 2, FUN_IE (9). */
     .set PAD_MATRIX, (1 << 12) | (2 << 10) | (1 << 9)
     .set RESULT, 0x3FCE0100
+.ifdef INST1
+    .set I2C0, 0x60027000           /* I2C1 */
+    .set SPI_MASTER, 0x60025000     /* GP-SPI3, both roles */
+    .set SPI_SLAVE, 0x60025000
+    /* gpio_sig_map.h: SPI3_CLK 66, SPI3_Q 67, SPI3_D 68, SPI3_CS0 71 */
+    .set SIG_M_CLK, 66
+    .set SIG_M_Q, 67
+    .set SIG_M_D, 68
+    .set SIG_M_CS0, 71
+    .set SIG_I2C_SCL, 91            /* I2CEXT1_SCL */
+    .set SIG_I2C_SDA, 92            /* I2CEXT1_SDA */
+.else
     .set I2C0, 0x60013000
     .set SPI_MASTER, 0x60024000     /* GP-SPI2 (FSPI), both roles */
     .set SPI_SLAVE, 0x60024000
@@ -74,18 +134,28 @@
     .set SIG_M_Q, 102               /* FSPIQ */
     .set SIG_M_D, 103               /* FSPID */
     .set SIG_M_CS0, 110             /* FSPICS0 */
-    .set SIG_S_CLK, 101
-    .set SIG_S_Q, 102
-    .set SIG_S_D, 103
-    .set SIG_S_CS0, 110
     .set SIG_I2C_SCL, 89
     .set SIG_I2C_SDA, 90
+.endif
+    .set SIG_S_CLK, SIG_M_CLK
+    .set SIG_S_Q, SIG_M_Q
+    .set SIG_S_D, SIG_M_D
+    .set SIG_S_CS0, SIG_M_CS0
+.ifdef PADS_HI
+    .set PAD_SCK, 36
+    .set PAD_MOSI, 35
+    .set PAD_MISO, 37
+    .set PAD_CS, 34
+    .set PAD_SDA, 41
+    .set PAD_SCL, 42
+.else
     .set PAD_SCK, 12
     .set PAD_MOSI, 11
     .set PAD_MISO, 13
     .set PAD_CS, 10
     .set PAD_SDA, 8
     .set PAD_SCL, 9
+.endif
     .set IOMUX_SCK, 4 + 4 * PAD_SCK
     .set IOMUX_MOSI, 4 + 4 * PAD_MOSI
     .set IOMUX_MISO, 4 + 4 * PAD_MISO
@@ -95,14 +165,22 @@
 .endif
 
     .set GPIO_OUT_W1TS, GPIO_BASE + 0x08
+    .set GPIO_OUT1_W1TS, GPIO_BASE + 0x14
+    .set GPIO_OUT1_W1TC, GPIO_BASE + 0x18
     .set GPIO_ENABLE_W1TS, GPIO_BASE + 0x24
     .set GPIO_ENABLE_W1TC, GPIO_BASE + 0x28
+    .set GPIO_ENABLE1_W1TS, GPIO_BASE + 0x30
+    .set GPIO_ENABLE1_W1TC, GPIO_BASE + 0x34
+    .set GPIO_IN1, GPIO_BASE + 0x40
+    .set GPIO_STATUS1, GPIO_BASE + 0x50
+    .set GPIO_STATUS1_W1TC, GPIO_BASE + 0x58
     .set PAD_DRIVER, 1 << 2
     .set PAD_WPU, 1 << 8
     /* FUNCn_IN_SEL_CFG: pad [5:0], SEL (through the matrix) bit 7 on both. */
     .set IN_SEL, 1 << 7
 
-/* I2C0: the command-list controller, same offsets on both parts. */
+/* I2C0 (I2C1 with INST1): the command-list controller, same offsets on
+ * both parts and both instances. */
     .set I2C_SCL_LOW, I2C0 + 0x00
     .set I2C_CTR, I2C0 + 0x04
     .set I2C_SR, I2C0 + 0x08
@@ -204,30 +282,66 @@
     bnez a3, .Ldly_\@
 .endm
 
-/* Route `pad` (IO_MUX word at `iomux`) as a matrix output of `sig`. */
+/* Output stage of `pad` on / off: ENABLE for GPIO0..31, ENABLE1 at bit
+ * pad - 32 above. */
+.macro OE_ON pad
+.if \pad >= 32
+    WR GPIO_ENABLE1_W1TS, 1 << (\pad - 32)
+.else
+    WR GPIO_ENABLE_W1TS, 1 << \pad
+.endif
+.endm
+
+.macro OE_OFF pad
+.if \pad >= 32
+    WR GPIO_ENABLE1_W1TC, 1 << (\pad - 32)
+.else
+    WR GPIO_ENABLE_W1TC, 1 << \pad
+.endif
+.endm
+
+/* Route `pad` (IO_MUX word at `iomux`) as a matrix output of `sig`. FUNCn
+ * takes the pad number itself, in either bank. */
 .macro MATRIX_OUT pad, iomux, sig, padbits
     WR IO_MUX_BASE + \iomux, PAD_MATRIX | \padbits
     WR GPIO_BASE + GPIO_OUT_SEL0 + 4 * \pad, \sig
-    WR GPIO_ENABLE_W1TS, 1 << \pad
+    OE_ON \pad
 .endm
 
 /* Route input `sig` from `pad` (output stage off). */
 .macro MATRIX_IN pad, iomux, sig
     WR IO_MUX_BASE + \iomux, PAD_MATRIX
-    WR GPIO_ENABLE_W1TC, 1 << \pad
+    OE_OFF \pad
     WR GPIO_BASE + GPIO_IN_SEL0 + 4 * \sig, IN_SEL | \pad
 .endm
 
+/* OUT latch of the two pads `a` and `b` (one bank) to 1. */
+.macro OUT_HIGH2 a, b
+.if \a >= 32
+    WR GPIO_OUT1_W1TS, (1 << (\a - 32)) | (1 << (\b - 32))
+.else
+    WR GPIO_OUT_W1TS, (1 << \a) | (1 << \b)
+.endif
+.endm
+
 /* Peripheral clocks on, out of reset. S3: SYSTEM_PERIP_CLK_EN0 /
- * PERIP_RST_EN0 bit 6 SPI2, bit 7 I2C_EXT0. Classic: DPORT_PERIP_CLK_EN /
- * PERIP_RST_EN bit 6 HSPI, bit 7 I2C_EXT0, bit 16 VSPI. */
+ * PERIP_RST_EN0 bit 6 SPI2, bit 7 I2C_EXT0 (INST1: bit 16 SPI3, bit 18
+ * I2C_EXT1). Classic: DPORT_PERIP_CLK_EN / PERIP_RST_EN bit 6 HSPI, bit 7
+ * I2C_EXT0, bit 16 VSPI (INST1: bit 18 I2C_EXT1). */
+.ifdef INST1
+    .set CLK_BITS_S3, (1 << 16) | (1 << 18)
+    .set CLK_BITS_ESP32, (1 << 6) | (1 << 16) | (1 << 18)
+.else
+    .set CLK_BITS_S3, (1 << 6) | (1 << 7)
+    .set CLK_BITS_ESP32, (1 << 6) | (1 << 7) | (1 << 16)
+.endif
 .macro ENABLE_CLOCKS
 .ifdef CHIP_ESP32
-    WR 0x3FF000C0, (1 << 6) | (1 << 7) | (1 << 16)
+    WR 0x3FF000C0, CLK_BITS_ESP32
     WR 0x3FF000C4, 0
 .else
     RD a4, 0x600C0018
-    LI a3, (1 << 6) | (1 << 7)
+    LI a3, CLK_BITS_S3
     or a4, a4, a3
     WRR 0x600C0018, a4
     WR 0x600C0020, 0
