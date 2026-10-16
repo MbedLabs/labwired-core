@@ -1514,7 +1514,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: 99aac378061a7a2dee9e35c6e365469ee30873e71de1146156a4331554de2b72
+    drift_ack_digest: e7a35e538930c749b75c3ffaaaebbb48af53c0ce7bdcdcd77a5d0235797e940e
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -1994,6 +1994,10 @@ boards:
     # classic/FIFO STM32 SPI gains TXDMAEN/RXDMAEN requests and LDMA_TX/LDMA_RX
     # (not the H5 layout). No register map or reset value changed. No physical
     # probe connected. Approved by the maintainer. ACK, NOT A CAPTURE.
+    # 2026-10-15 (fork F0 RCC profile): watched rcc.rs gained a separate
+    # RccRegisterLayout::Stm32F0 / F0Rcc used only by a chip yaml that selects
+    # profile stm32f0; this board's RCC family code and register behaviour are
+    # unchanged. Digest re-stamped. ACK, NOT A CAPTURE (owner confirmation pending).
     drift_ack: 2026-10-15
   - id: esp32c3
     # 2026-09-15 (#932): SPI edge sampling is opt-in (`SpiSampling::Byte` default). Byte-level golden pins the pre-feature path. Controllers without a bit engine reject opt-in at config time.
@@ -3340,7 +3344,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: 2e565c5898739c7156620845b9ac0b46db46506b2f563a03f3f6b221e00a5a27
+    drift_ack_digest: c0a2155d939fbc022e277c737ae6796ae54becda7a620257a5a40812ca145bf8
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -3792,6 +3796,10 @@ boards:
     # dropping reads, and fire only on request; a word store to a DMA register
     # is one write. No register map or reset value changed. No physical probe
     # connected. Approved by the maintainer. ACK, NOT A CAPTURE.
+    # 2026-10-15 (fork F0 RCC profile): watched rcc.rs gained a separate
+    # RccRegisterLayout::Stm32F0 / F0Rcc used only by a chip yaml that selects
+    # profile stm32f0; this board's RCC family code and register behaviour are
+    # unchanged. Digest re-stamped. ACK, NOT A CAPTURE (owner confirmation pending).
     drift_ack: 2026-10-15
   - id: nucleo-l073rz
     # 2026-09-16 (#1128): Cortex-M browser JIT rides `Machine::advance_with_window_runner` — the advance loop now plans and commits the window (tick cadence, reset drains, idle fast forward) and a compiled backend only supplies the instruction stream; the JIT batch gates (takeable exception, SysTick crossing, SYSRESETREQ latch) become public for `jit-framework` so the browser adapter refuses the same windows `run_jit_loop` does. In `cortex_m.rs`: `note_chained` only counts a chain that retired instructions, `sysreset_latched` is pub. Interpreter path unchanged — the gates are the ones `run_jit_loop` already used; pinned by `cortex_m_jit_alu_lockstep` and new window-runner cadence tests. No silicon capture pins JIT.
@@ -4185,7 +4193,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: daebe60faf92691bb22649f5921468ad4364f08675c4b520eb0c73543530cfde
+    drift_ack_digest: f2904443b093fb40d868ff156c2e914050dc64188d297e1a7d3ea4124072201a
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -4583,6 +4591,10 @@ boards:
     # dropping reads, and fire only on request; a word store to a DMA register
     # is one write. No register map or reset value changed. No physical probe
     # connected. Approved by the maintainer. ACK, NOT A CAPTURE.
+    # 2026-10-15 (fork F0 RCC profile): watched rcc.rs gained a separate
+    # RccRegisterLayout::Stm32F0 / F0Rcc used only by a chip yaml that selects
+    # profile stm32f0; this board's RCC family code and register behaviour are
+    # unchanged. Digest re-stamped. ACK, NOT A CAPTURE (owner confirmation pending).
     drift_ack: 2026-10-15
   - id: stm32f103
     # 2026-09-16 (#1128): Cortex-M browser JIT rides `Machine::advance_with_window_runner` — the advance loop now plans and commits the window (tick cadence, reset drains, idle fast forward) and a compiled backend only supplies the instruction stream; the JIT batch gates (takeable exception, SysTick crossing, SYSRESETREQ latch) become public for `jit-framework` so the browser adapter refuses the same windows `run_jit_loop` does. In `cortex_m.rs`: `note_chained` only counts a chain that retired instructions, `sysreset_latched` is pub. Interpreter path unchanged — the gates are the ones `run_jit_loop` already used; pinned by `cortex_m_jit_alu_lockstep` and new window-runner cadence tests. No silicon capture pins JIT.
@@ -5030,7 +5042,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: 8b721264ff611bfbb3fcb42b0942e48e422124bd8daec4ed9fc5149361d88960
+    drift_ack_digest: 658ead9e811d57a60c3f85db0dc8dfb6d530bf43c2db354b80f351f92cf05d0a
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -5499,6 +5511,10 @@ boards:
     # dropping reads, and fire only on request; a word store to a DMA register
     # is one write. No register map or reset value changed. No physical probe
     # connected. Approved by the maintainer. ACK, NOT A CAPTURE.
+    # 2026-10-15 (fork F0 RCC profile): watched rcc.rs gained a separate
+    # RccRegisterLayout::Stm32F0 / F0Rcc used only by a chip yaml that selects
+    # profile stm32f0; this board's RCC family code and register behaviour are
+    # unchanged. Digest re-stamped. ACK, NOT A CAPTURE (owner confirmation pending).
     drift_ack: 2026-10-15
   - id: stm32f407
     # 2026-09-16 (#1128): Cortex-M browser JIT rides `Machine::advance_with_window_runner` — the advance loop now plans and commits the window (tick cadence, reset drains, idle fast forward) and a compiled backend only supplies the instruction stream; the JIT batch gates (takeable exception, SysTick crossing, SYSRESETREQ latch) become public for `jit-framework` so the browser adapter refuses the same windows `run_jit_loop` does. In `cortex_m.rs`: `note_chained` only counts a chain that retired instructions, `sysreset_latched` is pub. Interpreter path unchanged — the gates are the ones `run_jit_loop` already used; pinned by `cortex_m_jit_alu_lockstep` and new window-runner cadence tests. No silicon capture pins JIT.
@@ -5909,7 +5925,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: e7ec04a6fec9f00f15d40af116281538f8bcca138d4b35d646a5b0536d632497
+    drift_ack_digest: a067315bd5367cc54ceca60416c909c7ce7da1373e4f1af596ea7e6e1bf9c5fc
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -6317,6 +6333,10 @@ boards:
     # dropping reads, and fire only on request; a word store to a DMA register
     # is one write. No register map or reset value changed. No physical probe
     # connected. Approved by the maintainer. ACK, NOT A CAPTURE.
+    # 2026-10-15 (fork F0 RCC profile): watched rcc.rs gained a separate
+    # RccRegisterLayout::Stm32F0 / F0Rcc used only by a chip yaml that selects
+    # profile stm32f0; this board's RCC family code and register behaviour are
+    # unchanged. Digest re-stamped. ACK, NOT A CAPTURE (owner confirmation pending).
     drift_ack: 2026-10-15
   - id: esp32s3
     # 2026-09-16 (#jit-xtensa-browser): generic Xtensa BB emit core + browser adapter. `xtensa_lx7.rs` gains only `invalidate_for_data_write` — a public forwarder to the existing `maybe_invalidate_for_write` so JIT-committed stores run the same SMC invalidation the S8i/S32i interpreter arms run (no interpreter behavior change; the existing sub-word rules are reused). Hot-block dispatch and every interpreter arm are untouched; the new shapes are browser-only and refused when unsafe. Native interpreter-identity tests in `xtensa_jit/variable.rs`. No silicon capture pins the browser JIT.
