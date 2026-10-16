@@ -313,7 +313,7 @@ fn esp32_out_signal_name(idx: u32) -> Option<&'static str> {
 /// wanted edges on both families wrote the same `impl` twice, and every
 /// call site accepting an observer carried a two-trait bound that no third
 /// family could satisfy without a third copy of all of it.
-pub use crate::peripherals::device::GpioObserver;
+pub use crate::peripherals::device::{GpioObserver, PadSource};
 
 /// ESP32-classic GPIO peripheral.
 pub struct Esp32Gpio {
@@ -384,6 +384,9 @@ pub struct Esp32Gpio {
     /// passed to `GpioObserver::on_pin_change`; no firmware register reads it.
     anchor_tick: u64,
     observers: Vec<Arc<dyn GpioObserver>>,
+    /// Last [`PadSource`] reported to the observers, per pad. Only read and
+    /// written while an observer is installed.
+    pad_sources: [PadSource; PAD_COUNT as usize],
 }
 
 impl Esp32Gpio {
@@ -411,11 +414,49 @@ impl Esp32Gpio {
             cycle: 0,
             anchor_tick: 0,
             observers: Vec::new(),
+            pad_sources: [PadSource::Latch; PAD_COUNT as usize],
         }
     }
 
     pub fn add_observer(&mut self, obs: Arc<dyn GpioObserver>) {
+        // Tell the new observer what drives every pad now, so it knows this
+        // port reports sources (see `GpioObserver::on_pad_source`).
+        for pin in 0..PAD_COUNT {
+            obs.on_pad_source(pin, self.pad_source(pin));
+        }
         self.observers.push(obs);
+        self.pad_sources = std::array::from_fn(|pin| self.pad_source(pin as u8));
+    }
+
+    /// What drives pad `pin` now: an LEDC channel the output matrix routes to
+    /// it (`LEDC_HS_SIG_OUT0..7` are channels 0..7, `LEDC_LS_SIG_OUT0..7` are
+    /// 8..15, the order the LEDC model reports duties in), another peripheral
+    /// signal, or the latch.
+    fn pad_source(&self, pin: u8) -> PadSource {
+        match self.matrix_signal(pin) {
+            None | Some(SIG_GPIO_OUT) => PadSource::Latch,
+            Some(sig) if (SIG_LEDC_HS0..SIG_LEDC_HS0 + 16).contains(&sig) => {
+                PadSource::Ledc((sig - SIG_LEDC_HS0) as u8)
+            }
+            Some(_) => PadSource::Peripheral,
+        }
+    }
+
+    /// After a write to ENABLE or `FUNCn_OUT_SEL_CFG`: report every pad whose
+    /// source changed.
+    fn notify_pad_sources(&mut self) {
+        if self.observers.is_empty() {
+            return;
+        }
+        for pin in 0..PAD_COUNT {
+            let now = self.pad_source(pin);
+            if self.pad_sources[pin as usize] != now {
+                self.pad_sources[pin as usize] = now;
+                for obs in &self.observers {
+                    obs.on_pad_source(pin, now);
+                }
+            }
+        }
     }
 
     pub fn out_value(&self) -> u32 {
@@ -1051,6 +1092,7 @@ impl Esp32Gpio {
         // handed a net pad to a peripheral line.
         if matches!(word_off, 0x20..=0x34 | FUNC_IN_SEL..FUNC_OUT_SEL_END) {
             self.sync_net_routes();
+            self.notify_pad_sources();
         }
     }
 

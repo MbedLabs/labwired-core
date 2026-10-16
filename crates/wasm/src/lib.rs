@@ -3382,6 +3382,41 @@ external_devices:
         drop(sim);
     }
 
+    /// The browser boot path must read the partition table and bring up NVS,
+    /// as the CLI path does (`crates/core/tests/e2e_labwired_ereader.rs`).
+    /// Before the browser ran the real esp_flash driver and seeded
+    /// `g_rom_flashchip`, every classic-ESP32 lab printed these two lines.
+    #[test]
+    fn wasm_simulator_ereader_boot_finds_nvs_and_coredump_partitions() {
+        let Some(fw) = ereader_elf_bytes() else {
+            eprintln!("[skip] no ereader elf");
+            return;
+        };
+        let mut sim =
+            WasmSimulator::new_from_config(&system_yaml(), &chip_yaml(), &fw, JsValue::NULL)
+                .expect("new_from_config");
+        sim.install_arduino_esp32_quirks(&fw).expect("quirks");
+        sim.set_idle_fast_forward_enabled(true);
+        let rec = sim.recommended_tick_interval();
+        sim.set_peripheral_tick_interval(rec);
+        let mut uart = Vec::new();
+        for _ in 0..20 {
+            sim.step_with_esp32_aids(1_000_000).expect("step");
+            uart.extend(sim.drain_uart_output());
+        }
+        let text = String::from_utf8_lossy(&uart);
+        assert!(
+            !text.is_empty(),
+            "the ereader prints its own markers; empty serial means the boot did not run"
+        );
+        for bad in ["Failed to initialize NVS", "No core dump partition found"] {
+            assert!(
+                !text.contains(bad),
+                "browser boot printed {bad:?}. Serial:\n{text}"
+            );
+        }
+    }
+
     /// PR-I: sequential WasmSimulator sessions in one process must not inherit
     /// the prior session's fake timer / APPCPU TLS and fault at ~0x33xxxx.
     #[test]

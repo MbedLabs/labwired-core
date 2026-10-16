@@ -670,6 +670,27 @@ pub trait GpioObserver: Send + Sync + std::fmt::Debug {
         _sim_cycle: u64,
     ) {
     }
+
+    /// Fired when the source that drives pad `pin` changes: the port's own
+    /// output latch, an LEDC channel, or another peripheral signal through a
+    /// pin matrix. A GPIO model that reports sources also calls this once per
+    /// pad when the observer is added, so an observer can tell "this pad is on
+    /// the latch" from "this port never says". `on_pin_change` sees only the
+    /// latch; a pad a peripheral drives moves without it. Default: ignored.
+    fn on_pad_source(&self, _pin: u8, _source: PadSource) {}
+}
+
+/// What drives a pad right now, as a GPIO model with a pin matrix reports it
+/// through [`GpioObserver::on_pad_source`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PadSource {
+    /// The port's output latch, or nothing (output driver off).
+    Latch,
+    /// LEDC channel `channel`, numbered as the chip's LEDC model numbers the
+    /// channels it reports to [`crate::peripherals::LedcDutyObserver`].
+    Ledc(u8),
+    /// Any other peripheral signal.
+    Peripheral,
 }
 
 // ── Tier 2 pin-drive collection ─────────────────────────────────────────────
