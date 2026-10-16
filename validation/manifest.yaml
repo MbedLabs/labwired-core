@@ -598,7 +598,6 @@ boards:
     # (CSN, CSNPOL, IFTIMING.CSNDUR, DCX) at 0x4002F000; spi.rs keeps an nRF net
     # transfer in the bus-tick set. No register map or reset value of this board
     # changed. Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
-    drift_ack: 2026-10-15
     # 2026-10-16 (#1394 nRF SysTick): configs/chips/nrf52840.yaml gains the Cortex-M
     # core SysTick block at 0xE000E010 (16B). It was missing, so Arduino and Zephyr
     # firmware faulted on its first SYST_CSR write. Core PPB peripheral only: no
@@ -1056,7 +1055,6 @@ boards:
     # (CSN, CSNPOL, IFTIMING.CSNDUR, DCX) at 0x4002F000; spi.rs keeps an nRF net
     # transfer in the bus-tick set. No register map or reset value of this board
     # changed. Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
-    drift_ack: 2026-10-15
     # 2026-10-16 (#1394 nRF SysTick): configs/chips/nrf52840.yaml gains the Cortex-M
     # core SysTick block at 0xE000E010 (16B). It was missing, so Arduino and Zephyr
     # firmware faulted on its first SYST_CSR write. Core PPB peripheral only: no
