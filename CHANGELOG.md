@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- A servo without `ledc_channel` follows the LEDC channel the GPIO matrix
+  routes to its pad. Before, it observed all 16 channels, so every
+  `ledcWrite` moved every servo: four servos on GPIO25/26/27/33 (channels
+  0..3) all showed the angle of the last write. The classic ESP32 GPIO
+  reports each pad's source (`GpioObserver::on_pad_source`: latch, LEDC
+  channel, other peripheral). A port that does not report sources keeps the
+  old behaviour.
 - Classic ESP32 Arduino fast boot: the BROM `gpio_matrix_out` thunk now
   writes `GPIO_FUNCn_OUT_SEL_CFG` (signal, `OUT_INV_SEL`, `OEN_INV_SEL`)
   instead of returning without effect. `ledcAttachPin`, `spiAttach*` and

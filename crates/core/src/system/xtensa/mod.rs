@@ -749,7 +749,8 @@ board_io: []
     fn classic_ledc_write_us(bus: &mut SystemBus, ch: u64, us: u32) {
         let base = CLASSIC_LEDC + ch * 0x14;
         bus.write_u32(base, (1 << 2) | (ch / 2) as u32).unwrap();
-        bus.write_u32(base + 0x08, (us * 16384 / 20000) << 4).unwrap();
+        bus.write_u32(base + 0x08, (us * 16384 / 20000) << 4)
+            .unwrap();
         bus.write_u32(base + 0x0C, 1 << 31).unwrap();
     }
 
@@ -793,7 +794,11 @@ board_io: []
         // A later write on one channel moves only the servo on that channel.
         classic_ledc_write_us(&mut bus, 1, 2400);
         for (id, angle) in classic_servo_angles(&bus) {
-            let w = if id == "elbow" { 180.0 } else { want[id.as_str()] };
+            let w = if id == "elbow" {
+                180.0
+            } else {
+                want[id.as_str()]
+            };
             assert!((angle - w).abs() < 1.0, "{id}: shaft {angle}, want {w}");
         }
     }
@@ -811,7 +816,11 @@ board_io: []
         }
         classic_route_hs(&mut bus, 25, 0);
         for (id, angle) in classic_servo_angles(&bus) {
-            let w = if id == "shoulder" { sg90_angle(2000) } else { 0.0 };
+            let w = if id == "shoulder" {
+                sg90_angle(2000)
+            } else {
+                0.0
+            };
             assert!((angle - w).abs() < 1.0, "{id}: shaft {angle}, want {w}");
         }
     }
