@@ -1304,7 +1304,7 @@
       "device_type": "ov3660",
       "label": "OV3660 Camera",
       "summary": "OmniVision 3 MP camera: SCCB control at 0x3C plus 8-bit DVP frames into the ESP32-S3 LCD_CAM.",
-      "detail": "SCCB register file with 16-bit addressing (chip ID 0x3660, software reset). Frames follow the output window (0x3808-0x380B) and format (0x4300: RGB565, YUV422, Y8) the driver programs, and stream through LCD_CAM's camera slave and GDMA exactly as esp32-camera expects. The scene is synthetic: drive `pattern`, `brightness` and `motion`; the colour-bar test-pattern bit (0x503D[7]) overrides it. JPEG output is not modelled (no frames). connection: the I2C controller carrying SIOD/SIOC (esp32-camera uses i2c1 by default).",
+      "detail": "SCCB register file with 16-bit addressing (chip ID 0x3660, software reset). Frames follow the output window (0x3808-0x380B) and format (0x4300: RGB565, YUV422, Y8) the driver programs, and stream through LCD_CAM's camera slave and GDMA exactly as esp32-camera expects. The scene is synthetic: drive `pattern`, `brightness` and `motion`; the colour-bar test-pattern bit (0x503D[7]) overrides it. JPEG mode (0x3821[5]) emits real baseline JPEG frames at the quality in 0x4407. connection: the I2C controller carrying SIOD/SIOC (esp32-camera uses i2c1 by default).",
       "transport": "i2c",
       "category": "i2c",
       "config_keys": [
@@ -3074,7 +3074,7 @@
         {
           "name": "ledc_channel",
           "ty": "int",
-          "doc": "Optional ESP32 LEDC channel (0..15). When omitted, all 16 channels observe."
+          "doc": "Optional ESP32 LEDC channel (0..15). When omitted, the servo follows the channel the GPIO matrix routes to its pad."
         }
       ],
       "labs": [],

@@ -3821,6 +3821,26 @@ impl<C: Cpu> Machine<C> {
             //    to the next scheduled event; we only skip empty spin. Bus
             //    stays CPU-agnostic: chip register maps live in peripheral
             //    models, not SystemBus.
+            // A dual-core machine is idle only when BOTH cores are. The skip
+            // moves machine time without stepping either core, so a skip while
+            // the secondary runs takes that time away from it: an ESP32 sketch
+            // whose loopTask runs on the APP CPU while the PRO CPU sits in
+            // WAITI got ~1 % of its cycles, and a CCOUNT-timed 20 ms servo
+            // frame took ~2 s of machine time. A parked secondary keeps its
+            // own wake deadline (CCOMPARE0) and its CCOUNT moves with the skip.
+            let mut secondary_wake = None;
+            if let Some(sec) = self.cpu_secondary.as_ref() {
+                match sec.secondary_execution_state() {
+                    SecondaryExecutionState::Active => return 0,
+                    SecondaryExecutionState::ParkedIdle => {
+                        if sec.idle_fast_forward_budget(&self.bus).is_none() {
+                            return 0;
+                        }
+                        secondary_wake = sec.parked_wake_deadline_cycles();
+                    }
+                    SecondaryExecutionState::ResetHeld => {}
+                }
+            }
             let wfi_budget = self.cpu.idle_fast_forward_budget(&self.bus);
             let timer_poll = !cycle_accurate && self.bus.take_timer_poll_coalesce_eligible();
             let mut budget = match wfi_budget {
@@ -3835,6 +3855,9 @@ impl<C: Cpu> Machine<C> {
                 return 0;
             }
             budget = budget.min(remaining);
+            if let Some(until) = secondary_wake {
+                budget = budget.min(until);
+            }
             if let Some(deadline) = self.bus.next_cpu_interrupt_deadline_cycle() {
                 budget = budget.min(deadline.saturating_sub(self.total_cycles));
             }
@@ -3875,6 +3898,11 @@ impl<C: Cpu> Machine<C> {
             }
             let skipped = budget.min(u32::MAX as u64) as u32;
             self.cpu.fast_forward_idle_cycles(skipped as u64);
+            if let Some(sec) = self.cpu_secondary.as_mut() {
+                if sec.secondary_execution_state() == SecondaryExecutionState::ParkedIdle {
+                    sec.fast_forward_idle_cycles(skipped as u64);
+                }
+            }
             self.total_cycles += skipped as u64;
             self.idle_fast_forward_cycles_skipped += skipped as u64;
             self.bus.set_current_cycle(self.total_cycles);

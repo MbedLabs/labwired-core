@@ -154,6 +154,7 @@ required-features = ["mlx90640-decode-test"]
 labwired-loader = { path = "../loader" }
 svd-ingestor = { path = "../svd-ingestor" }
 svd-parser = "0.14"
+jpeg-decoder = { version = "0.3", default-features = false }
 
 [[test]]
 name = "qemu_arm_core"
