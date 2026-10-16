@@ -1474,7 +1474,13 @@ impl crate::Bus for SystemBus {
         &self,
         pc: u32,
     ) -> Option<crate::peripherals::esp_xtensa_common::rom_thunks::RomThunkFn> {
-        SystemBus::get_rom_thunk(self, pc)
+        let thunk = SystemBus::get_rom_thunk(self, pc);
+        // A thunk is host code with effects of its own (an APP_CPU release,
+        // a cross-core hand-off): an armed batch ends on it, as on a device.
+        if thunk.is_some() {
+            self.batch_stop.note_device_access();
+        }
+        thunk
     }
 
     fn route_irq_source_to_cpu_irq(&self, source_id: u32) -> Option<u8> {
