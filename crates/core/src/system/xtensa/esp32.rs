@@ -446,13 +446,16 @@ pub fn configure_xtensa_esp32(bus: &mut SystemBus) -> XtensaLx7 {
                                                                  // intr_matrix_set is at 0x4000_681c (above); cpu1 calls intr_matrix_set
                                                                  // for its own intr table — same thunk works since we don't model the
                                                                  // interrupt matrix per-CPU.
-                                                                 // GPIO matrix routing helpers — used by Arduino's spiAttach{SCK,MOSI,MISO}
-                                                                 // and HardwareSerial pin attach. We don't model the GPIO matrix; signals
-                                                                 // routed via SPI3 controller flow directly to attached SPI devices.
-                                                                 // gpio_matrix_in (0x4000_9edc) is the same BROM entry already registered
-                                                                 // above as esp_rom_gpio_connect_in_signal — just two ABI-compatible names
-                                                                 // for the same function. Only register the new alias (gpio_matrix_out).
-    rom_bank.register(0x4000_9f0c, rom_thunks::nop_return_zero); // gpio_matrix_out
+                                                                 // GPIO output matrix — `gpio_matrix_out(gpio, signal, out_inv, oen_inv)`,
+                                                                 // what Arduino's `pinMatrixOutAttach` calls for `ledcAttachPin`,
+                                                                 // spiAttach{SCK,MOSI} and HardwareSerial pin attach. It writes the
+                                                                 // pad's `GPIO_FUNCn_OUT_SEL_CFG`, which the classic GPIO port resolves
+                                                                 // pad routing against (LEDC 71..86, SPI, UART). It was a nop, so a pad
+                                                                 // attached with `ledcAttachPin` stayed a plain GPIO and showed 0 edges
+                                                                 // although the LEDC model drove its signal. gpio_matrix_in
+                                                                 // (0x4000_9edc) is the same BROM entry already registered above as
+                                                                 // esp_rom_gpio_connect_in_signal.
+    rom_bank.register(0x4000_9f0c, gpio_matrix_out); // gpio_matrix_out
 
     // ESP-IDF partition-table verification uses ROM MD5 (classic MD5Context
     // layout). Real implementations — CONFIG_PARTITION_TABLE_MD5 is on for
@@ -937,6 +940,29 @@ pub(crate) const ESP32_PERIPHERALS: &[(&str, &str, u64, u64, Option<u32>)] = &[
     ("host_slc", "esp32_sdio",     0x3FF5_8000, 0x1000, None),
 ];
 
+/// `GPIO_FUNC0_OUT_SEL_CFG_REG` (`DR_REG_GPIO_BASE` 0x3FF4_4000 + 0x530), stride 4.
+const GPIO_FUNC0_OUT_SEL_CFG: u64 = 0x3FF4_4530;
+
+/// BROM `gpio_matrix_out(gpio, signal_idx, out_inv, oen_inv)`: write the
+/// pad's `FUNCn_OUT_SEL_CFG` = `signal_idx` (bits 8:0) | `out_inv` << 9
+/// (`OUT_INV_SEL`) | `oen_inv` << 11 (`OEN_INV_SEL`), `OEN_SEL` clear (TRM
+/// §4.12, esp-idf `rom/gpio.h`). Output enable stays with `GPIO_ENABLE`, which
+/// `pinMode(OUTPUT)` sets before the attach. A pad number past the 40 pads is
+/// ignored, as the ROM does.
+fn gpio_matrix_out(cpu: &mut XtensaLx7, bus: &mut dyn Bus) -> crate::SimResult<()> {
+    let n = cpu.ps.callinc() * 4;
+    let gpio = cpu.regs.read_logical(n + 2);
+    let signal = cpu.regs.read_logical(n + 3) & 0x1FF;
+    let out_inv = cpu.regs.read_logical(n + 4) & 1;
+    let oen_inv = cpu.regs.read_logical(n + 5) & 1;
+    if gpio < 40 {
+        let value = signal | (out_inv << 9) | (oen_inv << 11);
+        bus.write_u32(GPIO_FUNC0_OUT_SEL_CFG + u64::from(gpio) * 4, value)?;
+    }
+    rom_thunks::RomThunkBank::return_with(cpu, 0);
+    Ok(())
+}
+
 #[cfg(test)]
 mod board_io_tests {
     use super::*;
@@ -1006,6 +1032,45 @@ mod board_io_tests {
     /// it failed with "no attached input device exposes channel 'btn/pressed'".
     /// `attach_esp32_external_devices` is this family's manifest seam and now
     /// runs the same button pass every yaml-built chip runs.
+    /// Call the `gpio_matrix_out` thunk as a CALL0 with these four arguments.
+    fn call_gpio_matrix_out(cpu: &mut XtensaLx7, bus: &mut dyn Bus, args: [u32; 4]) {
+        cpu.ps.set_callinc(0);
+        cpu.regs.write_logical(0, 0x400d_1000);
+        for (i, v) in args.into_iter().enumerate() {
+            cpu.regs.write_logical(2 + i as u8, v);
+        }
+        gpio_matrix_out(cpu, bus).expect("gpio_matrix_out");
+    }
+
+    /// `ledcAttachPin(25, 0)` ends in `gpio_matrix_out(25, 71, false, false)`.
+    /// The thunk was a nop, so FUNC25_OUT_SEL_CFG kept its 0x100 bypass value
+    /// and the pad never carried LEDC_HS_SIG_OUT0. It must hold the signal,
+    /// with the two invert bits in their TRM places, and return to the caller.
+    #[test]
+    fn gpio_matrix_out_routes_the_pad_to_the_signal() {
+        let mut bus = crate::bus::SystemBus::new();
+        let mut cpu = configure_xtensa_esp32(&mut bus);
+        let cfg = |bus: &mut crate::bus::SystemBus, pin: u64| {
+            bus.read_u32(GPIO_FUNC0_OUT_SEL_CFG + pin * 4)
+                .expect("read OUT_SEL")
+        };
+        assert_eq!(
+            cfg(&mut bus, 25),
+            0x100,
+            "reset value is the bypass sentinel"
+        );
+
+        call_gpio_matrix_out(&mut cpu, &mut bus, [25, 71, 0, 0]);
+        assert_eq!(cfg(&mut bus, 25), 71);
+        assert_eq!(cpu.pc, 0x400d_1000, "the thunk returns to a0");
+
+        call_gpio_matrix_out(&mut cpu, &mut bus, [26, 72, 1, 1]);
+        assert_eq!(cfg(&mut bus, 26), 72 | (1 << 9) | (1 << 11));
+
+        call_gpio_matrix_out(&mut cpu, &mut bus, [40, 71, 0, 0]);
+        assert_eq!(cfg(&mut bus, 39), 0x100, "a pad past GPIO39 writes nothing");
+    }
+
     #[test]
     fn board_io_button_attaches_on_classic_esp32() {
         let mut bus = crate::bus::SystemBus::new();
