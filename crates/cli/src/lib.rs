@@ -2923,6 +2923,7 @@ mod test_outcome_golden_tests {
             logic_edges: None,
             gpio_pins: None,
             motors: Vec::new(),
+            analog_series: None,
             stimuli: Vec::new(),
             footprint: None,
             memory: None,
