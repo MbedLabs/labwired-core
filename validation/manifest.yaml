@@ -7315,8 +7315,18 @@ boards:
     # tests/esp32s3_gdma_oracle.rs. Approved by the maintainer.
     # ACK, NOT A CAPTURE. The live re-capture owed above is still owed, and a
     # live LCD_CAM camera capture would be new evidence, not a re-capture.
+    # Same day, same change: esp32s3/gpio.rs and i2c.rs moved too. GPIO
+    # mirrors FUNCn_OUT_SEL_CFG writes into a read-only view for the I2C
+    # controllers (register storage and readback unchanged), and each I2C
+    # controller attaches slaves through the generic I2cSlaveHost path and
+    # can host GPIO-matrix twins (a slave claims its address only while the
+    # matrix routes that controller's SCL/SDA to its pads). No reset value or
+    # register readback in the captured windows changed. Ran:
+    # tests/esp32s3_camera_dvp.rs (incl. the I2C1-through-matrix test),
+    # world_gpio_net_buses, and the lib suites. Approved by the maintainer.
+    # ACK, NOT A CAPTURE.
     drift_ack: 2026-10-16
-    drift_ack_digest: e02ef9c65693f1447fad331d6723fe31ed591ed9af67cb3869a54d65954cf583
+    drift_ack_digest: 14d9f25bcbc9827fb8c0c0a2f87dde3b5b04a44709557ea34f3736d64f8a393d
 
   - id: esp32s3-zero
     # Board variant of esp32s3: same silicon (LX7), 4 MiB flash / 480 KiB RAM.

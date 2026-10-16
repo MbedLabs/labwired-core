@@ -55,6 +55,22 @@ use std::sync::mpsc::{Receiver, Sender};
 /// Routing-aware controller families retain their existing attachment path.
 pub trait I2cSlaveHost {
     fn attach_slave(&mut self, device: Box<dyn I2cDevice>);
+
+    /// How this controller reaches pads through a GPIO output matrix, for a
+    /// controller on a part where any I²C can drive any pad (the ESP32
+    /// family). `None` — the default — for a controller with fixed pins.
+    /// See [`crate::peripherals::i2c_matrix`].
+    fn matrix_reach(&self) -> Option<crate::peripherals::i2c_matrix::I2cMatrixReach> {
+        None
+    }
+
+    /// Hand this controller the chip's live output matrix. Called once at bus
+    /// wiring time; ignored by a controller with fixed pins.
+    fn set_pad_matrix(
+        &mut self,
+        _matrix: std::sync::Arc<dyn crate::peripherals::i2c_matrix::PadOutMatrix>,
+    ) {
+    }
 }
 
 pub trait I2cDevice: Send {

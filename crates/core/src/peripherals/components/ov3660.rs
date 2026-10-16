@@ -404,6 +404,11 @@ pub struct Ov3660Sccb {
     address: u8,
     sensor: Arc<Ov3660>,
     component_id: Option<String>,
+    /// The handle that owns the part's stimulus and logs. A matrix twin (the
+    /// same sensor reached through another controller) carries neither, or
+    /// the stimulus walk would find the camera twice and refuse it as
+    /// ambiguous.
+    primary: bool,
 }
 
 impl Ov3660Sccb {
@@ -412,6 +417,17 @@ impl Ov3660Sccb {
             address,
             sensor,
             component_id: None,
+            primary: true,
+        }
+    }
+
+    /// A second SCCB handle on the same sensor, for another I²C controller
+    /// that reaches its pads through the GPIO matrix
+    /// (`SystemBus::attach_i2c_matrix_twins`).
+    pub fn twin(address: u8, sensor: Arc<Ov3660>) -> Self {
+        Self {
+            primary: false,
+            ..Self::new(address, sensor)
         }
     }
 }
@@ -451,6 +467,9 @@ impl I2cDevice for Ov3660Sccb {
     }
 
     fn logs(&self) -> Vec<crate::peripheral_log::PeripheralLog> {
+        if !self.primary {
+            return Vec::new();
+        }
         vec![crate::peripheral_log::PeripheralLog::new(
             "sccb",
             self.sensor.lock().log.clone(),
@@ -458,6 +477,9 @@ impl I2cDevice for Ov3660Sccb {
     }
 
     fn as_sim_input_mut(&mut self) -> Option<&mut dyn SimInput> {
+        if !self.primary {
+            return None;
+        }
         Some(self)
     }
 }
@@ -542,6 +564,17 @@ impl PeripheralKit for Ov3660Kit {
         if !powered {
             return Ok(());
         }
+        // SIOD/SIOC are two pads; on a chip whose I²C controllers reach any pad
+        // through the GPIO matrix the camera answers whichever controller the
+        // firmware routes there. `esp32-camera` opens I2C1 while the canvas
+        // names the controller its pin table offers (I2C0 on the S3), so
+        // without twins the probe NACKs. No route, or fixed-pin controllers:
+        // nothing is added.
+        let connection = ctx.ext.connection.clone();
+        let route = ctx.ext.route.clone();
+        ctx.bus.attach_i2c_matrix_twins(&connection, &route, || {
+            Box::new(Ov3660Sccb::twin(address, sensor.clone()))
+        });
         // Bind the DVP output to the chip's camera interface (ESP32-S3:
         // LCD_CAM's camera slave). On a chip without one the SCCB side still
         // works (probe, ID, register I/O) and no frames are produced, which is

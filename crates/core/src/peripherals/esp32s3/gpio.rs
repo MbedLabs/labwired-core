@@ -310,6 +310,42 @@ pub struct Esp32s3Gpio {
     /// Bus cycle clock — stamps pin edges when the walk is deleted.
     clock: Option<CycleClock>,
     observers: Vec<Arc<dyn GpioObserver>>,
+    /// Lock-free mirror of every pad's `FUNCn_OUT_SEL_CFG.out_sel`, shared with
+    /// the I²C controllers so a slave can be reached through whichever one the
+    /// firmware routes to its pads (see `peripherals::i2c_matrix`). Kept in
+    /// step by [`Self::set_reg_masked`], the one writer of those registers.
+    out_sel_view: Arc<OutSelView>,
+}
+
+/// The S3 output matrix as [`crate::peripherals::i2c_matrix::PadOutMatrix`]:
+/// one `out_sel` per pad, readable without the GPIO model.
+#[derive(Debug)]
+pub struct OutSelView {
+    sel: Vec<std::sync::atomic::AtomicU32>,
+}
+
+impl OutSelView {
+    fn new() -> Self {
+        Self {
+            sel: (0..PAD_COUNT)
+                .map(|_| std::sync::atomic::AtomicU32::new(SIG_GPIO_OUT))
+                .collect(),
+        }
+    }
+
+    fn set(&self, pad: u8, signal: u32) {
+        if let Some(cell) = self.sel.get(pad as usize) {
+            cell.store(signal, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+impl crate::peripherals::i2c_matrix::PadOutMatrix for OutSelView {
+    fn out_signal(&self, pad: u8) -> Option<u32> {
+        self.sel
+            .get(pad as usize)
+            .map(|cell| cell.load(std::sync::atomic::Ordering::Relaxed))
+    }
 }
 
 impl Esp32s3Gpio {
@@ -345,6 +381,7 @@ impl Esp32s3Gpio {
             cycle: 0,
             clock: None,
             observers: Vec::new(),
+            out_sel_view: Arc::new(OutSelView::new()),
         }
     }
 
@@ -949,8 +986,18 @@ impl Esp32s3Gpio {
         if w < NWORDS {
             if let Some((_, wmask)) = spec(w) {
                 self.regs[w] = (self.regs[w] & !wmask) | (value & wmask);
+                if (FUNC0_OUT_SEL_CFG..=FUNC53_OUT_SEL_CFG).contains(&off) {
+                    let pad = ((off - FUNC0_OUT_SEL_CFG) / 4) as u8;
+                    self.out_sel_view.set(pad, self.regs[w] & OUT_SEL_MASK);
+                }
             }
         }
+    }
+
+    /// The live output-matrix view (see [`OutSelView`]), for the bus to hand
+    /// to the I²C controllers at wiring time.
+    pub fn out_sel_view(&self) -> Arc<OutSelView> {
+        self.out_sel_view.clone()
     }
 
     /// Internal: read a 32-bit register at the given word-aligned offset.

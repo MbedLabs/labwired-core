@@ -53,6 +53,7 @@ pub mod hc_sr04;
 pub mod hsem;
 pub mod i2c;
 pub(crate) mod i2c_bitbus;
+pub mod i2c_matrix;
 pub mod i2c_temp_sensor;
 pub mod i2c_waveform;
 pub mod imx_ccm;

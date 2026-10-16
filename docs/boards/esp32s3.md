@@ -104,6 +104,18 @@ external_devices:
     connection: "i2c1"
 ```
 
+A camera named on `i2c0` with a pad `route:` (what the Studio canvas emits)
+works too. Any S3 I²C controller can drive any pad through the GPIO matrix,
+so the camera also answers the other controller, exactly while the firmware
+routes that controller's SCL/SDA output signals (`FUNCn_OUT_SEL_CFG`, I2CEXT1
+= 91/92) to the camera's pads. `esp32-camera` opens I2C1 and routes it to
+SIOC/SIOD, so it finds the camera however the lab names the bus:
+
+```yaml
+    connection: "i2c0"
+    route: { sda: "GPIO4", scl: "GPIO5" }
+```
+
 Unmodified `esp32-camera` firmware runs against it: probe and chip ID
 (0x3660), the sensor init table, `set_framesize` / `set_pixformat`, then
 `esp_camera_fb_get()` returning frames in internal RAM or PSRAM. Frames

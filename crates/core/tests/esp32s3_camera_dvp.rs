@@ -406,3 +406,90 @@ fn the_ov3660_kit_binds_sccb_stimulus_and_dvp_from_a_manifest() {
     // Black in YUYV: Y = 0, U = V = 128.
     assert_eq!(first_block, [0u8, 128, 0, 128].repeat(NODE as usize / 4));
 }
+
+// ── I²C over the GPIO matrix ─────────────────────────────────────────────
+const I2C1_BASE: u64 = 0x6002_7000;
+const I2C_CTR: u64 = I2C1_BASE + 0x04;
+const I2C_SLAVE_ADDR: u64 = I2C1_BASE + 0x10;
+const I2C_DATA: u64 = I2C1_BASE + 0x1C;
+const I2C_INT_RAW: u64 = I2C1_BASE + 0x20;
+const I2C_INT_CLR: u64 = I2C1_BASE + 0x24;
+const I2C_CMD0: u64 = I2C1_BASE + 0x58;
+const I2C_TRANS_START: u32 = 1 << 5;
+const I2C_INT_NACK: u32 = 1 << 10;
+const I2C_INT_TRANS_COMPLETE: u32 = 1 << 7;
+const GPIO_FUNC_OUT_SEL: u64 = 0x6000_4554;
+const I2CEXT1_SCL_OUT: u32 = 91;
+const I2CEXT1_SDA_OUT: u32 = 92;
+
+/// `SCCB_Read16(0x3C, reg)` as `esp32-camera` issues it on I2C1: a write of
+/// the register pointer, a repeated start, a one-byte read. Returns the byte
+/// and whether any address frame went unacknowledged.
+fn i2c1_read16(rig: &mut Rig, reg: u16) -> (u8, bool) {
+    const RSTART: u32 = 6 << 11;
+    const WRITE: u32 = 1 << 11;
+    const READ: u32 = 3 << 11;
+    const STOP: u32 = 2 << 11;
+    const ACK_CHECK: u32 = 1 << 8;
+    let addr = u32::from(OV3660_SCCB_ADDR) << 1;
+    rig.wr(I2C_INT_CLR, u32::MAX);
+    rig.wr(I2C_SLAVE_ADDR, 0);
+    for b in [addr, u32::from(reg >> 8), u32::from(reg & 0xFF), addr | 1] {
+        rig.wr(I2C_DATA, b);
+    }
+    for (i, cmd) in [
+        RSTART,
+        WRITE | ACK_CHECK | 3,
+        RSTART,
+        WRITE | ACK_CHECK | 1,
+        READ | 1,
+        STOP,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        rig.wr(I2C_CMD0 + 4 * i as u64, cmd);
+    }
+    let ctr = rig.rd(I2C_CTR);
+    rig.wr(I2C_CTR, ctr | I2C_TRANS_START);
+    rig.wait_for(I2C_INT_RAW, I2C_INT_TRANS_COMPLETE, 1_000_000, "I2C1 STOP");
+    let nacked = rig.rd(I2C_INT_RAW) & I2C_INT_NACK != 0;
+    (rig.rd(I2C_DATA) as u8, nacked)
+}
+
+/// The canvas names the controller its pin table offers (`i2c0`) and the
+/// pads the camera is soldered to; `esp32-camera` opens I2C1 and routes it to
+/// those pads. The camera answers I2C1 exactly while the matrix sends I2C1's
+/// SCL/SDA to its pads — as on silicon — and not before.
+#[test]
+fn the_ov3660_answers_whichever_i2c_the_matrix_routes_to_its_pads() {
+    let mut bus = SystemBus::new();
+    let wiring = configure_xtensa_esp32s3(&mut bus, &Esp32s3Opts::default());
+    let manifest: SystemManifest = serde_yaml::from_str(
+        r#"
+name: "s3-ov3660-i2c0"
+chip: "../chips/esp32s3.yaml"
+external_devices:
+  - id: "cam"
+    type: "ov3660"
+    connection: "i2c0"
+    route:
+      sda: "GPIO4"
+      scl: "GPIO5"
+board_io: []
+"#,
+    )
+    .expect("parse manifest");
+    attach_esp32_external_devices(&mut bus, &manifest).expect("attach ov3660");
+    let mut rig = machine(bus, wiring.cpu, None);
+
+    let (_, nacked) = i2c1_read16(&mut rig, 0x300A);
+    assert!(nacked, "I2C1 not routed to the camera's pads: no ACK");
+
+    rig.wr(GPIO_FUNC_OUT_SEL + 4 * 5, I2CEXT1_SCL_OUT);
+    rig.wr(GPIO_FUNC_OUT_SEL + 4 * 4, I2CEXT1_SDA_OUT);
+    let (pid_h, nacked) = i2c1_read16(&mut rig, 0x300A);
+    assert!(!nacked, "I2C1 routed to GPIO5/GPIO4: the camera answers");
+    let (pid_l, _) = i2c1_read16(&mut rig, 0x300B);
+    assert_eq!(u16::from_be_bytes([pid_h, pid_l]), 0x3660);
+}

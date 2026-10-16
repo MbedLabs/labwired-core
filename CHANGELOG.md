@@ -30,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-boundary bus-tick pass, so the CPU keeps batching while frames flow
   (camera-to-ST7789 preview: ~3x faster per frame). Tested in
   `tests/esp32s3_camera_dvp.rs`.
+- ESP32-S3 I²C slaves reach the GPIO matrix: a part attached with a pad
+  `route:` can ask for twins on the chip's other I²C controllers, which claim
+  its address only while the firmware routes that controller's SCL/SDA to the
+  part's pads. The `ov3660` uses it, so a camera the canvas names on `i2c0`
+  answers `esp32-camera`'s I2C1 as on silicon.
 
 - Hardware chip select on `gpio_net`s for more parts. The STM32L476 SPI pad
   table routes NSS (SPI1 PA4/PA15/PE12 and SPI2 PB9/PB12/PD0 on AF5, SPI3

@@ -81,8 +81,6 @@ impl SystemBus {
             let route =
                 crate::peripherals::esp32c3::i2c::C3I2cPadRoute::from_manifest_route(route)?;
             c.push_slave_with_route(wrapped, route);
-        } else if let Some(c) = any.downcast_mut::<crate::peripherals::esp32s3::i2c::Esp32s3I2c>() {
-            c.push_slave(wrapped);
         } else if let Some(c) = any.downcast_mut::<crate::peripherals::esp32::i2c::Esp32I2c>() {
             c.push_slave(wrapped);
         } else if let Some(c) = any.downcast_mut::<crate::peripherals::nrf52::twim::Nrf52Twim>() {
@@ -713,15 +711,75 @@ impl SystemBus {
             .as_any_mut()
             .and_then(|a| a.downcast_mut::<Esp32s3I2c>())
             .map(|c| c.pad_lines_arc());
-        if let (Some(lines), Some(gpio)) = (
-            lines,
-            self.peripherals[gpio_idx]
-                .dev
-                .as_any_mut()
-                .and_then(|a| a.downcast_mut::<Esp32s3Gpio>()),
-        ) {
-            gpio.set_i2c_lines(lines);
+        let matrix = self.peripherals[gpio_idx]
+            .dev
+            .as_any_mut()
+            .and_then(|a| a.downcast_mut::<Esp32s3Gpio>())
+            .map(|gpio| {
+                if let Some(lines) = lines {
+                    gpio.set_i2c_lines(lines);
+                }
+                gpio.out_sel_view()
+            });
+        // Every I²C controller on the bus learns the live output matrix, so a
+        // slave can be reached through whichever one the firmware routes to
+        // its pads (`attach_i2c_matrix_twins`). Controllers with fixed pins
+        // ignore it.
+        if let Some(matrix) = matrix {
+            let matrix: std::sync::Arc<dyn crate::peripherals::i2c_matrix::PadOutMatrix> = matrix;
+            for p in self.peripherals.iter_mut() {
+                if let Some(host) = p.dev.i2c_slave_host() {
+                    host.set_pad_matrix(matrix.clone());
+                }
+            }
         }
+    }
+
+    /// Give a slave attached on `controller` twins on every OTHER controller
+    /// that reaches pads through the chip's GPIO output matrix. Each twin
+    /// claims its address only while that controller's SCL/SDA are routed to
+    /// the route's pads, so the slave answers whichever controller the
+    /// firmware wires to it — as it does on the board. `make` builds each twin
+    /// (a second handle on the same device state); `wrap` is the same bus-trace
+    /// choke the primary went through. Returns how many twins were attached:
+    /// 0 on a chip without a matrix, or for a route that names no `GPIOn` pads.
+    ///
+    /// See [`crate::peripherals::i2c_matrix`] for why this is per part.
+    pub fn attach_i2c_matrix_twins(
+        &mut self,
+        controller: &str,
+        route: &std::collections::BTreeMap<String, String>,
+        mut make: impl FnMut() -> Box<dyn crate::peripherals::i2c::I2cDevice>,
+    ) -> usize {
+        let Some((scl_pad, sda_pad)) = crate::peripherals::i2c_matrix::route_pads(route) else {
+            return 0;
+        };
+        let mut attached = 0;
+        for i in 0..self.peripherals.len() {
+            if self.peripherals[i].name == controller {
+                continue;
+            }
+            let name = self.peripherals[i].name.clone();
+            let Some(reach) = self.peripherals[i]
+                .dev
+                .i2c_slave_host()
+                .and_then(|h| h.matrix_reach())
+            else {
+                continue;
+            };
+            let twin = Box::new(crate::peripherals::i2c_matrix::MatrixRoutedI2c::new(
+                make(),
+                reach,
+                scl_pad,
+                sda_pad,
+            ));
+            let wrapped = bus_trace::wrap_i2c(&name, &self.bus_trace, twin);
+            if let Some(host) = self.peripherals[i].dev.i2c_slave_host() {
+                host.attach_slave(wrapped);
+                attached += 1;
+            }
+        }
+        attached
     }
 
     /// Bind the ESP32-C3 GP-SPI2 (FSPI) controller's SCK/MOSI/CS wire to the
