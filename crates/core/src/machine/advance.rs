@@ -148,7 +148,11 @@ impl<C: Cpu> Machine<C> {
         if let Some(report) = self.supply_gate(&request)? {
             return Ok(report);
         }
-        self.advance_inner(request, None)
+        let report = self.advance_inner(request, None);
+        // A deferred secondary never outlives the call: whoever looks at the
+        // machine next sees the core where lockstep would have left it.
+        self.end_secondary_defer(self.total_cycles);
+        report
     }
 
     /// Advances the machine exactly like [`Self::advance`], but executes each
@@ -184,7 +188,9 @@ impl<C: Cpu> Machine<C> {
         if let Some(report) = self.supply_gate(&request)? {
             return Ok(report);
         }
-        self.advance_inner(request, Some(&mut run_window))
+        let report = self.advance_inner(request, Some(&mut run_window));
+        self.end_secondary_defer(self.total_cycles);
+        report
     }
 
     fn advance_inner(
@@ -283,6 +289,7 @@ impl<C: Cpu> Machine<C> {
                 return Ok(state.report(AdvanceStop::CycleLimit, elapsed));
             }
 
+            self.check_secondary_defer();
             if request.idle_policy() == IdlePolicy::Configured {
                 let fuel_remaining = request
                     .limits()
@@ -315,6 +322,12 @@ impl<C: Cpu> Machine<C> {
                     }
                     continue;
                 }
+                // The primary is busy: run it alone beside a secondary whose
+                // proven poll loop is deferred, rather than in lockstep.
+                #[cfg(feature = "event-scheduler")]
+                if !request.is_single() {
+                    self.try_defer_secondary(skip_limit.unwrap_or(1 << 30));
+                }
             }
 
             self.bus.reset_mmio_activity_counters();
@@ -326,9 +339,8 @@ impl<C: Cpu> Machine<C> {
             let mode = if request.is_single() {
                 ExecutionMode::SingleDirect
             } else {
-                let secondary_active = self.cpu_secondary.as_ref().is_some_and(|sec| {
-                    sec.secondary_execution_state() == crate::SecondaryExecutionState::Active
-                });
+                let secondary_active =
+                    self.secondary_plan_state() == Some(crate::SecondaryExecutionState::Active);
                 if secondary_active {
                     ExecutionMode::RunDual
                 } else {

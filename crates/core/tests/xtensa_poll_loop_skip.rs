@@ -21,6 +21,17 @@
 //! primary sits in WAITI. Before the skip existed, the dual-core machine
 //! refused any skip while the secondary was active and the single-core one
 //! had no WAITI to skip, so both `skipped` assertions fail without it.
+//!
+//! Busy primary: the secondary runs the program while the primary never
+//! idles. It counts in a store loop, then rewrites output 1's deadline (a
+//! word the secondary's pulse loop reads) at a cycle inside the pulse wait,
+//! then counts on forever. The store lands at ~15 000, while the loop
+//! waits for output 2 (18 000); the new deadline (16 000) is before that, so a
+//! deferral that missed the store would run past it. No machine-wide skip is possible; the secondary's
+//! loop is deferred instead (`Machine::secondary_defer`) and must notice the
+//! store on the cycle it lands: output 1 drops at the NEW deadline in both
+//! runs. Without the deferral `deferred` is 0; without its store guard the
+//! deferred loop catches up on the old deadline and the records differ.
 
 #![cfg(feature = "event-scheduler")]
 
@@ -73,6 +84,23 @@ mod tests {
     ];
     /// `waiti 0; j .-3` — a core with nothing to do.
     const PARK: [u8; 6] = [0x00, 0x70, 0x00, 0x46, 0xfe, 0xff];
+    /// `busy.S`, assembled with xtensa-esp32-elf-as (esp-2021r2):
+    ///
+    /// ```text
+    ///  0: movi a3, 1250; slli a3, a3, 2   ; 5000 iterations
+    ///     movi a2, 0
+    ///  9: addi a2, a2, 1; s32i a2, a6, 0x100; bne a2, a3, 9
+    ///     movi a4, 1000; slli a4, a4, 4   ; 16000
+    ///     s32i a4, a6, 68                 ; output 1's deadline
+    /// 1b: addi a2, a2, 1; s32i a2, a6, 0x100; j 1b
+    /// ```
+    const BUSY: [u8; 36] = [
+        0x32, 0xa4, 0xe2, 0xe0, 0x33, 0x11, 0x22, 0xa0, 0x00, 0x22, 0xc2, 0x01, 0x22, 0x66, 0x40,
+        0x37, 0x92, 0xf6, 0x42, 0xa3, 0xe8, 0xc0, 0x44, 0x11, 0x42, 0x66, 0x11, 0x22, 0xc2, 0x01,
+        0x22, 0x66, 0x40, 0x86, 0xfd, 0xff,
+    ];
+    /// Output 1's deadline after the busy primary's store.
+    const MOVED_END: u32 = 16_000;
 
     /// Pulse deadlines (cycles after t0), the frame-tail deadline, and the
     /// accumulating loop's deadline.
@@ -87,6 +115,14 @@ mod tests {
         total_cycles: u64,
         skipped: u64,
         poll_skipped: u64,
+        deferred: u64,
+    }
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum Primary {
+        Alone,
+        Parked,
+        Busy,
     }
 
     fn load(bus: &mut SystemBus, at: u64, code: &[u8]) {
@@ -101,11 +137,16 @@ mod tests {
         cpu.sr.write(CCOUNT, 0);
     }
 
-    fn run(dual: bool, fast_forward: bool) -> Outcome {
+    fn run(mode: Primary, fast_forward: bool) -> Outcome {
+        let dual = mode != Primary::Alone;
         let mut bus = SystemBus::new();
         let mut primary = configure_xtensa_esp32(&mut bus);
         load(&mut bus, CODE, &FRAME);
-        load(&mut bus, IDLE, &PARK);
+        load(
+            &mut bus,
+            IDLE,
+            if mode == Primary::Busy { &BUSY } else { &PARK },
+        );
         for (i, end) in PULSE_END.iter().enumerate() {
             bus.write_u32(u64::from(DATA) + 64 + 4 * i as u64, *end)
                 .unwrap();
@@ -142,12 +183,18 @@ mod tests {
             total_cycles: machine.total_cycles,
             skipped: machine.idle_fast_forward_cycles_skipped,
             poll_skipped: machine.poll_loop_cycles_skipped,
+            deferred: machine.poll_loop_cycles_deferred,
         }
     }
 
     fn check(dual: bool) {
-        let fast = run(dual, true);
-        let reference = run(dual, false);
+        let mode = if dual {
+            Primary::Parked
+        } else {
+            Primary::Alone
+        };
+        let fast = run(mode, true);
+        let reference = run(mode, false);
         assert_eq!(reference.skipped, 0);
         // The program ran to the end in the reference run.
         assert!(
@@ -190,5 +237,37 @@ mod tests {
     #[test]
     fn poll_loop_skip_on_an_active_secondary_changes_nothing() {
         check(true);
+    }
+
+    #[test]
+    fn deferred_poll_loop_beside_a_busy_primary_changes_nothing() {
+        let fast = run(Primary::Busy, true);
+        let reference = run(Primary::Busy, false);
+        assert_eq!(reference.skipped + reference.deferred, 0);
+        assert!(
+            reference.records[11] != 0,
+            "reference never reached the end"
+        );
+        // The primary's store landed inside the wait: output 1 dropped at the
+        // moved deadline, not the one the secondary's loop first read.
+        let dt1 = reference.records[1];
+        assert!(
+            (MOVED_END..MOVED_END + 64).contains(&dt1),
+            "reference output 1: dt {dt1} vs moved end {MOVED_END}"
+        );
+        assert_eq!(
+            fast.records, reference.records,
+            "the deferral changed what the firmware recorded"
+        );
+        assert_eq!(fast.ccount, reference.ccount);
+        assert_eq!(fast.total_cycles, reference.total_cycles);
+        // The primary never idles, so nothing machine-wide was skipped; the
+        // secondary's pulse and tail waiting (~480 k cycles) ran deferred.
+        assert_eq!(fast.skipped, 0);
+        assert!(
+            fast.deferred > 440_000,
+            "deferral did not fire: {} of the ~480 k busy cycles",
+            fast.deferred
+        );
     }
 }
