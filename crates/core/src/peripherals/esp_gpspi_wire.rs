@@ -164,6 +164,10 @@ pub struct EspSpiWire {
     /// Cycle the last narration ran to — the floor the next may not reach back
     /// past, or two bursts splice into bytes neither transaction sent.
     wave_cursor: u64,
+    /// Earliest cycle at which a burst that last reported `LevelsOnly` can have
+    /// the room it lacked. Until then every flush attempt would rebuild the
+    /// same too-long narration and fail again; see [`Self::ready_in`].
+    retry_at: u64,
     /// True while a flush wakeup is in flight, so a run of transactions arms one
     /// chain rather than one per transaction.
     pub scheduled: bool,
@@ -245,8 +249,20 @@ impl EspSpiWire {
     /// Both the pacing test and the scheduler deadline, computed the ONE way, so
     /// a wakeup can never land before the burst is publishable (a wasted wakeup)
     /// or after it (a late trace).
+    ///
+    /// A burst that already failed for lack of cycles (`LevelsOnly`) waits for
+    /// the deficit it reported before anything else, cap included. Without that
+    /// a burst past the cap — a `writeBytes` of a whole camera frame at 40 MHz —
+    /// was re-narrated on every single cycle while it grew, which made the run
+    /// quadratic in the burst length.
     pub fn ready_in(&self, now: u64) -> u64 {
-        if self.words.is_empty() || self.words.len() >= WIRE_BURST_CAP {
+        if self.words.is_empty() {
+            return 0;
+        }
+        if now < self.retry_at {
+            return self.retry_at - now;
+        }
+        if self.words.len() >= WIRE_BURST_CAP {
             return 0;
         }
         let duration: u64 = self
@@ -303,18 +319,23 @@ impl EspSpiWire {
         for &(byte, framing) in &self.words {
             narrator.frame(u16::from(byte), framing);
         }
-        if let NarrationFit::LevelsOnly { .. } =
-            narrator.emit_between(&lines, self.wave_cursor, now)
+        if let NarrationFit::LevelsOnly {
+            transitions,
+            available,
+        } = narrator.emit_between(&lines, self.wave_cursor, now)
         {
             // Fewer cycles exist than the waveform has transitions, so nothing
             // was drawn. Keep the bytes and the cursor: `now` only grows, so a
             // later wakeup will have the room. Clearing here would delete bytes
             // that really crossed the bus and advance the cursor past cycles
             // nothing painted — silent, unrecoverable loss, and the reason
-            // `emit_between` is `#[must_use]`.
+            // `emit_between` is `#[must_use]`. The room arrives no sooner than
+            // the deficit, so no attempt is made before then.
+            self.retry_at = now.saturating_add(transitions.saturating_sub(available).max(1));
             return;
         }
         self.wave_cursor = now;
+        self.retry_at = 0;
         self.words.clear();
     }
 }
@@ -401,5 +422,32 @@ mod tests {
         assert_eq!(wire.ready_in(0), duration);
         assert_eq!(wire.ready_in(duration - 1), 1);
         assert_eq!(wire.ready_in(duration), 0);
+    }
+
+    /// A burst past the cap that cannot fit yet is not retried every cycle:
+    /// it waits for exactly the cycles it was short, keeps every byte, and
+    /// then publishes.
+    #[test]
+    fn a_burst_too_long_for_the_run_waits_for_its_deficit() {
+        let mut wire = EspSpiWire::default();
+        let _ = wire.pad_lines_arc(false);
+        let now = 100;
+        for _ in 0..WIRE_BURST_CAP + 1 {
+            wire.push(0xA5, SpiFraming::default(), Some(2), now);
+        }
+        // Past the cap: due at once, but 257 bytes cannot be drawn in 100
+        // cycles, so nothing is published.
+        assert_eq!(wire.ready_in(now), 0);
+        wire.flush(now, false);
+        assert!(wire.is_pending(), "no byte may be dropped");
+        let wait = wire.ready_in(now);
+        assert!(wait > 1, "the retry waits for the deficit, got {wait}");
+        // One cycle early it is still not due, so the narration is not rebuilt.
+        assert_eq!(wire.ready_in(now + wait - 1), 1);
+        wire.flush(now + wait, false);
+        assert!(
+            !wire.is_pending(),
+            "with the room it lacked, the burst publishes"
+        );
     }
 }
