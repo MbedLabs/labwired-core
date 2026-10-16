@@ -78,3 +78,22 @@ for chip in c3 c6; do
     done
     "$CC" "${ESP[@]}" "${defs[@]}" -DSLOW=1 src/esp32c_i2c_target.c -o "firmware/esp32${chip}-i2c-target-slow.elf"
 done
+# ESP32-S3 (GP-SPI2, I2C0) and classic ESP32 (VSPI master, HSPI slave, I2C0)
+# against the G071, register level, no IDF. LLVM 18 assembles Xtensa but
+# neither compiles C for it nor links it, so these are hand-written assembly
+# (src/esp32x.inc, one source per role, --defsym CHIP_ESP32=1 for the classic
+# part): llvm-mc makes a one-section object with no relocations and
+# src/xtensa_elf.py places it at IRAM, where the bare-ELF fast boot enters.
+XT_OBJ=$(mktemp -d)
+trap 'rm -rf "$XT_OBJ"' EXIT
+for chip in esp32s3 esp32; do
+    if [ "$chip" = esp32 ]; then base=0x40080000; defs=(--defsym CHIP_ESP32=1); else base=0x40378000; defs=(); fi
+    for variant in "spi_master" "spi_slave" "i2c_controller" "i2c_target" "i2c_target_slow --defsym SLOW=1"; do
+        read -r fw extra <<<"$variant"
+        read -ra extra <<<"$extra"
+        src=${fw%_slow}
+        [ "$chip" = esp32 ] && [ "$fw" = i2c_target_slow ] && continue
+        llvm-mc -triple=xtensa -filetype=obj -I src "${defs[@]}" "${extra[@]}" "src/esp32x_$src.S" -o "$XT_OBJ/$fw.o"
+        python3 src/xtensa_elf.py "$XT_OBJ/$fw.o" "firmware/${chip}-${fw//_/-}.elf" "$base"
+    done
+done

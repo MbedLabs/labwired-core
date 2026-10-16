@@ -8,7 +8,10 @@
 //!
 //! Off a net the controller models exchange bytes with byte-level device
 //! models (`esp32c3::i2c`, which the ESP32-C6 also uses, runs its own
-//! cycle-accurate engine for the waveform). When the GPIO matrix routes SCL or
+//! cycle-accurate engine for the waveform; `esp32s3::i2c` and `esp32::i2c`
+//! run a command list instantly). The C3/C6, the S3 and the classic ESP32
+//! all host this engine on a net; the classic part names its own opcodes and
+//! has no `SCL_STRETCH_CONF`. When the GPIO matrix routes SCL or
 //! SDA to a pad on a net ([`PadLines::on_net`]) this engine owns the wire. It
 //! is chip-neutral: the host answers the [`EspI2cHost`] calls from its own
 //! register file and names its COMD opcodes ([`Opcodes`]); the register

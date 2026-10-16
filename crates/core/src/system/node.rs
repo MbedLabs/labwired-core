@@ -465,6 +465,17 @@ fn build_xtensa_node(
     machine
         .reset()
         .map_err(|e| anyhow::anyhow!("node '{id}': reset: {e:?}"))?;
+    // The reset leaves the core at the BROM reset vector, which this bank
+    // does not emulate: enter the ELF where a 2nd-stage bootloader would land,
+    // with the stacks the BROM seeds — what `builder::xtensa::build_esp32`
+    // does for the single-chip engine. Without it a bare ELF node faulted on
+    // its first fetch.
+    use crate::Cpu as _;
+    machine.cpu.set_pc(image.entry_point as u32);
+    machine.cpu.set_sp(0x3FFE_0000);
+    if let Some(cpu1) = machine.cpu_secondary.as_mut() {
+        cpu1.set_sp(0x3FFD_8000);
+    }
     Ok(Box::new(machine))
 }
 

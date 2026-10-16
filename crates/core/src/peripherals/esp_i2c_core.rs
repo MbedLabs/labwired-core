@@ -116,9 +116,15 @@ pub const LINE_SCL: usize = 0;
 pub const LINE_SDA: usize = 1;
 
 /// A fresh pad-line cell for an ESP I²C controller. Open-drain with pull-ups,
-/// so both lines rest high.
+/// so both lines rest high. On a world `gpio_net` both lines are open drain
+/// (released while high) from the moment they join it, before the net
+/// engine ([`crate::peripherals::esp_i2c_net`]) has said anything.
 pub(crate) fn new_pad_lines() -> Arc<PadLines> {
-    Arc::new(PadLines::new(I2C_LINES, &[true, true]))
+    let lines = PadLines::new(I2C_LINES, &[true, true]);
+    for line in [LINE_SCL, LINE_SDA] {
+        lines.set_net_idle(line, crate::peripherals::pad_lines::LineDrive::OpenDrain);
+    }
+    Arc::new(lines)
 }
 
 /// Which attached slaves are electrically reachable right now.
@@ -365,6 +371,17 @@ impl EspI2cWire {
     /// The bound pad lines, or `None` while nothing routes this controller.
     pub(crate) fn lines(&self) -> Option<&PadLines> {
         self.lines.as_deref()
+    }
+
+    /// The shared cell itself, once created.
+    pub(crate) fn lines_arc(&self) -> Option<Arc<PadLines>> {
+        self.lines.clone()
+    }
+
+    /// `true` while the GPIO matrix routes SCL or SDA to a pad on a world
+    /// `gpio_net`: the net engine owns the wire, and nothing is narrated.
+    pub(crate) fn on_net(&self) -> bool {
+        self.lines.as_deref().is_some_and(PadLines::any_on_net)
     }
 
     /// Record a frame this transaction put on the wire. Buffered, not published

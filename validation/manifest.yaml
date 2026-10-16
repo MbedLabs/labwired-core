@@ -7256,6 +7256,15 @@ boards:
     # a chain frame's a0..a3 at its chain callee SP instead of a stale pane SP.
     # Window spill plumbing only; no register map or reset value changed. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-15
+    # 2026-10-15 (ESP32-S3 / classic SPI+I2C on gpio_nets): `esp32s3/gpio.rs`
+    # stores FUNCn_IN_SEL_CFG routes for net pads and binds GP-SPI2/I2C0 lines;
+    # `esp32s3/gpspi.rs` and `esp32s3/i2c.rs` host the shared esp_gpspi_net /
+    # esp_i2c_net engines ONLY when a net line is routed (net mode); off a net
+    # the existing byte-level paths are unchanged. No register map or reset
+    # value in the nine captured windows changed (I2C0 reset values untouched);
+    # pinned by world_gpio_net_buses and the existing S3 I2C/SPI waveform and
+    # oracle tests. Approved by the maintainer. ACK, NOT A CAPTURE.
+    drift_ack_digest: b9d64e9080f3c0aa8afa3bd3bb798dbf26d592d96638863ad140daf0f74f315c
 
   - id: esp32s3-zero
     # Board variant of esp32s3: same silicon (LX7), 4 MiB flash / 480 KiB RAM.

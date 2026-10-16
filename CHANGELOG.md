@@ -24,6 +24,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says. Tested in `examples/gpio-net-buses` (`env-spi-l4-nss.yaml` on an L476
   and a G474 pair, `env-spi-nrf52-spim3.yaml` against a G071 on hardware
   NSS), each re-run with the nodes swapped and with 37 ns rounds.
+- ESP32-S3 and classic ESP32 SPI and I²C on `gpio_net`s, bit by bit at the
+  pads (`docs/howto/gpio-nets.md`, "Buses over nets";
+  `examples/gpio-net-buses`, `tests/world_gpio_net_buses.rs`):
+  - The S3 and classic GPIO matrices hand net levels to peripheral inputs
+    through `FUNCn_IN_SEL_CFG` (S3 at 0x154, classic `GPIO_FUNCn_IN_SEL_CFG`
+    at 0x130, now stored and masked to its 8 writable bits; pad [5:0], `SEL`
+    bit 7 on both), and a pad routed out drives what the peripheral's line
+    drives (released, input, open drain or push-pull), as the C3/C6 do.
+  - The S3 GP-SPI2 and I2C0 run the chip-neutral `esp_gpspi_net` and
+    `esp_i2c_net` engines (S3 signals `FSPICLK/D/Q/CS0` 101/103/102/110,
+    `I2CEXT0_SCL/SDA` 89/90; I²C timing from `CLK_CONF` at a 240 MHz core).
+  - The classic VSPI and HSPI answer `esp_gpspi_net` through a translated
+    view of the classic SPI register file (`SPI_CMD.USR` 18, `SPI_USER`,
+    `SPI_CTRL2`, `SPI_MOSI/MISO_DLEN`, `SPI_PIN`, `SPI_SLAVE.SLAVE_MODE` /
+    `TRANS_DONE`, `SPI_SLV_RD_BIT`, `W0` at 0x80). HSPI (`spi2`,
+    0x3FF6_4000) is now on the classic bus, bound to its own matrix signals
+    (8..11) beside VSPI's (63..68); both SPI cells carry MISO.
+  - The classic I2C0 runs `esp_i2c_net` with the classic opcodes and APB
+    timing; with no `SCL_STRETCH_CONF` its target sends 0xFF from an empty
+    TX FIFO rather than stretching.
+  - Test firmware is hand-written Xtensa assembly (`src/esp32x_*.S`): LLVM 18
+    assembles Xtensa but neither compiles C for it nor links it, so
+    `build.sh` assembles with `llvm-mc` and `src/xtensa_elf.py` places the
+    relocation-free object at IRAM. Tested against an STM32G071 both ways
+    round on each part, including an address NACK, a slow G071 target
+    holding either controller and a slow S3 target stretching the G071's
+    clock, each re-run with the nodes swapped and with 37 ns rounds.
 - Classic ESP32 LEDC drives its pads. Each of the 16 channels generates its
   PWM waveform (TRM §14.2: REF_TICK / APB / RTC8M source, Q8 `DIV_NUM`,
   `2^DUTY_RES` period, `HPOINT`/`DUTY`, duty latched at the next overflow,

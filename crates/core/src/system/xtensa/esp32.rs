@@ -909,6 +909,9 @@ pub(crate) const ESP32_PERIPHERALS: &[(&str, &str, u64, u64, Option<u32>)] = &[
     ("uart2",    "esp32_uart",     0x3FF6_E000, 0x0100, Some(36)),
     ("spi0",     "esp32_spi",      0x3FF4_3000, 0x1000, None),
     ("spi1",     "esp32_spi",      0x3FF4_2000, 0x1000, None),
+    // HSPI (SPI2, TRM §7): the second general-purpose SPI, matrix signals
+    // `HSPI*` (8..11). Bound to the pads by `wire_esp32_spi_pads`.
+    ("spi2",     "esp32_spi",      0x3FF6_4000, 0x1000, None),
     ("spi3",     "esp32_spi",      0x3FF6_5000, 0x1000, None),
     ("i2c0",     "esp32_i2c",      0x3FF5_3000, 0x1000, Some(49)),
     // SENS SAR-ADC one-shot engine (RTC controller ADC1/ADC2 path the IDF
