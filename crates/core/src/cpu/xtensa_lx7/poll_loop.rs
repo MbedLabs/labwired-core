@@ -471,7 +471,9 @@ impl XtensaLx7 {
 
     fn probe_decode(&self, bus: &ProbeBus<'_>, pc: u32) -> SimResult<(u32, xtensa::Instruction)> {
         let entry = &self.decode_cache[(pc as usize >> 1) & DECODE_CACHE_MASK];
-        if entry.generation == self.cur_decode_gen && entry.tag == pc {
+        // A recording probe reads the code through the bus so the plan
+        // watches it too.
+        if bus.log.is_none() && entry.generation == self.cur_decode_gen && entry.tag == pc {
             return Ok((entry.len, entry.ins));
         }
         let b0 = bus.read_u8(u64::from(pc))?;
