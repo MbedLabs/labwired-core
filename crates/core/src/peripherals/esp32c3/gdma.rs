@@ -37,6 +37,12 @@
 //!   of the channel are started, the OUT list's bytes are copied into the IN
 //!   list.
 //!
+//! Both latch `*_DONE` per descriptor, `OUT_EOF` / `OUT_TOTAL_EOF` /
+//! `IN_SUC_EOF` at the end of the frame, and the descriptor errors
+//! `IN_DSCR_ERR` / `OUT_DSCR_ERR` / `IN_DSCR_EMPTY` (owner check, a descriptor,
+//! buffer or next link outside the internal SRAM, an IN list too short — see
+//! [`crate::peripherals::esp_gdma`]).
+//!
 //! Any other peripheral (UHCI0, I2S, AES, SHA, ADC) is not coupled: a START
 //! is accepted and the direction stays busy (`PARK` = 0) without moving a
 //! byte or latching EOF — a stall firmware can see, not a pretend transfer.
@@ -72,6 +78,9 @@ const INT_IN_DONE: u32 = 1 << 0;
 const INT_IN_SUC_EOF: u32 = 1 << 1;
 const INT_OUT_DONE: u32 = 1 << 3;
 const INT_OUT_EOF: u32 = 1 << 4;
+const INT_IN_DSCR_ERR: u32 = 1 << 5;
+const INT_OUT_DSCR_ERR: u32 = 1 << 6;
+const INT_IN_DSCR_EMPTY: u32 = 1 << 7;
 const INT_OUT_TOTAL_EOF: u32 = 1 << 8;
 const INT_MASK: u32 = 0x1FFF;
 
@@ -93,6 +102,10 @@ const CHECK_OWNER: u32 = 1 << 12;
 const PERI_SEL_SPI2: u32 = 0;
 /// Descriptor addresses are rebuilt in internal SRAM.
 const DESC_PREFIX: u32 = 0x3FC0_0000;
+/// The internal SRAM the DMA reaches, on the data bus: the chip yaml's `ram`
+/// window (0x3FC8_0000, 400 KB). A descriptor, buffer or next link outside it
+/// is a descriptor error.
+const DMA_RAM: std::ops::Range<u32> = 0x3FC8_0000..0x3FC8_0000 + 400 * 1024;
 
 /// Reset value of the architected register at `off`, or `None` for a hole.
 fn reset_of(off: u64) -> Option<u32> {
@@ -133,6 +146,8 @@ pub struct Esp32c3Gdma {
     in_busy: [Busy; NUM_CHANNELS],
     out_busy: [Busy; NUM_CHANNELS],
     source_base: u32,
+    /// The internal SRAM the DMA reaches ([`DMA_RAM`]; tests widen it).
+    dma_ram: std::ops::Range<u32>,
     clock: Option<CycleClock>,
 }
 
@@ -146,6 +161,7 @@ impl Esp32c3Gdma {
         Self {
             regs,
             source_base,
+            dma_ram: DMA_RAM,
             ..Default::default()
         }
     }
@@ -290,23 +306,44 @@ impl Esp32c3Gdma {
             self.desc_addr(ch, OUT_LINK),
             conf1 & CHECK_OWNER != 0,
             conf0 & OUT_AUTO_WRBACK != 0,
+            &self.dma_ram,
         );
         self.set(Self::block(ch, OUT_EOF_DES_ADDR), w.last_desc);
-        self.int_raw[ch] |= INT_OUT_DONE | INT_OUT_EOF | INT_OUT_TOTAL_EOF;
+        if w.descs > 0 {
+            self.int_raw[ch] |= INT_OUT_DONE;
+        }
+        if w.eof {
+            self.int_raw[ch] |= INT_OUT_EOF | INT_OUT_TOTAL_EOF;
+        }
+        if w.dscr_err {
+            self.int_raw[ch] |= INT_OUT_DSCR_ERR;
+        }
         self.out_busy[ch] = Busy::Idle;
         w.bytes
     }
 
     fn fill_in(&mut self, bus: &mut dyn Bus, ch: usize, data: &[u8]) {
         let conf1 = self.reg(Self::block(ch, IN_CONF1));
-        let last = fill_in(
+        let f = fill_in(
             bus,
             self.desc_addr(ch, IN_LINK),
             data,
             conf1 & CHECK_OWNER != 0,
+            &self.dma_ram,
         );
-        self.set(Self::block(ch, IN_SUC_EOF_DES_ADDR), last);
-        self.int_raw[ch] |= INT_IN_DONE | INT_IN_SUC_EOF;
+        self.set(Self::block(ch, IN_SUC_EOF_DES_ADDR), f.last_desc);
+        if f.descs > 0 {
+            self.int_raw[ch] |= INT_IN_DONE;
+        }
+        if f.suc_eof {
+            self.int_raw[ch] |= INT_IN_SUC_EOF;
+        }
+        if f.dscr_err {
+            self.int_raw[ch] |= INT_IN_DSCR_ERR;
+        }
+        if f.dscr_empty {
+            self.int_raw[ch] |= INT_IN_DSCR_EMPTY;
+        }
         self.in_busy[ch] = Busy::Idle;
     }
 
@@ -453,11 +490,12 @@ mod tests {
         let mut bus = SystemBus::new();
         let mut g = Esp32c3Gdma::new(44);
         let ram = 0x2000_0000u32;
+        let sram = ram..ram + 0x1000;
         for (i, b) in [0x11u8, 0x22, 0x33].iter().enumerate() {
             bus.write_u8(u64::from(ram + 0x200) + i as u64, *b).unwrap();
         }
         // The walkers take full addresses; drive them directly.
-        let out = walk_out(&mut bus, 0, false, false);
+        let out = walk_out(&mut bus, 0, false, false, &sram);
         assert!(out.bytes.is_empty(), "a null list moves nothing");
         bus.write_u32(u64::from(ram), DESC_OWNER | DESC_SUC_EOF | (3 << 12) | 3)
             .unwrap();
@@ -467,8 +505,8 @@ mod tests {
             .unwrap();
         bus.write_u32(u64::from(ram) + 0x14, ram + 0x300).unwrap();
         bus.write_u32(u64::from(ram) + 0x18, 0).unwrap();
-        let bytes = walk_out(&mut bus, ram, true, false).bytes;
-        fill_in(&mut bus, ram + 0x10, &bytes, true);
+        let bytes = walk_out(&mut bus, ram, true, false, &sram).bytes;
+        fill_in(&mut bus, ram + 0x10, &bytes, true, &sram);
         let got: Vec<u8> = (0..3)
             .map(|i| bus.read_u8(u64::from(ram + 0x300) + i).unwrap())
             .collect();
@@ -482,5 +520,60 @@ mod tests {
         assert!(g.has_work());
         g.write_u32(0x80, IN_LINK_STOP).unwrap();
         assert_ne!(g.read_reg(0x80) & IN_LINK_PARK, 0, "STOP parks");
+    }
+
+    /// Descriptor errors land in INT_RAW: a CPU-owned OUT descriptor under
+    /// OUT_CHECK_OWNER is OUT_DSCR_ERR (no EOF); an IN list shorter than the
+    /// data is IN_DSCR_EMPTY (no SUC_EOF); a buffer outside the SRAM the DMA
+    /// reaches is IN_DSCR_ERR.
+    #[test]
+    fn descriptor_errors_raise_their_int_raw_bits() {
+        let ram = 0x2000_0000u32;
+        let sram = ram..ram + 0x1000;
+        // The walk the controller runs for a MEM_TRANS_EN channel with
+        // OUT_CHECK_OWNER set: OUT list at `ram`, IN list at `ram + 0x10`.
+        let run = |out_dw0: u32, in_dw0: u32, in_buf: u32| {
+            let mut bus = SystemBus::new();
+            for (at, dw0, buf) in [(0x00, out_dw0, ram + 0x200), (0x10, in_dw0, in_buf)] {
+                bus.write_u32(u64::from(ram + at), dw0).unwrap();
+                bus.write_u32(u64::from(ram + at) + 4, buf).unwrap();
+                bus.write_u32(u64::from(ram + at) + 8, 0).unwrap();
+            }
+            let w = walk_out(&mut bus, ram, true, false, &sram);
+            let f = fill_in(&mut bus, ram + 0x10, &w.bytes, false, &sram);
+            (w, f)
+        };
+        // CHECK_OWNER on a CPU-owned OUT descriptor.
+        let (w, _) = run(DESC_SUC_EOF | (4 << 12) | 4, DESC_OWNER | 8, ram + 0x300);
+        assert!(w.dscr_err && !w.eof);
+        // IN list too short for 4 bytes.
+        let (w, f) = run(
+            DESC_OWNER | DESC_SUC_EOF | (4 << 12) | 4,
+            DESC_OWNER | 2,
+            ram + 0x300,
+        );
+        assert!(w.eof && f.dscr_empty && !f.suc_eof);
+        // IN buffer outside the DMA's SRAM.
+        let (_, f) = run(
+            DESC_OWNER | DESC_SUC_EOF | (4 << 12) | 4,
+            DESC_OWNER | 8,
+            0x6000_0000,
+        );
+        assert!(f.dscr_err);
+
+        // And the controller maps them onto INT_RAW.
+        let mut bus = SystemBus::new();
+        let mut g = Esp32c3Gdma::new(44);
+        g.dma_ram = DESC_PREFIX..DESC_PREFIX + 0x10_0000;
+        g.write_u32(0x70, MEM_TRANS_EN).unwrap();
+        g.write_u32(0xD4, CHECK_OWNER).unwrap();
+        g.write_u32(0xE0, OUT_LINK_START | 0x100).unwrap();
+        g.write_u32(0x80, IN_LINK_START | 0x200).unwrap();
+        assert!(g.has_work());
+        g.pump(&mut bus); // descriptors at 0x3FC0_0100: unmapped here
+        let raw = g.read_reg(0x00);
+        assert_ne!(raw & INT_OUT_DSCR_ERR, 0, "OUT_DSCR_ERR: {raw:#x}");
+        assert_eq!(raw & (INT_OUT_EOF | INT_OUT_TOTAL_EOF | INT_IN_SUC_EOF), 0);
+        assert_ne!(raw & INT_IN_DSCR_ERR, 0, "IN_DSCR_ERR");
     }
 }
