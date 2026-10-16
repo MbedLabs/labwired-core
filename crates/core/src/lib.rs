@@ -357,7 +357,11 @@ where
     // lazily-advanced peripheral is not pinned to the batch-start cycle for
     // the whole window. Same gate and same rationale as the hand-written
     // `CortexM::step_batch` / `RiscV::step_batch` twins — see either.
-    let live_step = u64::from(config.peripheral_tick_interval > 1);
+    // An armed batch stop (`Bus::batch_stop_armed`) runs at quantum 1 with
+    // the per-cycle tick and drain deferred to its end, so the bus clock must
+    // stay live per instruction as at a larger interval.
+    let stop_armed = bus.batch_stop_armed();
+    let live_step = u64::from(config.peripheral_tick_interval > 1 || stop_armed);
     // A core whose step cycles are clock time (AVR) retires instructions of
     // different lengths, so "one bump per instruction" would drift from the
     // cycle count the poll reference samples at. For that core the clock is
@@ -396,6 +400,9 @@ where
         if config.idle_fast_forward_enabled
             && (cpu.idle_fast_forward_budget(bus).is_some() || cpu.poll_loop_anchor_ready())
         {
+            return Ok(i + 1);
+        }
+        if stop_armed && bus.batch_stop_hit() {
             return Ok(i + 1);
         }
         // A world's net pad changed drive: end the batch on this instruction
@@ -671,6 +678,10 @@ pub trait Cpu: Send {
         true
     }
 
+    /// The byte ranges `[lo, hi)` the deferred loop's proof read; a store
+    /// into one may change it. Default: none.
+    fn poll_loop_watch(&self, _out: &mut Vec<(u64, u64)>) {}
+
     /// End a deferral: leave the core exactly where running `cycles` cycles
     /// of the proven loop from its anchor would leave it, with the memory and
     /// interrupt state the proof saw. `cycles` is at most the proven budget.
@@ -913,6 +924,9 @@ impl Cpu for Box<dyn Cpu> {
     }
     fn poll_loop_defer_changed(&self, bus: &dyn Bus) -> bool {
         (**self).poll_loop_defer_changed(bus)
+    }
+    fn poll_loop_watch(&self, out: &mut Vec<(u64, u64)>) {
+        (**self).poll_loop_watch(out)
     }
     fn poll_loop_catch_up(&mut self, bus: &dyn Bus, cycles: u64) -> bool {
         (**self).poll_loop_catch_up(bus, cycles)
@@ -2742,6 +2756,18 @@ pub trait Bus {
     /// invalidate their cached pointer on any bus write that may touch
     /// the same range and on snapshot restore. See labwired-core#119
     /// (JIT roadmap Phase 1.2).
+    /// A machine-armed stop for the current CPU batch (see
+    /// `bus::BatchStop`). `step_batch` reads [`Self::batch_stop_armed`] once
+    /// and then, while armed, ends the batch after the instruction for which
+    /// [`Self::batch_stop_hit`] turns true. Default: never armed.
+    fn batch_stop_armed(&self) -> bool {
+        false
+    }
+
+    fn batch_stop_hit(&self) -> bool {
+        false
+    }
+
     fn fetch_slice(&self, _pc: u64) -> Option<(u64, u64, &[u8])> {
         None
     }
@@ -2900,6 +2926,9 @@ pub struct Machine<C: Cpu> {
     /// Secondary-core cycles not interpreted because the core sat in a
     /// proven poll loop while the primary ran ([`Self::secondary_defer`]).
     pub poll_loop_cycles_deferred: u64,
+    /// Primary batches run beside a deferred secondary instead of one
+    /// instruction per tick (`Machine::run_primary_beside_quiet_secondary`).
+    pub primary_batches_beside_deferred: u64,
     /// The secondary core's proven poll loop runs deferred: `(start, end)`
     /// machine cycles. The core is not stepped from `start`; it holds the
     /// state of its loop anchor at `start` and the plan its
@@ -2910,6 +2939,8 @@ pub struct Machine<C: Cpu> {
     /// the end of every [`Machine::advance`]; then
     /// [`Cpu::poll_loop_catch_up`] leaves the core where lockstep would.
     pub(crate) secondary_defer: Option<(u64, u64)>,
+    /// Retained buffer for [`Cpu::poll_loop_watch`].
+    batch_watch_scratch: Vec<(u64, u64)>,
     pub config: SimulationConfig,
     /// Injectable host clock used by [`HostTimeMode::Realtime`] pacing.
     host_clock: Box<dyn host_time::HostClock + Send>,
@@ -3695,7 +3726,9 @@ impl<C: Cpu> Machine<C> {
             poll_loop_cycles_skipped: 0,
             poll_loop_skips: 0,
             poll_loop_cycles_deferred: 0,
+            primary_batches_beside_deferred: 0,
             secondary_defer: None,
+            batch_watch_scratch: Vec::new(),
             config: SimulationConfig::default(),
             host_clock: Box::new(host_time::StdHostClock::new()),
             step_profile: StepProfile::default(),

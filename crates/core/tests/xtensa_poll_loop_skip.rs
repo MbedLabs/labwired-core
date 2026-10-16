@@ -26,8 +26,9 @@
 //! idles. It counts in a store loop, then rewrites output 1's deadline (a
 //! word the secondary's pulse loop reads) at a cycle inside the pulse wait,
 //! then counts on forever. The store lands at ~15 000, while the loop
-//! waits for output 2 (18 000); the new deadline (16 000) is before that, so a
-//! deferral that missed the store would run past it. No machine-wide skip is possible; the secondary's
+//! waits for output 2 (18 000); the new deadline (15 104) is ~100 cycles
+//! later, so a deferral (or a primary batch) that missed the store would run
+//! past it. No machine-wide skip is possible; the secondary's
 //! loop is deferred instead (`Machine::secondary_defer`) and must notice the
 //! store on the cycle it lands: output 1 drops at the NEW deadline in both
 //! runs. Without the deferral `deferred` is 0; without its store guard the
@@ -90,17 +91,17 @@ mod tests {
     ///  0: movi a3, 1250; slli a3, a3, 2   ; 5000 iterations
     ///     movi a2, 0
     ///  9: addi a2, a2, 1; s32i a2, a6, 0x100; bne a2, a3, 9
-    ///     movi a4, 1000; slli a4, a4, 4   ; 16000
+    ///     movi a4, 944; slli a4, a4, 4    ; 15104
     ///     s32i a4, a6, 68                 ; output 1's deadline
     /// 1b: addi a2, a2, 1; s32i a2, a6, 0x100; j 1b
     /// ```
     const BUSY: [u8; 36] = [
         0x32, 0xa4, 0xe2, 0xe0, 0x33, 0x11, 0x22, 0xa0, 0x00, 0x22, 0xc2, 0x01, 0x22, 0x66, 0x40,
-        0x37, 0x92, 0xf6, 0x42, 0xa3, 0xe8, 0xc0, 0x44, 0x11, 0x42, 0x66, 0x11, 0x22, 0xc2, 0x01,
+        0x37, 0x92, 0xf6, 0x42, 0xa3, 0xb0, 0xc0, 0x44, 0x11, 0x42, 0x66, 0x11, 0x22, 0xc2, 0x01,
         0x22, 0x66, 0x40, 0x86, 0xfd, 0xff,
     ];
     /// Output 1's deadline after the busy primary's store.
-    const MOVED_END: u32 = 16_000;
+    const MOVED_END: u32 = 15_104;
 
     /// Pulse deadlines (cycles after t0), the frame-tail deadline, and the
     /// accumulating loop's deadline.
@@ -116,6 +117,7 @@ mod tests {
         skipped: u64,
         poll_skipped: u64,
         deferred: u64,
+        batches: u64,
     }
 
     #[derive(Clone, Copy, PartialEq)]
@@ -138,6 +140,18 @@ mod tests {
     }
 
     fn run(mode: Primary, fast_forward: bool) -> Outcome {
+        run_on(mode, fast_forward, true)
+    }
+
+    #[derive(Debug)]
+    struct Quiet;
+    impl labwired_core::SimulationObserver for Quiet {}
+
+    /// `batched`: the primary may run as one batch beside a deferred
+    /// secondary (`Machine::run_primary_beside_quiet_secondary`). Otherwise an
+    /// observer is attached, which keeps every window at one instruction per
+    /// tick.
+    fn run_on(mode: Primary, fast_forward: bool, batched: bool) -> Outcome {
         let dual = mode != Primary::Alone;
         let mut bus = SystemBus::new();
         let mut primary = configure_xtensa_esp32(&mut bus);
@@ -164,6 +178,9 @@ mod tests {
             Machine::new(primary, bus)
         };
         machine.config.idle_fast_forward_enabled = fast_forward;
+        if !batched {
+            machine.add_observer(std::sync::Arc::new(Quiet));
+        }
         while machine.total_cycles < RUN_CYCLES {
             machine
                 .advance(AdvanceRequest::run(Some(RUN_CYCLES - machine.total_cycles)))
@@ -184,6 +201,7 @@ mod tests {
             skipped: machine.idle_fast_forward_cycles_skipped,
             poll_skipped: machine.poll_loop_cycles_skipped,
             deferred: machine.poll_loop_cycles_deferred,
+            batches: machine.primary_batches_beside_deferred,
         }
     }
 
@@ -241,8 +259,23 @@ mod tests {
 
     #[test]
     fn deferred_poll_loop_beside_a_busy_primary_changes_nothing() {
-        let fast = run(Primary::Busy, true);
-        let reference = run(Primary::Busy, false);
+        let fast = check_busy(false);
+        assert_eq!(fast.batches, 0, "an observed machine ran a batch");
+    }
+
+    /// The same, with the primary run as batches beside the deferred loop.
+    /// The batch must end on the primary's store into the deadline the loop
+    /// reads (`bus::BatchStop`); without that stop the loop catches up on the
+    /// old deadline and the records differ.
+    #[test]
+    fn deferred_poll_loop_beside_a_batched_primary_changes_nothing() {
+        let fast = check_busy(true);
+        assert!(fast.batches > 0, "the primary never ran as a batch");
+    }
+
+    fn check_busy(batched: bool) -> Outcome {
+        let fast = run_on(Primary::Busy, true, batched);
+        let reference = run_on(Primary::Busy, false, batched);
         assert_eq!(reference.skipped + reference.deferred, 0);
         assert!(
             reference.records[11] != 0,
@@ -269,5 +302,6 @@ mod tests {
             "deferral did not fire: {} of the ~480 k busy cycles",
             fast.deferred
         );
+        fast
     }
 }

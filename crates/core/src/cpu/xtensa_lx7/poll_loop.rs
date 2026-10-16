@@ -654,6 +654,16 @@ impl XtensaLx7 {
         })
     }
 
+    /// See [`crate::Cpu::poll_loop_watch`].
+    pub(super) fn poll_watch(&self, out: &mut Vec<(u64, u64)>) {
+        if let Some(plan) = self.poll_plan.as_ref() {
+            out.extend(plan.reads.iter().map(|(base, bytes)| {
+                let lo = u64::from(*base);
+                (lo, lo + bytes.len() as u64)
+            }));
+        }
+    }
+
     /// See [`crate::Cpu::poll_loop_defer_changed`].
     pub(super) fn poll_defer_changed(&self, bus: &dyn Bus) -> bool {
         let Some(plan) = self.poll_plan.as_ref() else {
