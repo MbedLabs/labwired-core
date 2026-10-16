@@ -407,19 +407,6 @@ where
     Ok(max_count)
 }
 
-fn lcm_u64(a: u64, b: u64) -> u64 {
-    fn gcd(mut a: u64, mut b: u64) -> u64 {
-        while b != 0 {
-            (a, b) = (b, a % b);
-        }
-        a
-    }
-    if a == 0 || b == 0 {
-        return a.max(b);
-    }
-    (a / gcd(a, b)).saturating_mul(b)
-}
-
 /// Publish cycles retired inside a CPU batch when the event scheduler is on.
 ///
 /// Keeping the feature split at this one choke point avoids duplicating it in
@@ -3994,6 +3981,18 @@ impl<C: Cpu> Machine<C> {
             }
             budget = budget.min(u32::MAX as u64);
             if spinning {
+                fn lcm_u64(a: u64, b: u64) -> u64 {
+                    fn gcd(mut a: u64, mut b: u64) -> u64 {
+                        while b != 0 {
+                            (a, b) = (b, a % b);
+                        }
+                        a
+                    }
+                    if a == 0 || b == 0 {
+                        return a.max(b);
+                    }
+                    (a / gcd(a, b)).saturating_mul(b)
+                }
                 // Whole loop iterations only, on every spinning core.
                 let mut step = 1u64;
                 for (period, _) in primary_spin.iter().chain(secondary_spin.iter()) {
