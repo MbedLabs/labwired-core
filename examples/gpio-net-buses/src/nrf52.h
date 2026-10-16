@@ -83,8 +83,35 @@
 #define TWIS_ADDRESS0  S0(0x588)
 #define TWIS_CONFIG    S0(0x594)
 
+/* SPIM3 (0x4002F000): its own window, with the hardware chip select and
+ * D/CX registers SPIM0..2 lack. */
+#define SPIM3(off) REG(0x4002F000u + (off))
+#define SPIM3_TASKS_START     SPIM3(0x010)
+#define SPIM3_EVENTS_END      SPIM3(0x118)
+#define SPIM3_INTENSET        SPIM3(0x304)
+#define SPIM3_ENABLE          SPIM3(0x500)
+#define SPIM3_PSEL_SCK        SPIM3(0x508)
+#define SPIM3_PSEL_MOSI       SPIM3(0x50C)
+#define SPIM3_PSEL_MISO       SPIM3(0x510)
+#define SPIM3_PSEL_CSN        SPIM3(0x514)
+#define SPIM3_FREQUENCY       SPIM3(0x524)
+#define SPIM3_RXD_PTR         SPIM3(0x534)
+#define SPIM3_RXD_MAXCNT      SPIM3(0x538)
+#define SPIM3_RXD_AMOUNT      SPIM3(0x53C)
+#define SPIM3_TXD_PTR         SPIM3(0x544)
+#define SPIM3_TXD_MAXCNT      SPIM3(0x548)
+#define SPIM3_TXD_AMOUNT      SPIM3(0x54C)
+#define SPIM3_CONFIG          SPIM3(0x554)
+#define SPIM3_IFTIMING_CSNDUR SPIM3(0x564)
+#define SPIM3_CSNPOL          SPIM3(0x568)
+#define SPIM3_PSELDCX         SPIM3(0x56C)
+#define SPIM3_DCXCNT          SPIM3(0x570)
+#define SPIM3_ORC             SPIM3(0x5C0)
+
 #define NVIC_ISER REG(0xE000E100u)
+#define NVIC_ISER1 REG(0xE000E104u)
 #define IRQ_SERIAL0 3u
+#define IRQ_SPIM3 47u
 
 /* Results the tests read, and the EasyDMA buffers, by address. */
 #define RESULT ((volatile uint32_t *)0x20000100u)

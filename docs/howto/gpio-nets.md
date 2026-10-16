@@ -292,8 +292,10 @@ peripherals: the bits are the net's edges, so the net reports, a logic
 analyzer on either board and the timing all show the real waveform, and the
 bus behaves like wires. Runnable examples:
 [`examples/gpio-net-buses`](../../examples/gpio-net-buses) (STM32G071 pairs,
-STM32F401 pairs (one on the hardware NSS pads), STM32F103 / STM32F401 / STM32G071 mixed I²C, and an
-RP2040, an nRF52840, an ESP32-C3 and an ESP32-C6 against a G071 on SPI and on I²C).
+STM32F401, STM32L476 and STM32G474 pairs on the hardware NSS pads,
+STM32F103 / STM32F401 / STM32G071 mixed I²C, and an RP2040, an nRF52840
+(SPIM0 and SPIM3 with its hardware CSN and D/CX), an ESP32-C3 and an
+ESP32-C6 against a G071 on SPI and on I²C).
 
 One net per wire, as for any other signal:
 
@@ -310,12 +312,12 @@ One net per wire, as for any other signal:
 
 | Peripheral | Register file | Pads (chip yaml) | Roles |
 |------------|---------------|------------------|-------|
-| STM32 SPI | classic F1/F4/L0 (`CR1.DFF`) / FIFO G0/L4/G4/WB/F7 (`CR2.DS`, `FRXTH`, `FRLVL`/`FTLVL`); DMA requests (`TXDMAEN`/`RXDMAEN`, `LDMA_TX`/`LDMA_RX`, [SPI DMA](#spi-dma)) | G071 AF0 incl. NSS (`pad_map: stm32g0`); F4 AF5 incl. NSS (PA4/PA15, PB9/PB12) | master, slave |
+| STM32 SPI | classic F1/F4/L0 (`CR1.DFF`) / FIFO G0/L4/G4/WB/F7 (`CR2.DS`, `FRXTH`, `FRLVL`/`FTLVL`); DMA requests (`TXDMAEN`/`RXDMAEN`, `LDMA_TX`/`LDMA_RX`, [SPI DMA](#spi-dma)) | NSS included on every table: G071 AF0 (`pad_map: stm32g0`); F4/F7 AF5 (PA4/PA15, PB9/PB12); L476 AF5/AF6 (SPI1 PA4/PA15/PE12, SPI2 PB9/PB12/PD0, SPI3 PA4/PA15 on AF6); G474 (`pad_map: stm32g4`, SPI1 PA4/PA15/PG5, SPI2 PB12/PF0 and PD15 on AF6, SPI3 PA4/PA15 on AF6); WB55 (`pad_map: stm32wb`, SPI1 PA4/PA15/PB2, SPI2 PB9/PB12/PD0); L073 (`pad_map: stm32l0`, SPI1 AF0 PA4/PA15, PE12 AF2; SPI2 PB12 AF0, PB9 AF5, PD0 AF1) | master, slave |
 | STM32 I²C, modern | L4/G0 `TIMINGR` (`ISR`/`ICR`) | G071 AF6 (`pad_map: stm32g0`); L4 AF4 | controller, target |
 | STM32 I²C, legacy | F1/F2/F4 (`SR1`/`SR2`/`CCR`/`TRISE`) | F103 default mapping (PB6/PB7, PB10/PB11); F401 AF4 | master, slave |
 | RP2040 SPI | PL022 (`SSPCR0`/`SSPCR1`/`SSPDR`/`SSPSR`/`SSPCPSR`) | IO_BANK0 `FUNCSEL` 1: SCK, TX, RX, CSn | master, slave |
 | RP2040 I²C | DW_apb_i2c (`IC_CON`/`IC_TAR`/`IC_SAR`/`IC_DATA_CMD`/...) | IO_BANK0 `FUNCSEL` 3: SDA, SCL | master, slave |
-| nRF52 SPI | SPIM / SPIS, EasyDMA (`TXD`/`RXD` `PTR`/`MAXCNT`/`AMOUNT`) | any pad, by `PSEL.SCK`/`MOSI`/`MISO` (and SPIS `PSEL.CSN`) | master (`ENABLE = 7`), slave (`ENABLE = 2`) |
+| nRF52 SPI | SPIM / SPIS, EasyDMA (`TXD`/`RXD` `PTR`/`MAXCNT`/`AMOUNT`) | any pad, by `PSEL.SCK`/`MOSI`/`MISO` (and SPIS `PSEL.CSN`; SPIM3 `PSEL.CSN` and `PSELDCX`) | master (`ENABLE = 7`), slave (`ENABLE = 2`) |
 | nRF52 I²C | TWIM / TWIS, EasyDMA | any pad, by `PSEL.SCL`/`SDA` | controller (`ENABLE = 6`), target (`ENABLE = 9`) |
 | ESP32-C3 / ESP32-C6 GP-SPI2 | Espressif GP-SPI (`SPI_CMD`/`SPI_USER`/`SPI_MS_DLEN`/`W0..W15`/`SPI_SLAVE`), or by GDMA (`SPI_DMA_CONF`, [SPI DMA](#spi-dma)) | GPIO matrix: `FSPICLK`, `FSPID`, `FSPIQ`, `FSPICS0` (63/65/64/68 on both), any pad | master, slave |
 | ESP32-C3 / ESP32-C6 I²C0 | Espressif command list (`CTR`/`COMD0..7`/`DATA` FIFOs/`SLAVE_ADDR`) | GPIO matrix: `I2CEXT0_SCL`/`SDA` (53/54 on the C3, 45/46 on the C6), any pad, out and back in | master, slave |
@@ -352,7 +354,14 @@ at most half full; `SR.FRLVL`/`FTLVL` report both levels; OVR when a frame
 arrives to a full RX FIFO. `DR` accesses pack: an 8-bit access moves one
 byte, a 16-bit one two (two frames at `DS` ≤ 8). A FIFO master with
 `NSSP=1`, `SSOE=1` and `CPHA=0` pulses NSS high for one SCK period between
-back-to-back frames and leaves it high after the last.
+back-to-back frames and leaves it high after the last. The tables come from
+ST's open pin data (the CubeMX source of each datasheet's AF table); the G4,
+WB and L0 have their own (`pad_map:`) because they disagree with the L4 or
+F4 one on some pad (PE12-PE15/AF5 are SPI4 on a G4; the L0's SPI1 is on
+AF0). Tested: an L476 pair and a G474 pair, master `SSOE=1` / slave `SSM=0`
+on PA4, with and without `NSSP` (every frame its own NSS low period when the
+master polls between frames), and a slave whose NSS net is removed, which is
+never selected.
 
 **I²C, modern** (STM32 L4/G0 `TIMINGR` register file): SCL and SDA are
 open-drain nets; put `pull: up` on them. The controller generates START, the
@@ -446,7 +455,18 @@ ends it; the events raise the interrupt where `INTEN` asks for it.
   back at `FREQUENCY` in the `CONFIG` shape (`ORC` past the TX buffer),
   sampling MISO at the net's level; `EVENTS_STARTED`, then `ENDTX`,
   `ENDRX`, `END` with the amounts. `TASKS_STOP` ends after the byte on the
-  wire (`STOPPED`). Chip select is a GPIO, as on SPIM0..2.
+  wire (`STOPPED`). On SPIM0..2 chip select is a GPIO. SPIM3 (0x4002F000,
+  `spi3` on the nRF52833/nRF52840) drives its own: with `PSEL.CSN`
+  connected, CSN sits at its inactive level while enabled (`CSNPOL` 0:
+  active low), is asserted once the TX buffer is read, and the first byte
+  starts `IFTIMING.CSNDUR` 64 MHz cycles later (first SCK edge `CSNDUR` +
+  half an SCK period after the CSN edge); after the last SCK edge CSN is
+  held `CSNDUR` more, released, and only then `END` fires. The next
+  assertion waits until CSN has been inactive for `CSNDUR`. With `PSELDCX`
+  connected D/CX idles high and is low for the first `DCXCNT` bytes (all of
+  them at 0xF): it falls with CSN, rises at the last SCK edge of the last
+  command byte, and is high again when CSN is released. `IFTIMING.RXDELAY`
+  is stored, not modelled.
 - *SPIS*: the semaphore decides. `TASKS_RELEASE` gives the slave the
   buffers; CSN low then starts a granted transaction (`SEMSTAT = 2`) that
   shifts out the TX buffer, then `ORC` (`STATUS.OVERREAD`), and fills the RX
@@ -474,8 +494,12 @@ ends it; the events raise the interrupt where `INTEN` asks for it.
 Tested against an STM32G071 both ways round on each bus (SPIM master /
 SPIS slave in mode 0, TWIM controller / TWIS target with the `env-i2c.yaml`
 register-file exchange, the NACK of an absent address, a slow G071 target
-holding the TWIM and a slow TWIS holding the G071). Not on a net: the
-SPIM3 hardware CSN (`PSEL.CSN`, `CSNPOL`, `IFTIMING`, `DCX`), the legacy
+holding the TWIM and a slow TWIS holding the G071), and SPIM3 on its
+hardware CSN against the G071's hardware NSS (`env-spi-nrf52-spim3.yaml`:
+the CSN-to-SCK and SCK-to-CSN times, D/CX around a one-byte command, and an
+active-high `CSNPOL` that deselects the G071 for the transfer). Not on a
+net: SPIM3's CSN/D/CX for an attached device model (off a net the bytes
+cross inside one call; the nRF54L map does select such a device), the legacy
 SPI/TWI (`ENABLE = 1`/`5`), the TWIM `ERRORSRC.OVERRUN`, the nRF5340 and
 nRF54 SPIM/TWIM, and the SPIS/TWIS on a window other than a serial
 instance (the nRF52840 chip yaml has them only at 0x40003000).
@@ -564,7 +588,7 @@ example's tests run every exchange three ways (as written, nodes swapped,
 37 ns rounds) and compare what every pad saw, cycle by cycle.
 
 Not modelled on a net yet: other SPI/I²C families (ESP32-S3 and classic ESP32
-SPI/I²C, the H5 SPI v3), the hardware NSS pad of the L4/G4/WB SPI, legacy-I²C
+SPI/I²C, the H5 SPI v3, whose NSS pads stay unrouted), legacy-I²C
 10-bit addressing, SMBus/PEC, modern-I²C slave byte control (`SBC`), the I²C
 filters and timeouts, SPI CRC, TI mode and the SPI mode fault (`MODF`). Such
 a peripheral on a net keeps its usual behaviour and drives its lines

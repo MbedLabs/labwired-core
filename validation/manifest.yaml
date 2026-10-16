@@ -457,7 +457,7 @@ boards:
     drift_ack: 2026-09-17
     # 2026-09-17 (merge #1138): VFP FPSCR FZ/DN interpreter semantics landed on
     # top of the perf/bus-scheduler changes; digest re-stamped over the merged tree.
-    drift_ack_digest: ad2b09313013b5e9d4e3ce26c5547052cb678718b2483fba64f72b3a6db4b553
+    drift_ack_digest: 92a004b1001d8266a07dd7fe4b72554cf178b675c88f6b93c95852b0dcce5ad1
     # 2026-09-18: no execution change, step_execute arm bodies moved verbatim into cpu/cortex_m/exec/*; perf gate within noise; ACK, NOT A CAPTURE
     drift_ack: 2026-09-18
     models:
@@ -613,6 +613,12 @@ boards:
     # TWIM/TWIS over gpio nets. No register map or reset value of this board changed.
     # Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-11
+    # 2026-10-15 (#1384 hardware NSS/CSN on gpio nets): bus/attach.rs gives L476 SPI
+    # NSS pads and G474/WB55/L073 their own SPI pad tables; nRF52840 gains SPIM3
+    # (CSN, CSNPOL, IFTIMING.CSNDUR, DCX) at 0x4002F000; spi.rs keeps an nRF net
+    # transfer in the bus-tick set. No register map or reset value of this board
+    # changed. Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
+    drift_ack: 2026-10-15
   - id: seeed-xiao-nrf52840-sense
     # 2026-09-16 (#1128): Cortex-M browser JIT rides `Machine::advance_with_window_runner` — the advance loop now plans and commits the window (tick cadence, reset drains, idle fast forward) and a compiled backend only supplies the instruction stream; the JIT batch gates (takeable exception, SysTick crossing, SYSRESETREQ latch) become public for `jit-framework` so the browser adapter refuses the same windows `run_jit_loop` does. In `cortex_m.rs`: `note_chained` only counts a chain that retired instructions, `sysreset_latched` is pub. Interpreter path unchanged — the gates are the ones `run_jit_loop` already used; pinned by `cortex_m_jit_alu_lockstep` and new window-runner cadence tests. No silicon capture pins JIT.
     # 2026-09-16 (#1125): Cortex-M JIT follow-ups (block chaining, floor 4, IT-predicated ALU, VFP S-ALU, VLDR/VSTR, LDR.W PC), plus two model fixes that ride along: the bit-band alias decode no longer swallows peripherals vendors place inside 0x4200_0000 (SAMD51 QSPI/SERCOM), and the STM32 timer's scheduled compare pend lands on the latch tick like the walk. JIT is opt-in (`cortex_m_jit_enabled` default off); interpreter path unchanged, JIT-on vs off lockstep in cortex_m_jit_nrf_differential; both fixes pinned by bus-level gates. No silicon capture pins JIT.
@@ -921,7 +927,7 @@ boards:
     drift_ack: 2026-09-17
     # 2026-09-17 (merge #1138): VFP FPSCR FZ/DN interpreter semantics landed on
     # top of the perf/bus-scheduler changes; digest re-stamped over the merged tree.
-    drift_ack_digest: ad2b09313013b5e9d4e3ce26c5547052cb678718b2483fba64f72b3a6db4b553
+    drift_ack_digest: 92a004b1001d8266a07dd7fe4b72554cf178b675c88f6b93c95852b0dcce5ad1
     # 2026-09-18: no execution change, step_execute arm bodies moved verbatim into cpu/cortex_m/exec/*; perf gate within noise; ACK, NOT A CAPTURE
     drift_ack: 2026-09-18
     models:
@@ -1077,6 +1083,12 @@ boards:
     # TWIM/TWIS over gpio nets. No register map or reset value of this board changed.
     # Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-11
+    # 2026-10-15 (#1384 hardware NSS/CSN on gpio nets): bus/attach.rs gives L476 SPI
+    # NSS pads and G474/WB55/L073 their own SPI pad tables; nRF52840 gains SPIM3
+    # (CSN, CSNPOL, IFTIMING.CSNDUR, DCX) at 0x4002F000; spi.rs keeps an nRF net
+    # transfer in the bus-tick set. No register map or reset value of this board
+    # changed. Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
+    drift_ack: 2026-10-15
   - id: stm32h563
     # 2026-09-16 (#1128): Cortex-M browser JIT rides `Machine::advance_with_window_runner` — the advance loop now plans and commits the window (tick cadence, reset drains, idle fast forward) and a compiled backend only supplies the instruction stream; the JIT batch gates (takeable exception, SysTick crossing, SYSRESETREQ latch) become public for `jit-framework` so the browser adapter refuses the same windows `run_jit_loop` does. In `cortex_m.rs`: `note_chained` only counts a chain that retired instructions, `sysreset_latched` is pub. Interpreter path unchanged — the gates are the ones `run_jit_loop` already used; pinned by `cortex_m_jit_alu_lockstep` and new window-runner cadence tests. No silicon capture pins JIT.
     # 2026-09-16 (#1125): Cortex-M JIT follow-ups (block chaining, floor 4, IT-predicated ALU, VFP S-ALU, VLDR/VSTR, LDR.W PC), plus two model fixes that ride along: the bit-band alias decode no longer swallows peripherals vendors place inside 0x4200_0000 (SAMD51 QSPI/SERCOM), and the STM32 timer's scheduled compare pend lands on the latch tick like the walk. JIT is opt-in (`cortex_m_jit_enabled` default off); interpreter path unchanged, JIT-on vs off lockstep in cortex_m_jit_nrf_differential; both fixes pinned by bus-level gates. No silicon capture pins JIT.
@@ -1531,7 +1543,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: 56e8442548e8f6774cdb1a61ae3ee7f0c1667e43d64c6002e5105c5d56c4ee40
+    drift_ack_digest: 99aac378061a7a2dee9e35c6e365469ee30873e71de1146156a4331554de2b72
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -2043,6 +2055,11 @@ boards:
     # TWIM/TWIS over gpio nets. No register map or reset value of this board changed.
     # Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-11
+    # 2026-10-15 (#1384 hardware NSS/CSN on gpio nets): bus/attach.rs gives L476 SPI
+    # NSS pads and G474/WB55/L073 their own SPI pad tables; nRF52840 gains SPIM3
+    # (CSN, CSNPOL, IFTIMING.CSNDUR, DCX) at 0x4002F000; spi.rs keeps an nRF net
+    # transfer in the bus-tick set. No register map or reset value of this board
+    # changed. Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
     # 2026-10-15 (SPI DMA): watched gpdma.rs + spi.rs. GPDMA only fills the new
     # DmaRequest::remaining field (None); the H5 SPI v3 path is untouched. The
     # classic/FIFO STM32 SPI gains TXDMAEN/RXDMAEN requests and LDMA_TX/LDMA_RX
@@ -3398,7 +3415,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: 7159ca6aca9953c59dffafec76547a6e046aec326f2650d0249605d098b6a3bc
+    drift_ack_digest: 2e565c5898739c7156620845b9ac0b46db46506b2f563a03f3f6b221e00a5a27
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -3881,6 +3898,11 @@ boards:
     # TWIM/TWIS over gpio nets. No register map or reset value of this board changed.
     # Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-11
+    # 2026-10-15 (#1384 hardware NSS/CSN on gpio nets): bus/attach.rs gives L476 SPI
+    # NSS pads and G474/WB55/L073 their own SPI pad tables; nRF52840 gains SPIM3
+    # (CSN, CSNPOL, IFTIMING.CSNDUR, DCX) at 0x4002F000; spi.rs keeps an nRF net
+    # transfer in the bus-tick set. No register map or reset value of this board
+    # changed. Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
     # 2026-10-15 (SPI DMA): watched dma.rs / stm32f4_dma.rs, spi.rs and the chip
     # yaml (new `requests:` routes). SPI TXDMAEN/RXDMAEN raise DMA requests;
     # peripheral DMA items now copy data at PSIZE/MSIZE instead of writing 0 /
@@ -4284,7 +4306,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: f218e01dd965b57f1f1256110b069c8e0ee34ae8d200ab23c1f080154eb1c446
+    drift_ack_digest: daebe60faf92691bb22649f5921468ad4364f08675c4b520eb0c73543530cfde
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -4709,6 +4731,11 @@ boards:
     # TWIM/TWIS over gpio nets. No register map or reset value of this board changed.
     # Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-11
+    # 2026-10-15 (#1384 hardware NSS/CSN on gpio nets): bus/attach.rs gives L476 SPI
+    # NSS pads and G474/WB55/L073 their own SPI pad tables; nRF52840 gains SPIM3
+    # (CSN, CSNPOL, IFTIMING.CSNDUR, DCX) at 0x4002F000; spi.rs keeps an nRF net
+    # transfer in the bus-tick set. No register map or reset value of this board
+    # changed. Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
     # 2026-10-15 (SPI DMA): watched dma.rs / stm32f4_dma.rs, spi.rs and the chip
     # yaml (new `requests:` routes). SPI TXDMAEN/RXDMAEN raise DMA requests;
     # peripheral DMA items now copy data at PSIZE/MSIZE instead of writing 0 /
@@ -5166,7 +5193,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: a81fa60e2aa48d2a75605c8d5af7d4cdcb77bc208c05417518cec0e6d2d4721f
+    drift_ack_digest: 8b721264ff611bfbb3fcb42b0942e48e422124bd8daec4ed9fc5149361d88960
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -5666,6 +5693,11 @@ boards:
     # TWIM/TWIS over gpio nets. No register map or reset value of this board changed.
     # Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-11
+    # 2026-10-15 (#1384 hardware NSS/CSN on gpio nets): bus/attach.rs gives L476 SPI
+    # NSS pads and G474/WB55/L073 their own SPI pad tables; nRF52840 gains SPIM3
+    # (CSN, CSNPOL, IFTIMING.CSNDUR, DCX) at 0x4002F000; spi.rs keeps an nRF net
+    # transfer in the bus-tick set. No register map or reset value of this board
+    # changed. Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
     # 2026-10-15 (SPI DMA): watched dma.rs / stm32f4_dma.rs, spi.rs and the chip
     # yaml (new `requests:` routes). SPI TXDMAEN/RXDMAEN raise DMA requests;
     # peripheral DMA items now copy data at PSIZE/MSIZE instead of writing 0 /
@@ -6087,7 +6119,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: 2a2e5f47999708e88cdb9fb0ad594d84503da9b4c6d59c9058405056878aa457
+    drift_ack_digest: e7ec04a6fec9f00f15d40af116281538f8bcca138d4b35d646a5b0536d632497
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -6522,6 +6554,11 @@ boards:
     # TWIM/TWIS over gpio nets. No register map or reset value of this board changed.
     # Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-11
+    # 2026-10-15 (#1384 hardware NSS/CSN on gpio nets): bus/attach.rs gives L476 SPI
+    # NSS pads and G474/WB55/L073 their own SPI pad tables; nRF52840 gains SPIM3
+    # (CSN, CSNPOL, IFTIMING.CSNDUR, DCX) at 0x4002F000; spi.rs keeps an nRF net
+    # transfer in the bus-tick set. No register map or reset value of this board
+    # changed. Pinned by world_gpio_net_buses. Approved by the maintainer. ACK, NOT A CAPTURE.
     # 2026-10-15 (SPI DMA): watched dma.rs / stm32f4_dma.rs, spi.rs and the chip
     # yaml (new `requests:` routes). SPI TXDMAEN/RXDMAEN raise DMA requests;
     # peripheral DMA items now copy data at PSIZE/MSIZE instead of writing 0 /
