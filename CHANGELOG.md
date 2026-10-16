@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Performance
+- Idle fast-forward also skips a proven CCOUNT busy-wait, on any core. A
+  core in a loop that only reads CCOUNT, computes with it and compares it
+  (`while (ESP.getCycleCount() - t0 < n) {}`, a servo pulse loop) counts as
+  idle: the Xtensa core proves one iteration is a pure function of the
+  CCOUNT value (read-only probe, taint per register, exact first change of
+  every compare) and the machine skips the steady iterations. The skip is a
+  whole number of iterations, ends on every core's CCOMPARE0 edge, and
+  leaves the same state as running them: servo edge stamps are identical to
+  a run without any skip. The four-servo trajectory lab (two cores, loopTask
+  on APP_CPU) goes from 0.03x to 2.0x real time in WASM (Node, 12 s).
 ### Fixed
 - Idle fast-forward on a dual-core machine waits until BOTH cores are idle.
   It skipped on the primary's WAITI alone, so an ESP32 sketch whose
