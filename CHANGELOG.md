@@ -17,6 +17,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   --watch-gpio`.
 
 ### Added
+- OV3660 camera on the ESP32-S3 (`type: ov3660`, `docs/boards/esp32s3.md`
+  "Camera (DVP)"). The part answers SCCB at 0x3C (16-bit register addresses,
+  chip ID 0x3660, software reset) and streams frames over DVP into LCD_CAM's
+  camera slave, which now feeds GDMA's IN channel (`PERI_SEL = 5`) with the
+  VSYNC / `IN_SUC_EOF` sequence `esp32-camera`'s `cam_hal` counts. Frames
+  follow the window and format the driver programs (RGB565, YUV422, Y8);
+  the scene is synthetic and stimulus-driven (`pattern`, `brightness`,
+  `motion`). Espressif's `take_picture` example runs unmodified apart from
+  board pins. JPEG is not modelled (no frames). Under the event scheduler
+  the camera's GDMA pump runs from its own wake-ups rather than the
+  per-boundary bus-tick pass, so the CPU keeps batching while frames flow
+  (camera-to-ST7789 preview: ~3x faster per frame). Tested in
+  `tests/esp32s3_camera_dvp.rs`.
+- ESP32-S3 I²C slaves reach the GPIO matrix: a part attached with a pad
+  `route:` can ask for twins on the chip's other I²C controllers, which claim
+  its address only while the firmware routes that controller's SCL/SDA to the
+  part's pads. The `ov3660` uses it, so a camera the canvas names on `i2c0`
+  answers `esp32-camera`'s I2C1 as on silicon.
+
 - Hardware chip select on `gpio_net`s for more parts. The STM32L476 SPI pad
   table routes NSS (SPI1 PA4/PA15/PE12 and SPI2 PB9/PB12/PD0 on AF5, SPI3
   PA4/PA15 on AF6), and the STM32G474, STM32WB55 and STM32L073 get their own
@@ -181,6 +200,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     with the nodes swapped and with 37 ns rounds.
 
 ### Fixed
+- ESP32-S3 LCD_CAM `CAM_CTRL1`: `CAM_START` is bit 29 and `CAM_RESET` bit 30
+  (with `CAM_AFIFO_RESET` at 31), per the SVD. They were modelled swapped, so
+  the camera driver's start was read as a reset pulse and capture never ran.
+- GDMA IN descriptors are filled regardless of their owner bit when
+  `IN_CHECK_OWNER` is clear, as on silicon, so a circular RX ring keeps
+  filling after its first lap (used by the camera path).
+- ESP32-S3 / C3 GP-SPI logic-analyzer narration no longer re-narrates a held
+  burst on every cycle while it cannot fit (`LevelsOnly`); it waits for the
+  cycles it was short. A large `SPI.writeBytes` (a camera frame to a
+  display at 40 MHz) made the run quadratic in the burst length. A wire
+  nobody records (no logic-capture tap, no `gpio_net`) now narrates only a
+  burst's last byte, which leaves the lines exactly where the whole burst
+  would; a tap or a net still gets every edge.
 - STM32 DMA peripheral transfers move data. The channel (`dma`) and stream
   (`stm32f4_dma`) models emitted a memory-to-peripheral item as a write of 0
   and a peripheral-to-memory item as a read whose value was dropped; every

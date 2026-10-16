@@ -1301,6 +1301,53 @@
       "inputs": []
     },
     {
+      "device_type": "ov3660",
+      "label": "OV3660 Camera",
+      "summary": "OmniVision 3 MP camera: SCCB control at 0x3C plus 8-bit DVP frames into the ESP32-S3 LCD_CAM.",
+      "detail": "SCCB register file with 16-bit addressing (chip ID 0x3660, software reset). Frames follow the output window (0x3808-0x380B) and format (0x4300: RGB565, YUV422, Y8) the driver programs, and stream through LCD_CAM's camera slave and GDMA exactly as esp32-camera expects. The scene is synthetic: drive `pattern`, `brightness` and `motion`; the colour-bar test-pattern bit (0x503D[7]) overrides it. JPEG output is not modelled (no frames). connection: the I2C controller carrying SIOD/SIOC (esp32-camera uses i2c1 by default).",
+      "transport": "i2c",
+      "category": "i2c",
+      "config_keys": [
+        {
+          "name": "i2c_address",
+          "ty": "int",
+          "doc": "7-bit SCCB address. Defaults to 0x3C (fixed on the part)."
+        },
+        {
+          "name": "powered",
+          "ty": "bool",
+          "doc": "Whether the module's supply pins (VCC, GND) are connected. Omit for a powered part -- ABSENT MEANS POWERED, because curated labs state signals and leave the rails implicit. Only an explicit `false`, which the diagram compiler emits when it can see the supply pins are on no net, changes anything: the part then ignores its bus entirely and reports the dark/idle state it has on a bench."
+        }
+      ],
+      "labs": [],
+      "inputs": [
+        {
+          "key": "pattern",
+          "label": "Scene (0 bars, 1 checker, 2 gradient, 3 flat)",
+          "unit": "",
+          "min": 0.0,
+          "max": 3.0,
+          "default": 0.0
+        },
+        {
+          "key": "brightness",
+          "label": "Brightness",
+          "unit": "%",
+          "min": 0.0,
+          "max": 100.0,
+          "default": 100.0
+        },
+        {
+          "key": "motion",
+          "label": "Scene motion",
+          "unit": "px/frame",
+          "min": 0.0,
+          "max": 64.0,
+          "default": 0.0
+        }
+      ]
+    },
+    {
       "device_type": "ssd1680_tricolor_290",
       "label": "SSD1680 Tri-Color E-Paper",
       "summary": "2.9\" tri-color (black/white/red) e-paper over SPI. Driver class GxEPD2_290_C90c -- the WeAct / Waveshare 2.9\" B/W/R module. Not interchangeable with the UC8151D part.",

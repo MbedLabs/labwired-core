@@ -7300,7 +7300,33 @@ boards:
     # value in the nine captured windows changed (I2C0 reset values untouched);
     # pinned by world_gpio_net_buses and the existing S3 I2C/SPI waveform and
     # oracle tests. Approved by the maintainer. ACK, NOT A CAPTURE.
-    drift_ack_digest: b9d64e9080f3c0aa8afa3bd3bb798dbf26d592d96638863ad140daf0f74f315c
+    # 2026-10-16 (OV3660 camera): watched esp32s3/lcd_cam.rs and gdma.rs
+    # moved. LCD_CAM gains the CAM (DVP receive) path for an attached sensor,
+    # and CAM_CTRL1's CAM_START / CAM_RESET move to bits 29 / 30 (plus
+    # AFIFO_RESET 31) per the vendored SVD — they were modelled swapped. GDMA's
+    # IN direction couples to LCD_CAM (PERI_SEL 5) and honours IN_CHECK_OWNER;
+    # IN_LINK.STOP ends a camera receive. LCD_CAM is not in the 2026-08-09
+    # asserted windows; GDMA is, and no GDMA reset value or register readback
+    # changed (new state is internal to the coupled pump; under the event
+    # scheduler the camera pump runs from GDMA's own wake-ups instead of the
+    # per-boundary bus-tick pass, which is timing of the sim, not a register).
+    # Ran: cargo test -p labwired-core --lib (default and event-scheduler),
+    # tests/esp32s3_camera_dvp.rs, tests/esp32s3_lcd_i80_pixels.rs,
+    # tests/esp32s3_gdma_oracle.rs. Approved by the maintainer.
+    # ACK, NOT A CAPTURE. The live re-capture owed above is still owed, and a
+    # live LCD_CAM camera capture would be new evidence, not a re-capture.
+    # Same day, same change: esp32s3/gpio.rs and i2c.rs moved too. GPIO
+    # mirrors FUNCn_OUT_SEL_CFG writes into a read-only view for the I2C
+    # controllers (register storage and readback unchanged), and each I2C
+    # controller attaches slaves through the generic I2cSlaveHost path and
+    # can host GPIO-matrix twins (a slave claims its address only while the
+    # matrix routes that controller's SCL/SDA to its pads). No reset value or
+    # register readback in the captured windows changed. Ran:
+    # tests/esp32s3_camera_dvp.rs (incl. the I2C1-through-matrix test),
+    # world_gpio_net_buses, and the lib suites. Approved by the maintainer.
+    # ACK, NOT A CAPTURE.
+    drift_ack: 2026-10-16
+    drift_ack_digest: 14d9f25bcbc9827fb8c0c0a2f87dde3b5b04a44709557ea34f3736d64f8a393d
 
   - id: esp32s3-zero
     # Board variant of esp32s3: same silicon (LX7), 4 MiB flash / 480 KiB RAM.

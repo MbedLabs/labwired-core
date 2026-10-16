@@ -41,6 +41,7 @@ pub mod gpio_schedule;
 #[allow(dead_code)]
 pub mod dht22;
 pub mod drv2605;
+pub mod dvp_sensor;
 pub mod esp32c3_esp_at;
 pub mod h_bridge_motor;
 pub mod i2c_factory;
@@ -63,6 +64,7 @@ pub mod mlx90640;
 #[cfg(test)]
 pub(crate) mod mux_fixture;
 pub mod nau88l21;
+pub mod ov3660;
 pub mod pca9685;
 pub mod pn532;
 pub mod rule_machine;
@@ -104,6 +106,7 @@ pub use declarative_led_strip::{
 pub use declarative_logic::DeclarativeLogicDevice;
 pub use declarative_spi::{DeclarativeSpiKit, GenericSpiDevice};
 pub use drv2605::{Drv2605, DRV2605_ADDR};
+pub use dvp_sensor::DvpSensor;
 pub use i2c_factory::{
     build_external_i2c_device, build_i2c_device, build_i2c_tree, i2c_mux_child_ids,
     is_i2c_mux_type, validate_i2c_mux_topology,
@@ -117,6 +120,7 @@ pub use lcd1602::Lcd1602;
 pub use max30102::{Max30102, MAX30102_ADDR};
 pub use mlx90640::{Mlx90640, ThermalScene, MLX90640_ADDR};
 pub use nau88l21::Nau88l21;
+pub use ov3660::{Ov3660, Ov3660Sccb, OV3660_PID, OV3660_SCCB_ADDR};
 pub use pca9685::Pca9685;
 pub use rule_machine::{RuleCtx, RuleMachine};
 pub use servo::{LedcServoDriver, McpwmServoDriver, Servo, ServoCal};

@@ -186,6 +186,11 @@ pub struct Esp32s3I2c {
     net_sr: u32,
     /// Interrupt level last reported through a scheduler event in net mode.
     net_irq: crate::peripherals::esp_gpio_net::IrqLevelWatch,
+    /// The chip's live GPIO output matrix, installed at bus wiring time
+    /// (`SystemBus::wire_esp32s3_i2c_pads`). Lets a slave be reached through
+    /// this controller when the firmware routes it to that slave's pads; see
+    /// `peripherals::i2c_matrix`.
+    pad_matrix: Option<std::sync::Arc<dyn crate::peripherals::i2c_matrix::PadOutMatrix>>,
 }
 
 impl Esp32s3I2c {
@@ -233,6 +238,7 @@ impl Esp32s3I2c {
             net: Default::default(),
             net_sr: 0,
             net_irq: Default::default(),
+            pad_matrix: None,
         }
     }
 
@@ -522,7 +528,42 @@ impl std::fmt::Debug for Esp32s3I2c {
     }
 }
 
+/// `I2CEXT0_SCL/SDA` and `I2CEXT1_SCL/SDA` output signals
+/// (`soc/esp32s3/include/soc/gpio_sig_map.h`: 89/90 and 91/92).
+const I2CEXT0_SIGNALS: (u32, u32) = (89, 90);
+const I2CEXT1_SIGNALS: (u32, u32) = (91, 92);
+
+impl crate::peripherals::device::I2cSlaveHost for Esp32s3I2c {
+    fn attach_slave(&mut self, device: Box<dyn I2cDevice>) {
+        self.push_slave(device);
+    }
+
+    fn matrix_reach(&self) -> Option<crate::peripherals::i2c_matrix::I2cMatrixReach> {
+        let (scl_signal, sda_signal) = match self.intr_source_id {
+            I2C0_INTR_SOURCE_ID => I2CEXT0_SIGNALS,
+            I2C1_INTR_SOURCE_ID => I2CEXT1_SIGNALS,
+            _ => return None,
+        };
+        Some(crate::peripherals::i2c_matrix::I2cMatrixReach {
+            matrix: self.pad_matrix.clone()?,
+            scl_signal,
+            sda_signal,
+        })
+    }
+
+    fn set_pad_matrix(
+        &mut self,
+        matrix: std::sync::Arc<dyn crate::peripherals::i2c_matrix::PadOutMatrix>,
+    ) {
+        self.pad_matrix = Some(matrix);
+    }
+}
+
 impl Peripheral for Esp32s3I2c {
+    fn i2c_slave_host(&mut self) -> Option<&mut dyn crate::peripherals::device::I2cSlaveHost> {
+        Some(self)
+    }
+
     fn line_names(&self) -> &'static [&'static str] {
         I2C_LINES
     }
