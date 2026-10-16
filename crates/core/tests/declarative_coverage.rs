@@ -219,7 +219,16 @@ const YAML_DEVICES_BASELINE: usize = 89;
 /// The port path is to add these reusable options to the existing UART
 /// primitive, prove parity against the current bounded host contracts, add
 /// the ESP-AT descriptor, and delete this Rust part / lower this count again.
-const RUST_DEVICES_BASELINE: usize = 26;
+/// 26 → 27: `ov3660.rs`, the OV3660 camera. Its SCCB half is a register file a
+/// declarative `i2c_device` could almost hold (it would need 16-bit register
+/// addressing), but the part's point is the DVP half: rendering whole frames
+/// from the window and format the driver programmed and handing them to the
+/// chip's camera interface through the `DvpSensor` seam. No declarative
+/// primitive produces a pixel stream or binds to a camera slave. The port path
+/// is a declarative `camera`/frame-source primitive (window + format registers
+/// in, `DvpSensor` out), after which the SCCB map moves to YAML and this file
+/// goes.
+const RUST_DEVICES_BASELINE: usize = 27;
 
 /// Files in `components/` that are NOT a device model, with the reason. Listed
 /// here rather than pattern-matched so every exemption is a line someone wrote
@@ -301,6 +310,11 @@ const EXCLUDED: &[(&str, &str)] = &[
         "the ONE-METHOD 8080-parallel seam `Esp32s3LcdCam` strobes — a trait \
          declaration with no model behind it, and the thing that lets the \
          parallel panel become a descriptor at all",
+    ),
+    (
+        "dvp_sensor.rs",
+        "the ONE-METHOD DVP camera seam `Esp32s3LcdCam` pulls frames through, the \
+         receive twin of i80_panel.rs — a trait declaration with no model behind it",
     ),
 ];
 
