@@ -3074,7 +3074,7 @@
         {
           "name": "ledc_channel",
           "ty": "int",
-          "doc": "Optional ESP32 LEDC channel (0..15). When omitted, all 16 channels observe."
+          "doc": "Optional ESP32 LEDC channel (0..15). When omitted, the servo follows the channel the GPIO matrix routes to its pad."
         }
       ],
       "labs": [],
