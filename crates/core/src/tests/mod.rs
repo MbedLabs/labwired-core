@@ -125,5 +125,9 @@ pub mod xtensa_bus_free_whitelist;
 pub mod xtensa_memory_contract;
 #[cfg(test)]
 pub mod xtensa_waiti_resume;
+
+/// The CCOUNT poll-loop skip fires and changes nothing the firmware sees.
+#[cfg(test)]
+pub mod xtensa_poll_loop_skip;
 #[cfg(test)]
 pub mod yaml_owned_base_contract;
