@@ -393,7 +393,9 @@ where
         }
         // Advance after the step — see `CortexM::step_batch`.
         advance_batch_cycle(bus, live_step);
-        if config.idle_fast_forward_enabled && cpu.idle_fast_forward_budget(bus).is_some() {
+        if config.idle_fast_forward_enabled
+            && (cpu.idle_fast_forward_budget(bus).is_some() || cpu.poll_loop_anchor_ready())
+        {
             return Ok(i + 1);
         }
         // A world's net pad changed drive: end the batch on this instruction
@@ -403,6 +405,19 @@ where
         }
     }
     Ok(max_count)
+}
+
+fn lcm_u64(a: u64, b: u64) -> u64 {
+    fn gcd(mut a: u64, mut b: u64) -> u64 {
+        while b != 0 {
+            (a, b) = (b, a % b);
+        }
+        a
+    }
+    if a == 0 || b == 0 {
+        return a.max(b);
+    }
+    (a / gcd(a, b)).saturating_mul(b)
 }
 
 /// Publish cycles retired inside a CPU batch when the event scheduler is on.
@@ -632,6 +647,33 @@ pub trait Cpu: Send {
         None
     }
 
+    /// True right after this core read its cycle counter at the head of a
+    /// loop that came round to the same read at least twice: a candidate
+    /// time-poll busy-wait (`while (ccount() - t0 < n) {}`). Batch loops end
+    /// on it, as they end on an idle budget, so the machine can ask
+    /// [`Self::poll_loop_skip_budget`]. Default `false`.
+    #[inline]
+    fn poll_loop_anchor_ready(&self) -> bool {
+        false
+    }
+
+    /// Prove the loop at the current anchor is a pure function of the cycle
+    /// counter and return `(period, cycles)`: one iteration's length and the
+    /// most cycles (a multiple of it, at most `limit`) the machine may skip
+    /// with [`Self::fast_forward_poll_loop`] and land exactly where running
+    /// them would. `None` (the default) refuses and changes nothing. A busy
+    /// core with such a budget counts as idle for the machine's skip.
+    fn poll_loop_skip_budget(&mut self, _bus: &dyn Bus, _limit: u64) -> Option<(u64, u64)> {
+        None
+    }
+
+    /// Skip `cycles` of the loop the last [`Self::poll_loop_skip_budget`]
+    /// proved (a multiple of its period, at most its cycles). `false`, having
+    /// changed nothing, when there is no such plan.
+    fn fast_forward_poll_loop(&mut self, _cycles: u64) -> bool {
+        false
+    }
+
     /// Is the cycle count this core charges per step real clock time?
     ///
     /// True for an AVR: its step takes the datasheet's 1–4 clock cycles, and
@@ -854,6 +896,15 @@ impl Cpu for Box<dyn Cpu> {
     }
     fn is_parked_idle(&self) -> bool {
         (**self).is_parked_idle()
+    }
+    fn poll_loop_anchor_ready(&self) -> bool {
+        (**self).poll_loop_anchor_ready()
+    }
+    fn poll_loop_skip_budget(&mut self, bus: &dyn Bus, limit: u64) -> Option<(u64, u64)> {
+        (**self).poll_loop_skip_budget(bus, limit)
+    }
+    fn fast_forward_poll_loop(&mut self, cycles: u64) -> bool {
+        (**self).fast_forward_poll_loop(cycles)
     }
     fn secondary_execution_state(&self) -> SecondaryExecutionState {
         (**self).secondary_execution_state()
@@ -2803,6 +2854,12 @@ pub struct Machine<C: Cpu> {
     /// interpreted. Lets the browser `?perf=1` HUD prove FF is firing; 0 means
     /// either FF is off or firmware never parks in a skippable idle.
     pub idle_fast_forward_cycles_skipped: u64,
+    /// The part of [`Self::idle_fast_forward_cycles_skipped`] skipped with at
+    /// least one core in a proven cycle-counter poll loop
+    /// ([`Cpu::poll_loop_skip_budget`]) rather than in WAITI/WFI.
+    pub poll_loop_cycles_skipped: u64,
+    /// Windows that made up [`Self::poll_loop_cycles_skipped`].
+    pub poll_loop_skips: u64,
     pub config: SimulationConfig,
     /// Injectable host clock used by [`HostTimeMode::Realtime`] pacing.
     host_clock: Box<dyn host_time::HostClock + Send>,
@@ -3579,6 +3636,8 @@ impl<C: Cpu> Machine<C> {
             breakpoint_core: 0,
             total_cycles: 0,
             idle_fast_forward_cycles_skipped: 0,
+            poll_loop_cycles_skipped: 0,
+            poll_loop_skips: 0,
             config: SimulationConfig::default(),
             host_clock: Box::new(host_time::StdHostClock::new()),
             step_profile: StepProfile::default(),
@@ -3822,10 +3881,31 @@ impl<C: Cpu> Machine<C> {
             // WAITI got ~1 % of its cycles, and a CCOUNT-timed 20 ms servo
             // frame took ~2 s of machine time. A parked secondary keeps its
             // own wake deadline (CCOMPARE0) and its CCOUNT moves with the skip.
+            //
+            // A core busy in a proven cycle-counter poll loop (a CCOUNT
+            // busy-wait, `Cpu::poll_loop_skip_budget`) counts as idle too: it
+            // retires nothing but time until a known cycle, so skipping it is
+            // the same as running it. The skip is then a multiple of its loop
+            // period, and every core's timer edge clamps it.
+            let remaining = _max_steps
+                .map(|limit| limit.saturating_sub(_steps))
+                .unwrap_or(1_000_000);
+            if remaining == 0 {
+                return 0;
+            }
             let mut secondary_wake = None;
-            if let Some(sec) = self.cpu_secondary.as_ref() {
+            let mut secondary_spin: Option<(u64, u64)> = None;
+            if let Some(sec) = self.cpu_secondary.as_mut() {
                 match sec.secondary_execution_state() {
-                    SecondaryExecutionState::Active => return 0,
+                    SecondaryExecutionState::Active => {
+                        if !sec.poll_loop_anchor_ready() {
+                            return 0;
+                        }
+                        match sec.poll_loop_skip_budget(&self.bus, remaining) {
+                            Some(spin) => secondary_spin = Some(spin),
+                            None => return 0,
+                        }
+                    }
                     SecondaryExecutionState::ParkedIdle => {
                         if sec.idle_fast_forward_budget(&self.bus).is_none() {
                             return 0;
@@ -3837,20 +3917,42 @@ impl<C: Cpu> Machine<C> {
             }
             let wfi_budget = self.cpu.idle_fast_forward_budget(&self.bus);
             let timer_poll = !cycle_accurate && self.bus.take_timer_poll_coalesce_eligible();
-            let mut budget = match wfi_budget {
-                Some(budget) if budget > 0 => budget,
+            let primary_spin = match wfi_budget {
+                Some(budget) if budget > 0 => None,
+                _ if self.cpu.poll_loop_anchor_ready() => {
+                    self.cpu.poll_loop_skip_budget(&self.bus, remaining)
+                }
+                _ => None,
+            };
+            let spinning = primary_spin.is_some() || secondary_spin.is_some();
+            let mut budget = match (wfi_budget, primary_spin) {
+                (Some(budget), _) if budget > 0 => budget,
+                (_, Some((_, cycles))) => cycles,
                 _ if timer_poll => u64::MAX,
                 _ => return 0,
             };
-            let remaining = _max_steps
-                .map(|limit| limit.saturating_sub(_steps))
-                .unwrap_or(1_000_000);
-            if remaining == 0 {
-                return 0;
-            }
+            // The timer-poll arm below is only the one the budget came from.
+            let timer_poll = timer_poll && wfi_budget.is_none() && primary_spin.is_none();
             budget = budget.min(remaining);
             if let Some(until) = secondary_wake {
                 budget = budget.min(until);
+            }
+            if let Some((_, cycles)) = secondary_spin {
+                budget = budget.min(cycles);
+            }
+            if spinning {
+                // A spinning core's own CCOMPARE0 edge, and a WAITI primary's,
+                // land on time: the window ends on the edge.
+                if let Some(until) = self.cpu.parked_wake_deadline_cycles() {
+                    budget = budget.min(until);
+                }
+                if let Some(until) = self
+                    .cpu_secondary
+                    .as_ref()
+                    .and_then(|sec| sec.parked_wake_deadline_cycles())
+                {
+                    budget = budget.min(until);
+                }
             }
             if let Some(deadline) = self.bus.next_cpu_interrupt_deadline_cycle() {
                 budget = budget.min(deadline.saturating_sub(self.total_cycles));
@@ -3890,12 +3992,36 @@ impl<C: Cpu> Machine<C> {
             if budget == 0 || (timer_poll && wfi_budget.is_none() && budget < 1024) {
                 return 0;
             }
-            let skipped = budget.min(u32::MAX as u64) as u32;
-            self.cpu.fast_forward_idle_cycles(skipped as u64);
+            budget = budget.min(u32::MAX as u64);
+            if spinning {
+                // Whole loop iterations only, on every spinning core.
+                let mut step = 1u64;
+                for (period, _) in primary_spin.iter().chain(secondary_spin.iter()) {
+                    step = lcm_u64(step, *period);
+                }
+                budget -= budget % step;
+                if budget == 0 {
+                    return 0;
+                }
+            }
+            let skipped = budget as u32;
+            if primary_spin.is_some() {
+                let applied = self.cpu.fast_forward_poll_loop(skipped as u64);
+                debug_assert!(applied, "a proven poll-loop skip must apply");
+            } else {
+                self.cpu.fast_forward_idle_cycles(skipped as u64);
+            }
             if let Some(sec) = self.cpu_secondary.as_mut() {
-                if sec.secondary_execution_state() == SecondaryExecutionState::ParkedIdle {
+                if secondary_spin.is_some() {
+                    let applied = sec.fast_forward_poll_loop(skipped as u64);
+                    debug_assert!(applied, "a proven poll-loop skip must apply");
+                } else if sec.secondary_execution_state() == SecondaryExecutionState::ParkedIdle {
                     sec.fast_forward_idle_cycles(skipped as u64);
                 }
+            }
+            if spinning {
+                self.poll_loop_cycles_skipped += skipped as u64;
+                self.poll_loop_skips += 1;
             }
             self.total_cycles += skipped as u64;
             self.idle_fast_forward_cycles_skipped += skipped as u64;
