@@ -346,6 +346,7 @@ impl Timer {
             ic_psc_count: [0; 4],
             ti_level: [false; 4],
             ic_pending: Vec::new(),
+            wave: TimerOutputWave::default(),
         }
     }
 

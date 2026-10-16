@@ -41,7 +41,8 @@ impl SystemBus {
         }
         self.peripherals
             .iter_mut()
-            .filter(|p| p.dev.set_ambient_temperature_c(celsius))
+            .map(|p| p.dev.set_ambient_temperature_c(celsius))
+            .filter(|&took| took)
             .count()
     }
 
