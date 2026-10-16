@@ -696,6 +696,7 @@ macro_rules! analog_kit {
 analog_kit!(LDR_KIT, "ldr");
 analog_kit!(POTENTIOMETER_KIT, "potentiometer");
 analog_kit!(NTC_THERMISTOR_KIT, "ntc-thermistor");
+analog_kit!(TMP36_KIT, "tmp36");
 analog_kit!(MQ6_KIT, "mq-6");
 analog_kit!(SOIL_MOISTURE_KIT, "soil-moisture");
 analog_kit!(LIPO_CHARGER_KIT, "lipo_charger");
@@ -996,6 +997,7 @@ behavior:
             ("ldr", 2751),            // 100 lx
             ("potentiometer", 1650),  // 50 %
             ("ntc-thermistor", 1650), // 25 °C ⇒ exactly Vref/2
+            ("tmp36", 750),           // 25 °C ⇒ 500 + 250 mV
             ("mq-6", 0),              // 0 ppm, clean air
             ("soil-moisture", 1980),  // 40 % moisture
             ("lipo_charger", 1875),   // 50 % SoC, unplugged
@@ -1023,5 +1025,27 @@ behavior:
         assert_eq!(bat.output_mv(), 1950, "3750 + 150 = 3900 mV, halved");
         bat.set_input("usb_present", 0.0).unwrap();
         assert_eq!(bat.output_mv(), 1875);
+    }
+
+    /// TMP36 datasheet line: 500 mV at 0 °C, 10 mV/°C, clamped to the
+    /// specified -40..125 °C span (100..1750 mV).
+    #[test]
+    fn tmp36_follows_its_datasheet_line() {
+        let mut t = kit_device("tmp36");
+        for (c, mv) in [
+            (-40.0, 100u16),
+            (0.0, 500),
+            (25.0, 750),
+            (40.0, 900),
+            (45.0, 950),
+            (125.0, 1750),
+        ] {
+            t.set_input("temperature", c).unwrap();
+            assert_eq!(t.output_mv(), mv, "{c} °C");
+        }
+        assert!(
+            t.set_input("temperature", 200.0).is_err(),
+            "outside -40..125 is refused"
+        );
     }
 }

@@ -105,7 +105,9 @@ use std::path::PathBuf;
 /// as a declarative GPIO scan. New part, no Rust model to delete.
 /// 87 → 89: `lsm303agr_accel.yaml` / `lsm303agr_mag.yaml`, the micro:bit V2
 /// motion sensor. The fork's hand-written `lsm303agr.rs` was not taken.
-const YAML_DEVICES_BASELINE: usize = 89;
+/// 89 → 90: `tmp36.yaml`, the TMP36 analog temperature sensor (a linear
+/// `analog_source` formula). New part, no Rust model to delete.
+const YAML_DEVICES_BASELINE: usize = 90;
 
 /// Device models still hand-written in Rust
 /// (`crates/core/src/peripherals/components/*.rs`, minus [`EXCLUDED`]).
