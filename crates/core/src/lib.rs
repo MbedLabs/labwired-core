@@ -670,6 +670,24 @@ pub trait Cpu: Send {
         false
     }
 
+    /// While the machine defers this core's proven poll loop (the plan the
+    /// last [`Self::poll_loop_skip_budget`] proved, not yet applied): has
+    /// anything the deferred iterations depend on changed? True when a word
+    /// the loop loads no longer holds the value the proof read, or when an
+    /// interrupt the core would take is now pending. Default `true`: a core
+    /// that cannot defer never stays deferred.
+    fn poll_loop_defer_changed(&self, _bus: &dyn Bus) -> bool {
+        true
+    }
+
+    /// End a deferral: leave the core exactly where running `cycles` cycles
+    /// of the proven loop from its anchor would leave it, with the memory and
+    /// interrupt state the proof saw. `cycles` is at most the proven budget.
+    /// `false`, having changed nothing, when there is no plan.
+    fn poll_loop_catch_up(&mut self, _bus: &dyn Bus, _cycles: u64) -> bool {
+        false
+    }
+
     /// Is the cycle count this core charges per step real clock time?
     ///
     /// True for an AVR: its step takes the datasheet's 1–4 clock cycles, and
@@ -901,6 +919,12 @@ impl Cpu for Box<dyn Cpu> {
     }
     fn fast_forward_poll_loop(&mut self, cycles: u64) -> bool {
         (**self).fast_forward_poll_loop(cycles)
+    }
+    fn poll_loop_defer_changed(&self, bus: &dyn Bus) -> bool {
+        (**self).poll_loop_defer_changed(bus)
+    }
+    fn poll_loop_catch_up(&mut self, bus: &dyn Bus, cycles: u64) -> bool {
+        (**self).poll_loop_catch_up(bus, cycles)
     }
     fn secondary_execution_state(&self) -> SecondaryExecutionState {
         (**self).secondary_execution_state()
@@ -2906,6 +2930,19 @@ pub struct Machine<C: Cpu> {
     pub poll_loop_cycles_skipped: u64,
     /// Windows that made up [`Self::poll_loop_cycles_skipped`].
     pub poll_loop_skips: u64,
+    /// Secondary-core cycles not interpreted because the core sat in a
+    /// proven poll loop while the primary ran ([`Self::secondary_defer`]).
+    pub poll_loop_cycles_deferred: u64,
+    /// The secondary core's proven poll loop runs deferred: `(start, end)`
+    /// machine cycles. The core is not stepped from `start`; it holds the
+    /// state of its loop anchor at `start` and the plan its
+    /// [`Cpu::poll_loop_skip_budget`] proved. The primary runs alone, as
+    /// beside a parked core. The deferral ends at `end` (before the core's
+    /// CCOMPARE0 edge), when [`Cpu::poll_loop_defer_changed`] reports a
+    /// change (a word the loop reads, or a deliverable interrupt), and at
+    /// the end of every [`Machine::advance`]; then
+    /// [`Cpu::poll_loop_catch_up`] leaves the core where lockstep would.
+    pub(crate) secondary_defer: Option<(u64, u64)>,
     pub config: SimulationConfig,
     /// Injectable host clock used by [`HostTimeMode::Realtime`] pacing.
     host_clock: Box<dyn host_time::HostClock + Send>,
@@ -3690,6 +3727,8 @@ impl<C: Cpu> Machine<C> {
             idle_fast_forward_cycles_skipped: 0,
             poll_loop_cycles_skipped: 0,
             poll_loop_skips: 0,
+            poll_loop_cycles_deferred: 0,
+            secondary_defer: None,
             config: SimulationConfig::default(),
             host_clock: Box::new(host_time::StdHostClock::new()),
             step_profile: StepProfile::default(),
@@ -3880,6 +3919,83 @@ impl<C: Cpu> Machine<C> {
         self.step_profile.legacy_tick_entries += legacy_tick_entries as u64;
     }
 
+    /// The secondary core's state as the window planner and the CPU window
+    /// see it: a deferred poll loop runs like a parked core.
+    pub(crate) fn secondary_plan_state(&self) -> Option<SecondaryExecutionState> {
+        if self.secondary_defer.is_some() {
+            return Some(SecondaryExecutionState::ParkedIdle);
+        }
+        self.cpu_secondary
+            .as_ref()
+            .map(|sec| sec.secondary_execution_state())
+    }
+
+    /// End the secondary's deferral with the core caught up to `through`:
+    /// its steps for the machine cycles before `through` ran on the state
+    /// the proof saw.
+    pub(crate) fn end_secondary_defer(&mut self, through: u64) {
+        let Some((start, _)) = self.secondary_defer.take() else {
+            return;
+        };
+        let cycles = through.saturating_sub(start);
+        if let Some(sec) = self.cpu_secondary.as_mut() {
+            let caught_up = sec.poll_loop_catch_up(&self.bus, cycles);
+            debug_assert!(caught_up, "a deferred poll loop must catch up");
+        }
+        self.poll_loop_cycles_deferred += cycles;
+    }
+
+    /// At a machine boundary (after the tick and the scheduler drain): end a
+    /// deferral that is due, with the core caught up to now.
+    pub(crate) fn check_secondary_defer(&mut self) -> bool {
+        let Some((_, end)) = self.secondary_defer else {
+            return false;
+        };
+        let changed = self.total_cycles >= end
+            || self
+                .cpu_secondary
+                .as_ref()
+                .is_none_or(|sec| sec.poll_loop_defer_changed(&self.bus));
+        if changed {
+            self.end_secondary_defer(self.total_cycles);
+        }
+        changed
+    }
+
+    /// Defer the secondary core's proven poll loop so the primary can run
+    /// alone (see [`Self::secondary_defer`]). Only on a quantum-1 bus, where
+    /// the primary-alone window checks the deferral after every instruction.
+    pub(crate) fn try_defer_secondary(&mut self, limit: u64) -> bool {
+        if self.secondary_defer.is_some()
+            || !self.config.idle_fast_forward_enabled
+            || self.config.peripheral_tick_interval.max(1) != 1
+            || self.logic_capture.poll_active()
+            || !self.breakpoints.is_empty()
+        {
+            return false;
+        }
+        let Some(sec) = self.cpu_secondary.as_mut() else {
+            return false;
+        };
+        if sec.secondary_execution_state() != SecondaryExecutionState::Active
+            || !sec.poll_loop_anchor_ready()
+        {
+            return false;
+        }
+        let edge = sec.parked_wake_deadline_cycles();
+        let Some((_, cycles)) = sec.poll_loop_skip_budget(&self.bus, limit) else {
+            return false;
+        };
+        // The step that raises CCOMPARE0 (the `edge`-th from now) runs live.
+        let len = edge.map_or(cycles, |edge| cycles.min(edge.saturating_sub(1)));
+        if len < 2 {
+            sec.poll_loop_catch_up(&self.bus, 0);
+            return false;
+        }
+        self.secondary_defer = Some((self.total_cycles, self.total_cycles + len));
+        true
+    }
+
     fn try_idle_fast_forward(&mut self, _max_steps: Option<u64>, _steps: u64) -> u64 {
         // POLLED logic capture disables the skip: a scheduler event inside the
         // skipped window could toggle a watched pad, and the per-cycle poll
@@ -3917,6 +4033,8 @@ impl<C: Cpu> Machine<C> {
             // which case the CPU must resume normally instead of skipping.
             self.drain_scheduler_events();
             self.service_resident_edges_at_boundary();
+            self.check_secondary_defer();
+            let deferred_end = self.secondary_defer.map(|(_, end)| end);
 
             // Two coalesce sources under the same idle-FF flag:
             // 1) Architectural WFI / wait-for-interrupt (existing).
@@ -3947,7 +4065,11 @@ impl<C: Cpu> Machine<C> {
             }
             let mut secondary_wake = None;
             let mut secondary_spin: Option<(u64, u64)> = None;
-            if let Some(sec) = self.cpu_secondary.as_mut() {
+            if let Some(end) = deferred_end {
+                // A deferred loop runs on through the skip; its deferral
+                // already ends before its own timer edge.
+                secondary_wake = Some(end - self.total_cycles);
+            } else if let Some(sec) = self.cpu_secondary.as_mut() {
                 match sec.secondary_execution_state() {
                     SecondaryExecutionState::Active => {
                         if !sec.poll_loop_anchor_ready() {
@@ -3976,7 +4098,8 @@ impl<C: Cpu> Machine<C> {
                 }
                 _ => None,
             };
-            let spinning = primary_spin.is_some() || secondary_spin.is_some();
+            let spinning =
+                primary_spin.is_some() || secondary_spin.is_some() || deferred_end.is_some();
             let mut budget = match (wfi_budget, primary_spin) {
                 (Some(budget), _) if budget > 0 => budget,
                 (_, Some((_, cycles))) => cycles,
@@ -4075,7 +4198,11 @@ impl<C: Cpu> Machine<C> {
             } else {
                 self.cpu.fast_forward_idle_cycles(skipped as u64);
             }
-            if let Some(sec) = self.cpu_secondary.as_mut() {
+            if let Some(sec) = self
+                .cpu_secondary
+                .as_mut()
+                .filter(|_| deferred_end.is_none())
+            {
                 if secondary_spin.is_some() {
                     let applied = sec.fast_forward_poll_loop(skipped as u64);
                     debug_assert!(applied, "a proven poll-loop skip must apply");

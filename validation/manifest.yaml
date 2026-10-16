@@ -7168,8 +7168,15 @@ boards:
     # lib (event-scheduler), esp32s3_smp_yield_latency,
     # esp32s3_irq_cache_differential, esp32s3_walk_differential, xtensa_exec,
     # xtensa_lx7. ACK, NOT A CAPTURE.
+    # 2026-10-17, follow-up to #1396: poll_loop.rs records the bytes a proven
+    # iteration reads and can catch a deferred loop up (the machine runs the
+    # primary alone beside a secondary in such a loop). No register, reset
+    # value or readback changes; tests/xtensa_poll_loop_skip.rs compares
+    # records, CCOUNT and machine cycles with and without the deferral.
+    # Ran: core lib (event-scheduler), the same S3 differentials. ACK, NOT A
+    # CAPTURE; the ack date is unchanged.
     drift_ack: 2026-10-16
-    drift_ack_digest: 2325b6779bfd12d97255ce7dd4f51ed36d1a141b66fe4367ecdf37bd8bf2a754
+    drift_ack_digest: 66f3c2b157e47105b4d5f8df33cf09a47cffc5312455f390f2ca21f69d617982
 
   - id: esp32s3-zero
     # Board variant of esp32s3: same silicon (LX7), 4 MiB flash / 480 KiB RAM.

@@ -3213,6 +3213,7 @@ mod esp32_servo_trajectory_harness {
         pub skipped: u64,
         pub poll_skipped: u64,
         pub poll_skips: u64,
+        pub deferred: u64,
         /// Per channel: (rise cycle, fall cycle) pairs.
         pub pulses: Vec<Vec<(u64, u64)>>,
         pub done_cycle: Option<u64>,
@@ -3275,6 +3276,7 @@ mod esp32_servo_trajectory_harness {
             skipped: m.idle_fast_forward_cycles_skipped,
             poll_skipped: m.poll_loop_cycles_skipped,
             poll_skips: m.poll_loop_skips,
+            deferred: m.poll_loop_cycles_deferred,
             pulses,
             done_cycle,
         }
@@ -3293,13 +3295,14 @@ mod esp32_servo_trajectory_harness {
         let ff = std::env::var("LABWIRED_SERVO_FF").as_deref() != Ok("0");
         let r = run(&fw, ff, cycles);
         eprintln!(
-            "SERVO ff={ff} wall={:.2}s sim={:.3}s ratio={:.3}x skipped={} poll_skipped={} poll_skips={} done_cycle={:?}",
+            "SERVO ff={ff} wall={:.2}s sim={:.3}s ratio={:.3}x skipped={} poll_skipped={} poll_skips={} deferred={} done_cycle={:?}",
             r.wall_s,
             r.sim_s,
             r.sim_s / r.wall_s,
             r.skipped,
             r.poll_skipped,
             r.poll_skips,
+            r.deferred,
             r.done_cycle
         );
         for (ch, p) in r.pulses.iter().enumerate() {

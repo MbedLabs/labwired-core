@@ -172,9 +172,7 @@ impl<C: Cpu> Machine<C> {
         let secondary_state = if request.is_single() {
             None
         } else {
-            self.cpu_secondary
-                .as_ref()
-                .map(|sec| sec.secondary_execution_state())
+            self.secondary_plan_state()
         };
         let secondary_parked = secondary_state == Some(crate::SecondaryExecutionState::ParkedIdle);
         let secondary_reset_held =
@@ -304,11 +302,15 @@ impl<C: Cpu> Machine<C> {
             // path fast-forwards CCOUNT over the window and would only raise
             // the edge at its end, up to 1023 cycles after a quantum-1 run
             // raises it. End the window on the edge instead.
-            if let Some(until) = self
-                .cpu_secondary
-                .as_ref()
-                .and_then(|sec| sec.parked_wake_deadline_cycles())
-            {
+            // A deferred poll loop ends its deferral the same way.
+            let secondary_until = match self.secondary_defer {
+                Some((_, end)) => Some(end.saturating_sub(self.total_cycles).max(1)),
+                None => self
+                    .cpu_secondary
+                    .as_ref()
+                    .and_then(|sec| sec.parked_wake_deadline_cycles()),
+            };
+            if let Some(until) = secondary_until {
                 clamp!(
                     count,
                     count_untick,
