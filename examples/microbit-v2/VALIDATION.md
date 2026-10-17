@@ -134,3 +134,27 @@ Pass criteria:
    rtc=pass spi=pass timer=pass uart=pass wdt=pass`, and no other chip's row
    changed (diff against `docs/coverage/tier1-matrix.json`: exactly
    `nrf52833/dma: na -> pass` and `nrf52833/irq: na -> pass`)
+
+## A10 transmit stack-lifetime regression
+
+`uarte-stack-buffer.S` is original MIT-licensed Cortex-M4 assembly, with no
+Nordic/CODAL/MakeCode implementation copied. Its `stack_putc` arms a one-byte
+UARTE transfer from its stack, returns, and a separate function overwrites that
+same slot before the caller waits for ENDTX. It emits `A10 stack reuse OK\n`.
+RAM counters prove that every transmitted slot was reused and the guest reached
+its terminal success state rather than timing out.
+
+The Rust integration test compiles that source with ARM GCC and `board-io.ld`,
+prints the ELF SHA-256, executes it on the micro:bit V2 system at tick interval 1 in both feature
+configurations, additionally at interval 64 with the scheduler, and checks
+exact ordered UART bytes and all guest counters:
+
+```sh
+cargo test -p labwired-core --features event-scheduler --test microbit_v2_uarte_stack_guest -- --nocapture
+cargo test -p labwired-core --no-default-features --test microbit_v2_uarte_stack_guest -- --nocapture
+```
+
+The model controls separately require that early capture publishes no bytes,
+AMOUNT, completion event or interrupt, while the original frame-count completion
+deadline is retained. This is a bounded simulated UART/stack-lifetime proof;
+MakeCode firmware on the released WASM engine and Lite adoption remain separate.

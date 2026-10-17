@@ -730,6 +730,16 @@ jobs:
       - name: Unit tests (labwired-core, FEATURE-OFF)
         run: cargo test -p labwired-core --lib
 
+      - name: ARM C compiler for the UARTE stack-lifetime guest (FEATURE-OFF)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi
+
+      - name: UARTE stack-lifetime guest (FEATURE-OFF)
+        run: >
+          scripts/ci/cargo-test-nonvacuous.sh
+          -p labwired-core --no-default-features --test microbit_v2_uarte_stack_guest
+          -- --nocapture
       # AVR sim-smoke golden — cheap (~ms), no PlatformIO. Pins Arduino Nano
       # UART+D13 behavior on every PR so the twin cannot regress silently.
       - name: AVR Nano golden survival

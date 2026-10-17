@@ -169,11 +169,17 @@ pub struct Nrf52Uarte {
     /// only while that wake has not been armed. Deferred because `write_u32`
     /// has no bus handle for the RAM read.
     tx_pending: bool,
+    /// Descriptor accepted by STARTTX; later register writes prepare a future transfer.
+    tx_active_ptr: u32,
+    tx_active_len: u32,
+    /// Bytes captured at the first scheduler boundary, before producer stack reuse.
+    /// Publication and completion remain at the original stop-bit deadline.
+    tx_snapshot: Option<Vec<u8>>,
     /// Set by a STARTRX task write (UARTE personality); consumed by
     /// `do_easydma_rx` once the RX queue has bytes to drain.
     rx_pending: bool,
-    /// Scheduler-side singleton: a TX wake is already queued (or in
-    /// `reschedule_delay` flight). `collect_scheduled_events` runs after
+    /// Scheduler-side ownership: one bounded capture/completion pair is queued.
+    /// `collect_scheduled_events` runs after
     /// every MMIO write; without this guard each STARTTX-pending poll arms
     /// a new absolute deadline and trips
     /// [`MAX_LIVE_EVENTS_PER_PERIPHERAL`](crate::sched::MAX_LIVE_EVENTS_PER_PERIPHERAL)
@@ -573,13 +579,19 @@ impl Peripheral for Nrf52Uarte {
 
     fn write_u32(&mut self, offset: u64, value: u32) -> SimResult<()> {
         match offset {
-            // STARTTX arms an EasyDMA TX; the actual buffer read + emit happens
-            // in `do_easydma_tx` via tick_with_bus / on_event (write_u32 has no
-            // bus handle). A 1-byte poll_out and a multi-byte buffered write
+            // STARTTX accepts the descriptor. The scheduler's immediate capture
+            // reads RAM before stack reuse; a separate wake retains the original
+            // stop-bit publication deadline (write_u32 has no bus handle).
+            // A 1-byte poll_out and a multi-byte buffered write
             // both land here. Only the UARTE personality uses EasyDMA — in
             // legacy UART mode STARTTX just enables the transmitter and bytes
             // flow through the TXD register.
-            OFF_TASKS_STARTTX if self.enable != ENABLE_UART_LEGACY => self.tx_pending = true,
+            OFF_TASKS_STARTTX if self.enable != ENABLE_UART_LEGACY => {
+                self.tx_active_ptr = self.txd_ptr;
+                self.tx_active_len = self.txd_maxcnt & 0xFFFF;
+                self.tx_snapshot = None;
+                self.tx_pending = true;
+            }
             OFF_TASKS_STARTTX => self.legacy_tx_armed = true,
             // STOPTX completes immediately in this model: raise TXSTOPPED so a
             // driver waiting on it (nrfx is_tx_ready) makes progress. A legacy
@@ -710,12 +722,17 @@ impl Peripheral for Nrf52Uarte {
             // One framed character per byte, at the current BAUDRATE. A
             // zero-length arm (Zephyr drives TXSTOPPED with MAXCNT 0) has
             // nothing to shift and still completes on the next cycle.
-            let bytes = u64::from(self.txd_maxcnt & 0xFFFF);
+            let bytes = u64::from(self.tx_active_len);
             let delay = if bytes == 0 {
                 0
             } else {
                 self.frame_cycles().saturating_mul(bytes)
             };
+            if bytes != 0 {
+                // A bounded pair: copy at the first boundary, then publish at
+                // the unchanged completion deadline. Further collects add none.
+                events.push((0, 4));
+            }
             events.push((delay, 1));
         }
         if self.legacy_shift_busy && !self.legacy_tx_live {
@@ -745,6 +762,12 @@ impl Peripheral for Nrf52Uarte {
         _sched: &mut crate::sched::EventScheduler,
         bus: &mut dyn crate::Bus,
     ) -> crate::sched::EventResult {
+        if event_token == 4 {
+            if self.tx_pending {
+                self.capture_easydma_tx(bus);
+            }
+            return crate::sched::EventResult::default();
+        }
         if event_token == 3 {
             self.legacy_tx_live = false;
             if self.legacy_shift_busy {
@@ -827,26 +850,33 @@ impl Nrf52Uarte {
         .any(|&(off, ev)| ev != 0 && self.inten & (1 << ((off - 0x100) / 4)) != 0)
     }
 
-    /// EasyDMA TX engine shared by `tick_with_bus` and `on_event` so the two
-    /// paths cannot drift. Instantaneous whole-buffer completion (modelled).
+    /// Read each accepted RAM byte once. Scheduler capture emits no bytes or IRQ.
+    fn capture_easydma_tx(&mut self, bus: &mut dyn Bus) {
+        if self.tx_snapshot.is_some() {
+            return;
+        }
+        let mut bytes = Vec::with_capacity(self.tx_active_len as usize);
+        for i in 0..self.tx_active_len {
+            if let Ok(byte) = bus.read_u8(u64::from(self.tx_active_ptr) + u64::from(i)) {
+                bytes.push(byte);
+            }
+        }
+        self.tx_snapshot = Some(bytes);
+    }
+
+    /// Shared completion path; scheduler publication still waits one frame per byte.
     fn do_easydma_tx(&mut self, bus: &mut dyn Bus) {
         if !self.tx_pending {
             return;
         }
+        // Bare-bus callers have no earlier capture event and complete next tick.
+        self.capture_easydma_tx(bus);
         self.tx_pending = false;
         self.tx_chain_live = false;
-
-        // EasyDMA reads MAXCNT bytes starting at TXD.PTR. A disconnected pin or
-        // a disabled peripheral still completes the transfer on real silicon
-        // (the bytes just go nowhere), so we don't gate on PSEL.
-        let len = (self.txd_maxcnt & 0xFFFF) as usize;
-        for i in 0..len {
-            let addr = self.txd_ptr as u64 + i as u64;
-            if let Ok(b) = bus.read_u8(addr) {
-                self.emit_byte(b);
-            }
+        for byte in self.tx_snapshot.take().unwrap() {
+            self.emit_byte(byte);
         }
-        self.txd_amount = len as u32;
+        self.txd_amount = self.tx_active_len;
         // The whole buffer has crossed as far as this call is concerned, so
         // this is where the burst becomes narratable. The scheduler does not
         // enter this function until one frame per byte has elapsed.
@@ -898,6 +928,93 @@ impl Nrf52Uarte {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scheduled_tx_captures_descriptor_and_bytes_without_early_publication() {
+        use crate::bus::SystemBus;
+        use crate::memory::LinearMemory;
+        use crate::sched::EventScheduler;
+        use crate::Bus;
+
+        let mut bus = SystemBus::empty();
+        bus.ram = LinearMemory::new(256, 0x2000_0000);
+        bus.write_u8(0x2000_0010, b'A').unwrap();
+        bus.write_u8(0x2000_0011, b'B').unwrap();
+        bus.write_u8(0x2000_0020, b'X').unwrap();
+        let mut u = Nrf52Uarte::new();
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        u.set_sink(Some(sink.clone()), false);
+        u.write_u32(OFF_ENABLE, ENABLE_UARTE).unwrap();
+        u.write_u32(OFF_TXD_PTR, 0x2000_0010).unwrap();
+        u.write_u32(OFF_TXD_MAXCNT, 2).unwrap();
+        u.write_u32(OFF_TASKS_STARTTX, 1).unwrap();
+        let frame = u.frame_cycles();
+        assert_eq!(u.take_scheduled_events(), vec![(0, 4), (frame * 2, 1)]);
+        assert!(
+            u.take_scheduled_events().is_empty(),
+            "collect cannot pile another pair"
+        );
+        // Staging registers may already describe the next buffer.
+        u.write_u32(OFF_TXD_PTR, 0x2000_0020).unwrap();
+        u.write_u32(OFF_TXD_MAXCNT, 1).unwrap();
+        let capture = u.on_event(4, &mut EventScheduler::new(), &mut bus);
+        assert!(!capture.raise_own_irq);
+        assert!(
+            sink.lock().unwrap().is_empty(),
+            "capture must not publish serial early"
+        );
+        for offset in [
+            OFF_TXD_AMOUNT,
+            OFF_EVENTS_ENDTX,
+            OFF_EVENTS_TXSTARTED,
+            OFF_EVENTS_TXSTOPPED,
+        ] {
+            assert_eq!(u.read_u32(offset).unwrap(), 0, "capture is not completion");
+        }
+        // The caller's stack slot no longer belongs to this transfer.
+        bus.write_u8(0x2000_0010, b'?').unwrap();
+        bus.write_u8(0x2000_0011, b'?').unwrap();
+        u.on_event(4, &mut EventScheduler::new(), &mut bus);
+        u.on_event(1, &mut EventScheduler::new(), &mut bus);
+        assert_eq!(&*sink.lock().unwrap(), b"AB");
+        assert_eq!(u.read_u32(OFF_TXD_AMOUNT).unwrap(), 2);
+        assert_eq!(u.read_u32(OFF_EVENTS_ENDTX).unwrap(), 1);
+        assert_eq!(u.read_u32(OFF_EVENTS_TXSTOPPED).unwrap(), 1);
+        assert!(u.take_scheduled_events().is_empty());
+
+        // A fresh STARTTX must capture fresh bytes rather than reuse the old copy.
+        u.write_u32(OFF_TASKS_STARTTX, 1).unwrap();
+        assert_eq!(u.take_scheduled_events(), vec![(0, 4), (frame, 1)]);
+        u.on_event(4, &mut EventScheduler::new(), &mut bus);
+        bus.write_u8(0x2000_0020, b'?').unwrap();
+        u.on_event(1, &mut EventScheduler::new(), &mut bus);
+        assert_eq!(&*sink.lock().unwrap(), b"ABX");
+        assert_eq!(u.read_u32(OFF_TXD_AMOUNT).unwrap(), 1);
+    }
+
+    #[test]
+    fn bare_bus_tx_uses_the_descriptor_accepted_by_starttx() {
+        use crate::bus::SystemBus;
+        use crate::memory::LinearMemory;
+        use crate::Bus;
+
+        let mut bus = SystemBus::empty();
+        bus.ram = LinearMemory::new(256, 0x2000_0000);
+        bus.write_u8(0x2000_0010, b'A').unwrap();
+        bus.write_u8(0x2000_0020, b'X').unwrap();
+        let mut u = Nrf52Uarte::new();
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        u.set_sink(Some(sink.clone()), false);
+        u.write_u32(OFF_ENABLE, ENABLE_UARTE).unwrap();
+        u.write_u32(OFF_TXD_PTR, 0x2000_0010).unwrap();
+        u.write_u32(OFF_TXD_MAXCNT, 1).unwrap();
+        u.write_u32(OFF_TASKS_STARTTX, 1).unwrap();
+        u.write_u32(OFF_TXD_PTR, 0x2000_0020).unwrap();
+        u.write_u32(OFF_TXD_MAXCNT, 0).unwrap();
+        u.tick_with_bus(&mut bus);
+        assert_eq!(&*sink.lock().unwrap(), b"A");
+        assert_eq!(u.read_u32(OFF_TXD_AMOUNT).unwrap(), 1);
+    }
 
     #[test]
     fn easydma_tx_emits_buffer_and_raises_completion_events() {
@@ -1067,7 +1184,7 @@ mod tests {
         u.write_u32(OFF_TXD_MAXCNT, 2).unwrap();
         let frame = u.frame_cycles();
         u.write_u32(OFF_TASKS_STARTTX, 1).unwrap();
-        assert_eq!(u.take_scheduled_events(), vec![(frame * 2, 1)]);
+        assert_eq!(u.take_scheduled_events(), vec![(0, 4), (frame * 2, 1)]);
         assert!(
             !u.needs_bus_tick(),
             "the armed wake owns the buffer; the bus-tick pass must not finish it early"
