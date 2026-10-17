@@ -13,6 +13,9 @@ behavior:
     pixel_format: rgb888
     artifact_format: rgb888
     serial_color: { encoding: st7735r, colmod_var: colmod }
+    gpio_control:
+      reset: { config_key: reset_pin, active_level: false }
+      backlight: { config_key: backlight_pin, active_level: true }
     # Three bit-expanded RGB666 memory channels per pixel, NOT wire bytes.
     ram: { bytes: 64152, layout: row_major, stream: command }
     dc: { source: pin, pin_role: dc, command_level: 0 }
@@ -20,7 +23,7 @@ behavior:
     addressing: { modes: [horizontal], default: horizontal }
     vars: { madctl: 0, colmod: 6 }
     orientation: { var: madctl, swap_bit: 0x20, mirror_x_bit: 0x40, mirror_y_bit: 0x80 }
-    artifact_meta: [display_on, awake, inverted, painted_bytes, total_bytes,
+    artifact_meta: [display_on, awake, lit, inverted, painted_bytes, total_bytes,
                     { var: madctl }, { var: colmod }]
     commands:
       - { opcode: 0x01, name: SWRESET, do: [{ reset_control: true }] }

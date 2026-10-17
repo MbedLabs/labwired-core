@@ -57,6 +57,7 @@ use labwired_config::{
     DisplayRamStream, DisplaySpec, DisplayValue,
 };
 
+use super::declarative_display_gpio::{DisplayControlPin, DisplayGpioObserver, DisplaySpiHandle};
 use super::st7735_color::{DecodedPixel, St7735ColorDecoder};
 use crate::peripherals::i2c::I2cDevice;
 use crate::peripherals::spi::SpiDevice;
@@ -227,6 +228,8 @@ pub struct GenericDisplay {
     ram: Vec<u8>,
     /// Present only for an explicitly opted-in serial-colour descriptor.
     serial_color: Option<SerialColorState>,
+    gpio_reset: Option<Option<bool>>,
+    gpio_backlight: Option<Option<bool>>,
     /// WHAT IS ON THE GLASS. Equal to `ram` for every panel whose frame memory
     /// IS the screen; latched from `ram` by a `refresh` action on the panels
     /// where it is not (e-paper). Same length as `ram` always, so a consumer
@@ -324,6 +327,16 @@ fn validate_spec(spec: &DisplaySpec) -> Result<()> {
     }
     let w = spec.width as usize;
     let h = spec.height as usize;
+    if let Some(control) = &spec.gpio_control {
+        if spec.serial_color.is_none() || (control.reset.is_none() && control.backlight.is_none()) {
+            bail!("gpio_control currently requires serial_color and at least one declared input");
+        }
+        for input in [&control.reset, &control.backlight].into_iter().flatten() {
+            if input.config_key.trim().is_empty() {
+                bail!("gpio_control config_key must not be empty");
+            }
+        }
+    }
     if let Some(color) = &spec.serial_color {
         if spec.pixel_format != DisplayPixelFormat::Rgb888
             || spec.artifact_format != crate::inspect::artifact_format::RGB888
@@ -636,7 +649,12 @@ fn validate_spec(spec: &DisplaySpec) -> Result<()> {
         if spec.serial_color.is_some()
             && matches!(
                 key.as_str(),
-                "unknown_pixels" | "known_pixels" | "serial_color" | "rejected_colmod"
+                "unknown_pixels"
+                    | "known_pixels"
+                    | "serial_color"
+                    | "rejected_colmod"
+                    | "reset_asserted"
+                    | "backlight_on"
             )
         {
             bail!("artifact_meta '{key}' is reserved by serial_color");
@@ -1023,6 +1041,8 @@ impl GenericDisplay {
             page_end: 0,
             ram,
             serial_color,
+            gpio_reset: None,
+            gpio_backlight: None,
             screen,
             refresh_generation: 0,
             framing: Framing::Idle,
@@ -1119,10 +1139,63 @@ impl GenericDisplay {
             .map(|color| color.known.as_slice())
     }
 
-    /// Explicit hardware reset entry point for future GPIO wiring. This is
-    /// not yet called by an attached reset pin. ST7735R frame RAM is retained.
+    /// Hardware reset, also used by the optional GPIO observer. ST7735R
+    /// frame RAM and its validity map are retained.
     pub fn hardware_reset(&mut self) {
         self.reset_control_state(true);
+    }
+
+    /// Share this panel with a port-aware, write-driven GPIO observer. The
+    /// caller must sample the observer once before installing both handles.
+    pub fn bind_gpio_controls(
+        self,
+        reset: Option<DisplayControlPin>,
+        backlight: Option<DisplayControlPin>,
+    ) -> Result<(DisplaySpiHandle, DisplayGpioObserver)> {
+        if self.serial_color.is_none() || (reset.is_none() && backlight.is_none()) {
+            bail!("GPIO display controls require serial_color and a bound input");
+        }
+        if [reset, backlight]
+            .into_iter()
+            .flatten()
+            .any(|pin| pin.bit >= 32)
+        {
+            bail!("display control pin must fit a 32-bit GPIO port");
+        }
+        Ok(DisplaySpiHandle::bind(self, reset, backlight))
+    }
+
+    pub(super) fn configure_gpio_controls(&mut self, reset: bool, backlight: bool) {
+        self.gpio_reset = reset.then_some(None);
+        self.gpio_backlight = backlight.then_some(None);
+    }
+
+    pub(super) fn update_gpio_controls(&mut self, reset: Option<bool>, backlight: Option<bool>) {
+        if let Some(previous) = self.gpio_reset {
+            if previous != reset {
+                if reset == Some(true) {
+                    self.hardware_reset();
+                } else {
+                    // Neither release nor an unknown wire resumes fragments
+                    // clocked before the reset-state transition.
+                    self.framing = Framing::Idle;
+                    self.param_have = 0;
+                    self.param_want = 0;
+                    self.pending_idx = None;
+                    self.unit_have = 0;
+                    self.ram_remaining = None;
+                    self.serial_color
+                        .as_mut()
+                        .unwrap()
+                        .decoder
+                        .discard_partial();
+                }
+            }
+            self.gpio_reset = Some(reset);
+        }
+        if self.gpio_backlight.is_some() {
+            self.gpio_backlight = Some(backlight);
+        }
     }
 
     fn reset_control_state(&mut self, hardware: bool) {
@@ -1198,6 +1271,8 @@ impl GenericDisplay {
     /// never wrote a brightness is dark even with both.
     pub fn lit(&self) -> bool {
         self.powered
+            && self.gpio_reset.is_none_or(|state| state == Some(false))
+            && self.gpio_backlight.is_none_or(|state| state == Some(true))
             && self.display_on
             && self.awake
             && self
@@ -1824,6 +1899,12 @@ impl GenericDisplay {
                 serde_json::json!(color.rejected_colmod),
             );
         }
+        if let Some(reset) = self.gpio_reset {
+            meta.insert("reset_asserted".into(), serde_json::json!(reset));
+        }
+        if let Some(backlight) = self.gpio_backlight {
+            meta.insert("backlight_on".into(), serde_json::json!(backlight));
+        }
 
         // The dominant colour is counted in a BTreeMap, not a HashMap: a tie
         // between two colours must resolve the same way on every run and in
@@ -2144,7 +2225,7 @@ impl SpiDevice for GenericDisplay {
         // keeps `display_on` / `awake` / `lit` / `painted_bytes` at their
         // power-on-dark values BY CONSTRUCTION rather than by masking them at
         // report time.
-        if !self.powered {
+        if !self.powered || self.gpio_reset.is_some_and(|state| state != Some(false)) {
             return 0;
         }
         // NO D/C LINE RESOLVED AT ATTACH. What a panel does then is its own
@@ -2409,6 +2490,27 @@ impl PeripheralKit for DeclarativeDisplayKit {
                 }
                 if spec.glass_crop {
                     apply_glass_crop(&self.descriptor.r#type, ctx, spec, &mut dev)?;
+                }
+                if let Some(controls) = &spec.gpio_control {
+                    let resolve = |input: &Option<labwired_config::DisplayControlInput>| -> Result<Option<DisplayControlPin>> {
+                        let Some(input) = input else { return Ok(None) };
+                        let Some(value) = ctx.ext.config.get(&input.config_key) else { return Ok(None) };
+                        let label = value.as_str().filter(|s| !s.trim().is_empty())
+                            .with_context(|| format!("display control '{}' must be a nonempty GPIO pad label", input.config_key))?;
+                        let (addr, bit) = ctx.resolve_pin_odr(label)
+                            .with_context(|| format!("display control '{}' does not resolve to a GPIO pad", input.config_key))?;
+                        Ok(Some(DisplayControlPin { addr, bit, active_level: input.active_level }))
+                    };
+                    let reset = resolve(&controls.reset)?;
+                    let backlight = resolve(&controls.backlight)?;
+                    if reset.is_some() || backlight.is_some() {
+                        dev.set_component_id(ctx.device_id());
+                        let (handle, mut observer) = dev.bind_gpio_controls(reset, backlight)?;
+                        crate::bus::BusResidentDevice::service_edge(&mut observer, ctx.bus, 0);
+                        ctx.attach_spi_device(Box::new(handle))?;
+                        ctx.bus.gpio_devices.push(Box::new(observer));
+                        return Ok(());
+                    }
                 }
                 ctx.attach_spi_device(Box::new(dev))
             }

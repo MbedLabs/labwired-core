@@ -2,7 +2,7 @@
 
 `crates/core/src/peripherals/components/st7735_color.rs` is a pure byte codec.
 The draft generic-display integration opts into it using `serial_color` and
-`load_rgb_lut`; it is not a shipped PyBadge display, guest pixel proof or
+`load_rgb_lut`; it is not a shipped PyBadge display or
 performance result. Existing fixed-format panels do not opt in, and the
 ST7789 descriptor and PyBadge configuration remain unchanged.
 The full acceptance boundary remains [P3](target-next-lanes.md) and the
@@ -59,7 +59,8 @@ claim; downstream RGB888 rendering still needs integration.
 Software reset retains COLMOD, MADCTL, LUT, RAM and pixel validity; hardware
 reset restores COLMOD/MADCTL defaults and invalidates the LUT, retaining RAM
 and validity. Reset cancels parser fragments and restores orientation-aware
-full windows. The explicit hardware-reset method is **not GPIO-connected yet**.
+full windows. Optional reset/backlight GPIO attachment is drafted below; it
+is not yet qualified on the current source.
 Reserved COLMOD values are rejected without changing the selected format and
 counted in artifact metadata. Clear-RAM/refresh and incompatible descriptor
 formats are rejected for this profile.
@@ -87,14 +88,47 @@ SERCOM4 and PB13/PB15 mux, controls PB7 CS/PB5 D/C, uploads a non-linear RGBSET,
 selects RGB444 and a 2×2 window, sends four packed pixels and polls TXC before
 releasing CS after each byte. An SRAM marker distinguishes guest completion.
 
-Two integration tests cover exact memory bytes/region measurement and separate
+The original two integration tests cover exact memory bytes/region measurement
+and separate
 MCLK/GCLK/mux/CS/D/C negatives in both ordinary and forced-legacy controller
 paths. Clock/mux negatives must stall completion; CS/D/C negatives must complete
 controller transmission without painting. The normal CI feature-off and
-scheduler jobs invoke this target through the nonvacuous wrapper. Hosted
-execution is still pending: the test's existence is **not yet a passing guest
-receipt**. It proves no real module crop, full native frame, reset/backlight,
-IRQ, DMA or RTx result, even once its bounded assertions pass.
+scheduler jobs invoke this target through the nonvacuous wrapper. Both tests
+passed in the feature-on step of [run 37602485369](https://github.com/CrispStrobe/labwired-core/actions/runs/37602485369/job/112730721587)
+at source `214473596c13ffd74cf1683367569c99b46dc258`; the superseded overall
+run was cancelled. This is a completed two-test step, not a successful aggregate
+or qualification of the later GPIO source. Exact-head qualification remains
+pending. The original tests prove no real module crop, full native frame,
+reset/backlight, IRQ, DMA or RTx result.
+
+## Draft write-driven reset/backlight attachment
+
+The optional `gpio_control` descriptor binds reset and backlight config keys
+with explicit polarity. When configured, the generic kit shares one actual
+display RAM between the SPI handle and a GPIO observer. It resolves the port
+address and bit together, samples both inputs after stores to their GPIO ports,
+and adds no per-cycle polling or controller-specific downcast. Missing optional
+config keys remain unwired; a production board contract must require its actual
+wiring. Existing descriptors without this option keep their previous behavior.
+
+Known pad level requires an actively driven, uncontended pad; a latch value
+alone is insufficient. Unknown reset blocks transfers and discards fragments
+across state changes. Asserted reset restores control defaults and invalidates
+the LUT, retaining RAM/validity. Held reset rejects writes. Unknown or inactive
+backlight makes `lit` false but does not suppress RAM writes. Artifacts expose
+`reset_asserted` and `backlight_on`, with null for an unknown connected wire.
+These are conservative emulator policies, not analogue/timing qualification.
+
+Four added narrow-port unit controls and two added SAM integration controls are
+**not yet executed**. The SAM fixture uses the actual generic kit/AttachCtx path
+with an explicitly enabled fixture-only crop. Authored instructions drive PA0
+reset and PA1 backlight, including held/undriven/muxed reset, a wrong-port bit,
+dark-but-painted RAM, and reset after disabling SPI's MCLK. Separate host-MMIO
+diagnostics check backlight changes without a tick and contended-pad rejection.
+External input/net changes alone do not notify this store-driven observer;
+their propagation remains a separate task. No full-frame, physical module,
+timing, native Arcade, DMA, IRQ, browser, app adoption or performance claim is
+made by this draft.
 
 ## Next implementation slice
 

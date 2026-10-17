@@ -3276,6 +3276,10 @@ pub struct DisplaySpec {
     /// channels bit-expanded to eight bits, and explicit unknown-pixel state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serial_color: Option<DisplaySerialColor>,
+    /// Optional GPIO reset/backlight controls, sampled by resolved pad identity
+    /// on writes rather than by polling the SPI controller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpio_control: Option<DisplayGpioControl>,
     /// `crate::inspect::artifact_format` name the paint artifact carries, so a
     /// consumer decoding the bytes reads the same string it always did.
     pub artifact_format: String,
@@ -3377,6 +3381,20 @@ pub struct DisplaySerialColor {
 #[serde(rename_all = "snake_case")]
 pub enum DisplaySerialEncoding {
     St7735r,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DisplayGpioControl {
+    #[serde(default)]
+    pub reset: Option<DisplayControlInput>,
+    #[serde(default)]
+    pub backlight: Option<DisplayControlInput>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DisplayControlInput {
+    pub config_key: String,
+    pub active_level: bool,
 }
 
 /// See [`DisplaySpec::busy`].

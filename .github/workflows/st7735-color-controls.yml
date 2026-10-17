@@ -6,6 +6,8 @@ on:
     paths:
       - crates/core/src/peripherals/components/st7735_color.rs
       - crates/core/src/peripherals/components/declarative_display.rs
+      - crates/core/src/peripherals/components/declarative_display_gpio.rs
+      - crates/core/src/bus/resident_device.rs
       - crates/core/src/peripherals/components/mod.rs
       - crates/config/src/peripherals.rs
       - configs/devices/st7735r.yaml

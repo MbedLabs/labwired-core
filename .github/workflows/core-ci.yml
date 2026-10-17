@@ -1329,7 +1329,8 @@ jobs:
       # `#[cfg]` or a deleted test leaving a binary with nothing in it.
       # A real authored blocking-SPI guest, not a host transfer substitute.
       # Reuse this job's compiled feature set, and run the feature-off reference
-      # in pr-feature-off. Neither qualifies native Arcade or GPIO reset/light.
+      # in pr-feature-off. Bounded prototype pixels/controls, not native Arcade
+      # or actual module/timing qualification.
       - name: ST7735 controller-memory guest (FEATURE-ON)
         run: >
           scripts/ci/cargo-test-nonvacuous.sh
