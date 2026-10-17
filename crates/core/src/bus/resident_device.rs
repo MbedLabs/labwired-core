@@ -72,7 +72,8 @@ pub trait DevicePins {
     /// A known, actively driven pad level. Unlike an output latch, this does
     /// not claim that an undriven/muxed/contended wire holds a valid logic
     /// level. Unsupported ports fail closed. Used by GPIO-controlled displays.
-    fn known_pad_bit(&self, _addr: u64, _bit: u8) -> Option<bool> {
+    fn known_pad_bit(&self, addr: u64, bit: u8) -> Option<bool> {
+        let _ = (addr, bit);
         None
     }
 
