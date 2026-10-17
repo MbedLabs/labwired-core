@@ -195,7 +195,15 @@ impl<C: Cpu> Machine<C> {
                         if let Some(sec) = self.cpu_secondary.as_mut() {
                             if sec.is_parked_idle() || secondary_released {
                                 let was_parked = sec.is_parked_idle();
-                                sec.step(&mut self.bus, &self.observers, &self.config)?;
+                                for obs in &self.observers {
+                                    obs.on_core_switch(1);
+                                }
+                                let stepped =
+                                    sec.step(&mut self.bus, &self.observers, &self.config);
+                                for obs in &self.observers {
+                                    obs.on_core_switch(0);
+                                }
+                                stepped?;
                                 secondary_steps += retired;
                                 secondary_woke = was_parked && !sec.is_parked_idle();
                             }
@@ -318,7 +326,14 @@ impl<C: Cpu> Machine<C> {
                             if ff > 0 {
                                 sec.fast_forward_idle_cycles(ff);
                             }
-                            sec.step(&mut self.bus, &self.observers, &self.config)?;
+                            for obs in &self.observers {
+                                obs.on_core_switch(1);
+                            }
+                            let stepped = sec.step(&mut self.bus, &self.observers, &self.config);
+                            for obs in &self.observers {
+                                obs.on_core_switch(0);
+                            }
+                            stepped?;
                             secondary_steps = executed;
                         }
                     }
