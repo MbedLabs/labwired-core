@@ -122,6 +122,8 @@ impl SamSercomSpi {
                     if let Some(v) = self.rx.borrow_mut().pop_front() {
                         self.last_rx.set(v);
                     }
+                } else if let Some(v) = self.rx.borrow().front() {
+                    return u32::from(*v);
                 }
                 self.last_rx.get().into()
             }
