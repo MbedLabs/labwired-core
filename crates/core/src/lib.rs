@@ -980,6 +980,30 @@ pub enum MmioAccessClass {
 pub trait Peripheral: std::fmt::Debug + Send {
     fn read(&self, offset: u64) -> SimResult<u8>;
     fn write(&mut self, offset: u64, value: u8) -> SimResult<()>;
+
+    /// Controller-local byte TX DMA request. `None` refuses this endpoint;
+    /// `Some(false)` is a supported endpoint that is not ready. This does not
+    /// grant bus access: the bus must separately enforce clocks and routing.
+    /// DMA requests are independent of CPU interrupt-enable bits.
+    fn dma_tx_request(&self, _offset: u64) -> Option<bool> {
+        None
+    }
+
+    /// Refresh bus-sourced transport control inputs before an admitted TX beat.
+    /// This is not a tick: implementations must not advance time, drain bytes
+    /// or commit DMA progress. The bus calls this only after clock/readiness
+    /// admission, before the byte acceptance and its observer notification.
+    fn prepare_dma_tx(&mut self, _bus: &mut dyn Bus) {}
+
+    /// Atomically accept one TX byte, or return `false` without changing
+    /// state when not ready. Unsupported endpoints refuse explicitly.
+    /// A successful ordinary register store is not an acceptance certificate.
+    /// The bus remains responsible for gating, observers and scheduler wakes.
+    fn try_dma_write_tx_u8(&mut self, _offset: u64, _value: u8) -> SimResult<bool> {
+        Err(SimulationError::NotImplemented(
+            "peripheral has no byte TX DMA endpoint".into(),
+        ))
+    }
     fn read_u16(&self, offset: u64) -> SimResult<u16> {
         let b0 = self.read(offset)? as u16;
         let b1 = self.read(offset + 1)? as u16;
@@ -2082,6 +2106,16 @@ pub trait Peripheral: std::fmt::Debug + Send {
         sched::EventResult::default()
     }
 
+    /// Opt in when service represents ONE clocked peripheral tick, rather
+    /// than an absolute deadline. Both walk and event delivery check the bus's
+    /// live clock gate. While gated, an event retries after one CPU cycle
+    /// without calling the model, so work freezes without losing its wake.
+    /// Deadline-driven models must not opt in: they need their own elapsed-time
+    /// accounting. Default preserves existing scheduler delivery semantics.
+    fn requires_clocked_tick(&self) -> bool {
+        false
+    }
+
     /// Phase 2B.1: synchronously notified when a subscribed clock domain
     /// changes rate. Implementations typically cancel in-flight events and
     /// reschedule at the new cadence. Default no-op.
@@ -2098,6 +2132,14 @@ pub trait Peripheral: std::fmt::Debug + Send {
     /// the scheduler to drive it. Default `false` preserves existing per-cycle
     /// tick behaviour.
     fn uses_scheduler(&self) -> bool {
+        false
+    }
+
+    /// Diagnostic capability: pin a model to its retained legacy reference.
+    /// Returns false when unsupported. Use only before execution, then call
+    /// `SystemBus::recompute_walk_deletable` and `refresh_peripheral_index`.
+    /// This avoids concrete-type reaches in differential harnesses.
+    fn force_legacy_walk(&mut self) -> bool {
         false
     }
 
@@ -2531,6 +2573,29 @@ pub trait Bus {
     /// asks this before forwarding, instead of swallowing a refused access.
     /// Default `false`: a bus with no such windows.
     fn has_mmio_window(&self, _addr: u64) -> bool {
+        false
+    }
+
+    /// Byte TX readiness after bus routing/clock admission. Unsupported
+    /// endpoints return None; supported but blocked endpoints return false.
+    fn dma_tx_request(&self, _addr: u64) -> Option<bool> {
+        None
+    }
+
+    /// Accept one TX byte through the bus's normal MMIO bookkeeping. False
+    /// means not ready, not a successful beat. Default explicit refusal.
+    fn try_dma_write_tx_u8(&mut self, _addr: u64, _value: u8) -> SimResult<bool> {
+        Err(SimulationError::NotImplemented(
+            "bus has no admitted byte TX DMA endpoint".into(),
+        ))
+    }
+
+    /// Admit an extent for a RAM-only DMA profile without reaching through
+    /// the bus's concrete type. Mapped targets must be primary RAM, never
+    /// MMIO (including aliases), flash or extra mappings. Unmapped addresses
+    /// may be admitted so the actual read/write reports the transfer fault;
+    /// this is not a promise that the access will succeed. Default refusal.
+    fn admits_ram_only_dma_extent(&self, _start: u64, _length: u64) -> bool {
         false
     }
 
@@ -4936,6 +5001,13 @@ impl<C: Cpu> Machine<C> {
         for ev in due.drain(..) {
             let idx = ev.peripheral_idx as usize;
             if idx >= self.bus.peripherals.len() {
+                continue;
+            }
+            if self.bus.peripherals[idx].dev.requires_clocked_tick()
+                && !self.bus.is_peripheral_clocked(idx)
+            {
+                self.sched
+                    .schedule(now + 1, ev.peripheral_idx, ev.event_token);
                 continue;
             }
             // Swap the peripheral out so we can pass `&mut self.bus` into
