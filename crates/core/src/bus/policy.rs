@@ -177,7 +177,7 @@ impl SystemBus {
     /// applied at the stimulus point (`sync_button_inputs`) and a button alone
     /// never costs a bus its fast path.
     #[inline]
-    pub(crate) fn per_cycle_tick_is_trivial(&self) -> bool {
+    pub fn per_cycle_tick_is_trivial(&self) -> bool {
         // Without the scheduler every model is on the per-cycle walk.
         cfg!(feature = "event-scheduler")
             && self.legacy_walk_disabled

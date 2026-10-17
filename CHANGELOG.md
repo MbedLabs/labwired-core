@@ -91,6 +91,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (GPIO32..36, GPIO39); the rest are byte-identical.
 
 ### Performance
+- `labwired test` on a Cortex-M bare ELF (the hosted `labwired_run` path for
+  STM32, RP2040, nRF and EFR32 boards) takes `cycles`/`instructions` from the
+  machine's counters instead of a per-step observer. Where the bus's per-cycle
+  tick has no work of its own (no CAN tester or bridge, no GPIO device needing
+  service) it also plans CPU windows at the bus's max-safe interval with exact
+  boundaries (`Machine::exact_batch_boundaries`): each batch ends after an
+  instruction that touches a device, windows already end at scheduler and
+  interrupt deadlines, every boundary ticks, and the bus keeps interval 1 so
+  peripherals pace events as before. UART, GPIO edges, final CPU state and
+  stop reason are identical with `LABWIRED_HOSTED_FAST=0`; result.json
+  `cycles` becomes the machine clock (the observer over-counted Cortex-M
+  cycles up to 10x) and `instructions` now counts exception-entry steps.
+  STM32 and RP2040 labs run 1.5-5x faster.
 - `labwired snapshot capture --profile arduino-esp32` (the hosted
   `labwired_run` path for a classic ESP32 without watches, stimuli or
   acceptance) advances in chunks with the idle and CCOUNT poll-loop skips
