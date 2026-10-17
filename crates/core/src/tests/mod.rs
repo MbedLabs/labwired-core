@@ -10,6 +10,7 @@ pub mod bus_trace_one_home;
 /// A chip may not declare a memory size no silicon has (decimal-MB trap).
 #[cfg(test)]
 pub mod chip_memory_sizes;
+
 #[cfg(test)]
 pub mod cortex_m_fault_escalation;
 #[cfg(all(test, any(feature = "jit", feature = "jit-framework")))]
@@ -20,6 +21,9 @@ pub mod cortex_m_memory_contract;
 pub mod device_identity_one_home;
 #[cfg(test)]
 pub mod device_time_derived;
+/// STM32F103 timer outputs on pads, RCC gates, internal temperature sensor.
+#[cfg(test)]
+pub mod stm32f1_timer_outputs;
 
 /// Row 6.5: the runtime-downcast count may not grow.
 #[cfg(test)]
