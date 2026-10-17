@@ -1295,6 +1295,19 @@ impl crate::Bus for SystemBus {
     /// and on snapshot restore. Reads from non-RAM peripherals (e.g.
     /// `RomThunkBank`, GPIO, declarative peripherals) keep going
     /// through the slow path so side effects fire as before.
+    fn plain_memory_slice(&self, addr: u64) -> Option<(u64, u64, &[u8])> {
+        for mem in std::iter::once(&self.ram)
+            .chain(std::iter::once(&self.flash))
+            .chain(self.extra_mem.iter())
+        {
+            let end = mem.base_addr + mem.data.len() as u64;
+            if addr >= mem.base_addr && addr < end {
+                return Some((mem.base_addr, end, &mem.data));
+            }
+        }
+        self.fetch_slice(addr)
+    }
+
     fn fetch_slice(&self, pc: u64) -> Option<(u64, u64, &[u8])> {
         let idx = self.find_peripheral_index(pc)?;
         let entry = self.peripherals.get(idx)?;

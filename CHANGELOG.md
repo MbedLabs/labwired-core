@@ -91,6 +91,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (GPIO32..36, GPIO39); the rest are byte-identical.
 
 ### Performance
+- Cortex-M skips fixed-point poll loops: a loop that waits for a RAM word only
+  an interrupt changes (`HAL_Delay`, Arduino `delay()`, a `b .` park). At a
+  loop head the core runs one iteration on a read-only view of plain memory;
+  it is refused on any store, device access, pending or changed exception, or
+  if it does not come back to the head in the state it left. The machine
+  then skips whole iterations up to the next interrupt or event deadline, and
+  the CLI counts them as steps, so `max_steps` stops where it did. Outputs are
+  identical to a run with no skip (`LABWIRED_IDLE_FAST_FORWARD=0`). STM32
+  Arduino blink labs: H563 24x, U545 10x, G474 7x, F401 4x less CPU.
 - `labwired test` on a Cortex-M bare ELF (the hosted `labwired_run` path for
   STM32, RP2040, nRF and EFR32 boards) takes `cycles`/`instructions` from the
   machine's counters instead of a per-step observer. Where the bus's per-cycle

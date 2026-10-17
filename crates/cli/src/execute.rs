@@ -938,6 +938,7 @@ pub(crate) fn execute_test_loop<C: labwired_core::Cpu>(
         // back, so the firmware's next instruction sees the model's answer to
         // the levels it had just driven. Without models this is the plain
         // `Machine::advance` the loop always issued.
+        let poll_skipped_before = ctx.machine.poll_loop_cycles_skipped;
         let advanced = match cosim.as_mut() {
             Some(session) => session.advance(ctx.machine, request),
             None => ctx
@@ -975,11 +976,20 @@ pub(crate) fn execute_test_loop<C: labwired_core::Cpu>(
         // both, so every call ends on the same cycle as a run without any
         // skip, and so do the checks between calls: assertions, settling,
         // `max_steps`. The wide-fuel arm above is off there for that reason.
+        // A skipped poll-loop iteration is instructions the core would have
+        // retired, so it counts as steps and `max_steps` stops where it does
+        // without the skip. (Cortex-M retires one per cycle; on the
+        // counter-metrics path idle cycles, poll skips included, already
+        // count.)
+        let poll_skipped = ctx
+            .machine
+            .poll_loop_cycles_skipped
+            .saturating_sub(poll_skipped_before);
         step += report.primary_steps
             + if ctx.counter_metrics {
                 report.idle_cycles
             } else {
-                0
+                poll_skipped
             };
         steps_executed = step;
         // Statistical PC sampling: one histogram hit every
