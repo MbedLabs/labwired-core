@@ -4,8 +4,10 @@
 //! Register facts: DS60001507 / CMSIS SERCOM SPI map. Transfers require MODE=3,
 //! ENABLE, 8-bit CHSIZE, and the configured PORT mux/DOPO. The bus owns live
 //! MCLK/GCLK gating. No wire-edge fidelity, dynamic GCLK frequency derivation,
-//! DMA, split-vector IRQ delivery, or complete native Arcade qualification is
-//! claimed here. INTEN/INTFLAG are modelled for polling only. The delay is
+//! DMA or complete native Arcade qualification is claimed here. SPI master
+//! DRE/TXC/RXC/ERROR use four consecutive, exclusively owned NVIC lines when
+//! configured. DS60001507F section 10.2.2 assigns SERCOM4 IRQs 62..65.
+//! The delay is
 //! in nominal SERCOM core-clock cycles; CPU/kernel clock scaling remains owed.
 
 use crate::peripherals::spi::SpiDevice;
@@ -46,6 +48,7 @@ pub struct SamSercomSpi {
     clock: Option<crate::CycleClock>,
     scheduled: bool,
     legacy_walk_forced: bool,
+    irq_base: Option<u32>,
 }
 
 impl std::fmt::Debug for SamSercomSpi {
@@ -76,6 +79,7 @@ impl SamSercomSpi {
             clock: None,
             scheduled: false,
             legacy_walk_forced: false,
+            irq_base: None,
         }
     }
 
@@ -87,6 +91,22 @@ impl SamSercomSpi {
 
     fn has_bus_work(&self) -> bool {
         self.holding.is_some() || self.active.is_some() || self.selected.iter().any(|s| *s)
+    }
+
+    fn pending_irqs(&self) -> Vec<u32> {
+        let Some(base) = self.irq_base else {
+            return Vec::new();
+        };
+        let active = self.effective_flags() & self.inten;
+        [DRE, TXC, RXC, ERROR]
+            .into_iter()
+            .enumerate()
+            .filter_map(|(line, mask)| (active & mask != 0).then_some(base + line as u32))
+            .collect()
+    }
+
+    fn has_work(&self) -> bool {
+        self.has_bus_work() || (self.irq_base.is_some() && self.effective_flags() & self.inten != 0)
     }
 
     fn advance_frame(&mut self, cycles: u64) {
@@ -223,6 +243,21 @@ impl SamSercomSpi {
 }
 
 impl Peripheral for SamSercomSpi {
+    fn attach_irq_line(&mut self, irq: Option<u32>) {
+        // Four consecutive NVIC positions, never wrap or claim system exceptions.
+        self.irq_base = irq.filter(|irq| *irq <= 252);
+    }
+    fn irq_line_levels(&self, report: &mut dyn FnMut(u32, bool)) {
+        if let Some(base) = self.irq_base {
+            let active = self.effective_flags() & self.inten;
+            for (line, mask) in [DRE, TXC, RXC, ERROR].into_iter().enumerate() {
+                report(base + line as u32, active & mask != 0);
+            }
+        }
+    }
+    fn reads_can_deassert_irq(&self) -> bool {
+        true // Reading the low DATA lane consumes RX, unlike a debug peek.
+    }
     fn as_any(&self) -> Option<&dyn std::any::Any> {
         Some(self)
     }
@@ -270,11 +305,21 @@ impl Peripheral for SamSercomSpi {
         if !self.sched_driven() {
             self.advance_frame(cycles);
         }
-        PeripheralTickResult::default()
+        PeripheralTickResult {
+            explicit_irqs: (!self.sched_driven()
+                && self.irq_base.is_some()
+                && self.effective_flags() & self.inten != 0)
+                .then(|| self.pending_irqs()),
+            ..Default::default()
+        }
     }
     fn tick_elapsed_forced(&mut self, cycles: u64) -> PeripheralTickResult {
         self.advance_frame(cycles);
-        PeripheralTickResult::default()
+        PeripheralTickResult {
+            explicit_irqs: (self.irq_base.is_some() && self.effective_flags() & self.inten != 0)
+                .then(|| self.pending_irqs()),
+            ..Default::default()
+        }
     }
     fn attach_cycle_clock(&mut self, clock: crate::CycleClock) {
         self.clock = Some(clock);
@@ -295,7 +340,7 @@ impl Peripheral for SamSercomSpi {
         self.has_bus_work()
     }
     fn take_scheduled_events(&mut self) -> Vec<(u64, u32)> {
-        if self.sched_driven() && self.has_bus_work() && !self.scheduled {
+        if self.sched_driven() && self.has_work() && !self.scheduled {
             self.scheduled = true;
             vec![(0, 0)]
         } else {
@@ -310,17 +355,22 @@ impl Peripheral for SamSercomSpi {
     ) -> crate::sched::EventResult {
         // SWRST/disable can cancel a queued frame before its wake is delivered.
         // A stale wake must not select a slave (or perpetuate itself) on idle CS.
-        if !self.has_bus_work() {
+        if !self.has_work() {
             self.scheduled = false;
             return crate::sched::EventResult::default();
         }
         // Match the historical PRE-tick bus pass, then the countdown tick.
         // Active transfers intentionally retain one-cycle service; the win is
         // removing idle SPI from the walk, not changing BAUD/CS/mux semantics.
-        self.tick_with_bus_forced(bus);
-        self.advance_frame(1);
-        self.scheduled = self.has_bus_work();
+        if self.has_bus_work() {
+            self.tick_with_bus_forced(bus);
+            self.advance_frame(1);
+        }
+        // Re-emit held levels until firmware masks/acknowledges them, just as
+        // the reference walk does. Pure IRQ service must not select a slave.
+        self.scheduled = self.has_work();
         crate::sched::EventResult {
+            explicit_irqs: self.pending_irqs(),
             reschedule_delay: self.scheduled.then_some(1),
             ..Default::default()
         }

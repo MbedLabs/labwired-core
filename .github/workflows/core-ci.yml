@@ -1331,10 +1331,11 @@ jobs:
       # Reuse this job's compiled feature set, and run the feature-off reference
       # in pr-feature-off. Bounded prototype pixels/controls, not native Arcade
       # or actual module/timing qualification.
-      - name: ST7735 controller-memory guest (FEATURE-ON)
+      - name: SAM split IRQ and ST7735 controller-memory guests (FEATURE-ON)
         run: >
           scripts/ci/cargo-test-nonvacuous.sh
-          -p labwired-core --features event-scheduler --test st7735_sam_guest
+          -p labwired-core --features event-scheduler
+          --test sam_sercom_spi --test st7735_sam_guest -- --nocapture
 
       - name: Scheduler-only fidelity lanes (walk≡scheduler timing gates)
         run: >

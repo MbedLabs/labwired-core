@@ -111,7 +111,8 @@ peripherals:
     type: "sam_sercom_spi"
     base_address: 0x43000000
     size: "256B"
-    # Four SERCOM SPI IRQ vectors are not wired by this blocking-only slice.
+    # DS60001507F 10.2.2: DRE/TXC/RXC/ERROR use SERCOM4_0..3 (62..65).
+    irq: 62
     clock: { controller: "mclk", reg: "APBDMASK", bit: 0 }
     config:
       gclk_id: 34

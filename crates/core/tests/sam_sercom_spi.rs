@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! Actual board/MMIO tests for the blocking controller slice. Not display or
+//! Actual board/MMIO and authored guest tests for the controller slice. Not display or
 //! DMA/native Arcade qualification; the slave below is a transport observer.
 use labwired_config::{ChipDescriptor, SystemManifest};
 use labwired_core::{
@@ -117,6 +117,246 @@ fn enable(bus: &mut SystemBus) {
 fn settle(bus: &mut SystemBus) {
     for _ in 0..100 {
         bus.tick_peripherals();
+    }
+}
+
+fn split_pending(bus: &SystemBus) -> [bool; 4] {
+    use std::sync::atomic::Ordering;
+    let nvic = bus.nvic.as_ref().unwrap();
+    std::array::from_fn(|line| {
+        let irq = 62 + line;
+        nvic.ispr[irq / 32].load(Ordering::SeqCst) & (1 << (irq % 32)) != 0
+    })
+}
+
+#[test]
+fn split_irq_mask_unmask_ack_read_and_software_pending_are_independent() {
+    let (mut bus, _) = board();
+    let _ = labwired_core::system::cortex_m::configure_cortex_m(&mut bus);
+    enable(&mut bus);
+    settle(&mut bus);
+    assert_eq!(split_pending(&bus), [false; 4]);
+    bus.write_u8(SPI + 0x16, 1).unwrap(); // Already-set DRE becomes pending.
+    settle(&mut bus);
+    assert_eq!(split_pending(&bus), [true, false, false, false]);
+    bus.write_u8(SPI + 0x14, 1).unwrap();
+    assert_eq!(split_pending(&bus), [false; 4]);
+    for byte in [0x11, 0x22, 0x33] {
+        bus.write_u8(SPI + 0x28, byte).unwrap();
+        settle(&mut bus);
+    }
+    // One controller drives four distinct vectors, crossing NVIC bank 1/2.
+    bus.write_u8(SPI + 0x16, 0x87).unwrap();
+    settle(&mut bus);
+    assert_eq!(split_pending(&bus), [true; 4]);
+    bus.write_u8(SPI + 0x18, 2).unwrap(); // TXC W1C must not acknowledge RXC/ERROR.
+    assert_eq!(split_pending(&bus), [true, false, true, true]);
+    let controller = bus
+        .peripherals
+        .iter()
+        .find(|p| p.name == "sercom4")
+        .unwrap();
+    assert_eq!(controller.dev.peek(0x28), Some(0x11 ^ 0x5a));
+    bus.read_u8(SPI + 0x29).unwrap();
+    assert_eq!(split_pending(&bus), [true, false, true, true]);
+    bus.read_u8(SPI + 0x28).unwrap(); // First byte does not clear RXC.
+    assert_eq!(split_pending(&bus), [true, false, true, true]);
+    bus.read_u16(SPI + 0x28).unwrap(); // Final byte drops only RXC.
+    assert_eq!(split_pending(&bus), [true, false, false, true]);
+    bus.write_u8(SPI + 0x18, 128).unwrap();
+    assert_eq!(split_pending(&bus), [true, false, false, false]);
+    bus.write_u8(SPI + 0x14, 1).unwrap();
+    assert_eq!(split_pending(&bus), [false; 4]);
+    // A software pend of a low RXC line is not a peripheral-owned pend.
+    bus.write_u32(0xe000e208, 1).unwrap(); // ISPR2, IRQ64
+    bus.read_u32(SPI + 0x28).unwrap();
+    assert_eq!(split_pending(&bus), [false, false, true, false]);
+    bus.write_u32(0xe000e288, 1).unwrap();
+    bus.write_u8(SPI + 0x16, 0x87).unwrap();
+    settle(&mut bus);
+    bus.write_u32(SPI, 1).unwrap();
+    assert_eq!(split_pending(&bus), [false; 4], "SWRST drops marked levels");
+    settle(&mut bus);
+    assert_eq!(
+        split_pending(&bus),
+        [false; 4],
+        "stale reset wakes are inert"
+    );
+}
+
+/// Authored Thumb bytes, not a vendor program. The guest configures SPI and
+/// NVIC, causes one selected source, acknowledges it in an actual handler,
+/// returns to thread and parks. No host writes IRQ/status or completes frames.
+fn split_irq_guest(line: usize, unmask: bool) -> ProgramImage {
+    let mut ops = Vec::<u16>::new();
+    let mut literals = Vec::<(usize, u8, u32)>::new();
+    let load = |ops: &mut Vec<u16>, literals: &mut Vec<(usize, u8, u32)>, rt, value| {
+        literals.push((ops.len(), rt, value));
+        ops.push(0);
+    };
+    let store =
+        |ops: &mut Vec<u16>, literals: &mut Vec<(usize, u8, u32)>, addr: u32, value, byte| {
+            load(ops, literals, 0, addr);
+            load(ops, literals, 1, value);
+            ops.push(if byte { 0x7001 } else { 0x6001 });
+        };
+    ops.push(0xb672); // CPSID i
+    for (addr, value, byte) in [
+        (0xe000ed08, 0x4000, false), // VTOR: four vectors extend beyond 0x100.
+        (0x20000004, 0, false),
+        (0x20000008, 0, false),
+        (MCLK, 1, false),
+        (GCLK, 1 << 6, false),
+        (PORT + 0x36, 0x20, true),
+        (PORT + 0x37, 0x20, true),
+        (PORT + 0x4d, 1, true),
+        (PORT + 0x4f, 1, true),
+        (PORT, (1 << 7) | (1 << 5), false),
+        (SPI, MASTER, false),
+        (SPI + 4, 1 << 17, false),
+        (SPI + 0x0c, 1, true),
+        (SPI, MASTER | 2, false),
+    ] {
+        store(&mut ops, &mut literals, addr as u32, value, byte);
+    }
+    for byte in 0..if line == 0 {
+        0
+    } else if line == 3 {
+        3
+    } else {
+        1
+    } {
+        store(
+            &mut ops,
+            &mut literals,
+            (SPI + 0x28) as u32,
+            0x51 + byte,
+            true,
+        );
+        load(&mut ops, &mut literals, 0, (SPI + 0x18) as u32);
+        ops.extend([0x7801, 0x2202, 0x4211, 0xd0fb]); // Poll actual TXC.
+    }
+    store(
+        &mut ops,
+        &mut literals,
+        (SPI + 0x16) as u32,
+        [1, 2, 4, 128][line],
+        true,
+    );
+    let irq = 62 + line as u32;
+    store(
+        &mut ops,
+        &mut literals,
+        0xe000e100 + (irq / 32) * 4,
+        1 << (irq % 32),
+        false,
+    );
+    if unmask {
+        ops.push(0xb662); // CPSIE i
+    }
+    store(&mut ops, &mut literals, 0x20000000, 0xcafebabe, false);
+    ops.push(0xe7fe);
+    let handler = 0x4200 + ops.len() as u32 * 2;
+    load(&mut ops, &mut literals, 0, 0x20000004);
+    ops.extend([0x6801, 0x3101, 0x6001]); // Count actual handler executions.
+    store(&mut ops, &mut literals, 0x20000008, irq, false);
+    // Leave the source asserted for several instructions so a re-pend exists.
+    // RXC is acknowledged by DATA read; other sources by mask/W1C.
+    if line == 2 {
+        load(&mut ops, &mut literals, 0, (SPI + 0x28) as u32);
+        ops.push(0x7801);
+    } else if line == 0 {
+        store(&mut ops, &mut literals, (SPI + 0x14) as u32, 1, true);
+    } else {
+        store(
+            &mut ops,
+            &mut literals,
+            (SPI + 0x18) as u32,
+            [0, 2, 0, 128][line],
+            true,
+        );
+    }
+    ops.push(0x4770); // BX lr: architectural exception return.
+    if ops.len() & 1 != 0 {
+        ops.push(0xbf00);
+    }
+    let mut code: Vec<u8> = ops.iter().flat_map(|op| op.to_le_bytes()).collect();
+    for (index, rt, value) in literals {
+        let pc = ((index * 2 + 4) & !3) as u32;
+        let delta = code.len() as u32 - pc;
+        assert_eq!(delta & 3, 0);
+        assert!(delta <= 1020);
+        let op = 0x4800 | (u16::from(rt) << 8) | (delta / 4) as u16;
+        code[index * 2..index * 2 + 2].copy_from_slice(&op.to_le_bytes());
+        code.extend(value.to_le_bytes());
+    }
+    let mut application = vec![0u8; 0x200];
+    application[..4].copy_from_slice(&0x20004000u32.to_le_bytes());
+    application[4..8].copy_from_slice(&0x4201u32.to_le_bytes());
+    let vector = (16 + irq as usize) * 4;
+    application[vector..vector + 4].copy_from_slice(&(handler | 1).to_le_bytes());
+    application.extend(code);
+    let mut image = ProgramImage::new(0x4201, Arch::Arm);
+    image.add_segment(0x4000, application);
+    image
+}
+
+#[test]
+fn four_split_vectors_enter_once_acknowledge_return_and_obey_primask() {
+    for legacy in [true, false] {
+        for interval in [1, 64, 1024] {
+            if interval > 1 && (!event_scheduler_enabled() || legacy) {
+                continue;
+            }
+            for line in 0..4 {
+                for unmask in [true, false] {
+                    let (mut bus, seen) = board_with_drive(legacy);
+                    let (cpu, _) = labwired_core::system::cortex_m::configure_cortex_m(&mut bus);
+                    bus.config.peripheral_tick_interval = interval;
+                    let mut machine = Machine::new(cpu, bus);
+                    machine.config.peripheral_tick_interval = interval;
+                    machine
+                        .load_firmware(&split_irq_guest(line, unmask))
+                        .unwrap();
+                    let mut entries = 0;
+                    let mut previous = 0;
+                    let mut returned = false;
+                    for _ in 0..2000 {
+                        machine.step().unwrap();
+                        let exception = machine.cpu.active_exception;
+                        if exception != 0 {
+                            assert_eq!(exception, 78 + line as u32, "wrong vector");
+                        }
+                        if exception != 0 && previous == 0 {
+                            entries += 1;
+                        }
+                        returned |= exception == 0 && previous != 0;
+                        previous = exception;
+                    }
+                    assert_eq!(machine.bus.read_u32(0x20000000).unwrap(), 0xcafebabe);
+                    assert_eq!(
+                        entries,
+                        usize::from(unmask),
+                        "legacy={legacy} interval={interval} line={line}"
+                    );
+                    assert_eq!(returned, unmask);
+                    assert_eq!(machine.bus.read_u32(0x20000004).unwrap(), u32::from(unmask));
+                    assert_eq!(
+                        machine.bus.read_u32(0x20000008).unwrap(),
+                        if unmask { 62 + line as u32 } else { 0 }
+                    );
+                    assert_eq!(machine.cpu.active_exception, 0);
+                    assert_eq!(machine.bus.read_u32(0xe000ed28).unwrap(), 0);
+                    assert_eq!(machine.bus.read_u32(0xe000ed2c).unwrap(), 0);
+                    if line == 0 {
+                        let seen = seen.lock().unwrap();
+                        assert!(seen.bytes.is_empty());
+                        assert_eq!(seen.selects, 0, "pure IRQ wake must not select a slave");
+                    }
+                    println!("SAM_SPLIT_IRQ legacy={legacy} interval={interval} line={line} unmask={unmask} entries={entries} returned={returned} exception={}", machine.cpu.active_exception);
+                }
+            }
+        }
     }
 }
 
