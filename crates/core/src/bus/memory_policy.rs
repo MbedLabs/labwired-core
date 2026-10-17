@@ -70,6 +70,7 @@ impl MemoryPolicyState {
         }
     }
 
+    #[inline]
     pub fn active(&self) -> bool {
         !self.flash.is_allow() || !self.ram.is_allow()
     }
