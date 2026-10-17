@@ -57,7 +57,7 @@ pub use interrupt_fabric::{
     Esp32c3Fabric, Esp32c3IntcCache, Esp32s3Fabric, Esp32s3IrqAudit, Esp32s3IrqDivergence,
     InterruptFabric,
 };
-pub use memory_policy::{CpuWritePolicy, MemoryPolicyReport, RegionPolicyStats};
+pub use memory_policy::{CpuWritePolicy, MemoryPolicyReport, RegionPolicyStats, RegionViolation};
 pub use motors::MotorSnapshot;
 
 impl SystemBus {

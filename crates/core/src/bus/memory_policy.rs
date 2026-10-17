@@ -34,7 +34,19 @@ pub struct MemoryPolicyReport {
     pub ram: RegionPolicyStats,
 }
 
+/// The memory layout the gate checks a store against (built once per store
+/// by `SystemBus::memory_policy_gate_store`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemoryPolicyLayout {
+    pub ram_base: u64,
+    pub ram_len: u64,
+    pub flash_base: u64,
+    pub flash_len: u64,
+    pub flash_alias_active: bool,
+}
+
 /// Live policy state carried by [`crate::bus::SystemBus`].
+// TODO(Task 4/5/6): remove once the gate is wired
 #[allow(dead_code)]
 #[derive(Debug, Default)]
 pub struct MemoryPolicyState {
@@ -50,6 +62,7 @@ pub struct MemoryPolicyState {
     pub cycle: u64,
 }
 
+// TODO(Task 4/5/6): remove once the gate is wired
 #[allow(dead_code)]
 impl MemoryPolicyState {
     /// The policies a chip declares — used by `from_config` and unit tests.
@@ -71,8 +84,11 @@ impl MemoryPolicyState {
 
     /// True when a CPU store at `addr` must skip the direct-to-RAM fast path
     /// (the policy gate in `accessors.rs` then handles it).
+    #[inline]
     pub fn ram_blocked(&self, addr: u64, ram_base: u64, ram_len: u64) -> bool {
-        self.ram != CpuWritePolicy::Allow && addr >= ram_base && addr < ram_base + ram_len
+        self.ram != CpuWritePolicy::Allow
+            && addr >= ram_base
+            && addr < ram_base.saturating_add(ram_len)
     }
 
     fn record(
@@ -93,27 +109,17 @@ impl MemoryPolicyState {
     }
 
     /// The gate `bus/accessors.rs` calls before any store that would land in
-    /// the flash region, its boot alias, the ram region, or an extra memory
-    /// window. `flash_alias_active` is `bus.flash_boot_alias && flash_base != 0`.
+    /// the flash region, its boot alias, or the ram region.
+    /// `layout.flash_alias_active` is `bus.flash_boot_alias && flash_base != 0`.
     /// Returns `None` when the store may proceed, or `Some(Err(..))` when it
     /// must raise a precise data fault.
-    pub fn gate(
-        &mut self,
-        addr: u64,
-        ram_base: u64,
-        ram_len: u64,
-        flash_base: u64,
-        flash_len: u64,
-        flash_alias_active: bool,
-        extra: &[(u64, u64)],
-    ) -> Option<SimResult<()>> {
-        let in_flash = (addr >= flash_base && addr < flash_base.saturating_add(flash_len))
-            || (flash_alias_active && addr < flash_len);
-        let in_ram = addr >= ram_base && addr < ram_base.saturating_add(ram_len);
-        let in_extra = extra
-            .iter()
-            .any(|(b, l)| addr >= *b && addr < b.saturating_add(*l));
-        if !in_flash && !in_ram && !in_extra {
+    pub fn gate(&mut self, addr: u64, layout: MemoryPolicyLayout) -> Option<SimResult<()>> {
+        let in_flash = (addr >= layout.flash_base
+            && addr < layout.flash_base.saturating_add(layout.flash_len))
+            || (layout.flash_alias_active && addr < layout.flash_len);
+        let in_ram =
+            addr >= layout.ram_base && addr < layout.ram_base.saturating_add(layout.ram_len);
+        if !in_flash && !in_ram {
             return None;
         }
         let pc = self.last_cpu_pc;
@@ -204,26 +210,24 @@ impl MemoryPolicyState {
     }
 }
 
+// TODO(Task 4/5/6): remove once the gate is wired
 #[allow(dead_code)]
 impl crate::bus::SystemBus {
     /// Policy gate for one CPU store. See [`MemoryPolicyState::gate`].
+    #[inline]
     pub(crate) fn memory_policy_gate_store(&mut self, addr: u64) -> Option<SimResult<()>> {
         if !self.memory_policy.active() {
             return None;
         }
-        let extra: Vec<(u64, u64)> = self
-            .extra_mem
-            .iter()
-            .map(|m| (m.base_addr, m.data.len() as u64))
-            .collect();
         self.memory_policy.gate(
             addr,
-            self.ram.base_addr,
-            self.ram.data.len() as u64,
-            self.flash.base_addr,
-            self.flash.data.len() as u64,
-            self.flash_boot_alias && self.flash.base_addr != 0,
-            &extra,
+            MemoryPolicyLayout {
+                ram_base: self.ram.base_addr,
+                ram_len: self.ram.data.len() as u64,
+                flash_base: self.flash.base_addr,
+                flash_len: self.flash.data.len() as u64,
+                flash_alias_active: self.flash_boot_alias && self.flash.base_addr != 0,
+            },
         )
     }
 
@@ -252,20 +256,20 @@ mod tests {
         }
     }
 
+    fn layout() -> MemoryPolicyLayout {
+        MemoryPolicyLayout {
+            ram_base: 0x2000_0000,
+            ram_len: 0x1000,
+            flash_base: 0x0800_0000,
+            flash_len: 0x1_0000,
+            flash_alias_active: false,
+        }
+    }
+
     #[test]
     fn allow_does_not_gate() {
         let mut s = state_flash(CpuWritePolicy::Allow);
-        assert!(s
-            .gate(
-                0x0800_1000,
-                0x2000_0000,
-                0x1000,
-                0x0800_0000,
-                0x1_0000,
-                false,
-                &[]
-            )
-            .is_none());
+        assert!(s.gate(0x0800_1000, layout()).is_none());
         assert_eq!(s.violations_flash, 0);
     }
 
@@ -273,28 +277,16 @@ mod tests {
     fn fault_gates_and_records_first() {
         let mut s = state_flash(CpuWritePolicy::Fault);
         s.note_pc(0x0800_006C);
-        assert!(s
-            .gate(
-                0x0800_1000,
-                0x2000_0000,
-                0x1000,
-                0x0800_0000,
-                0x1_0000,
-                false,
-                &[]
-            )
-            .is_some());
-        assert!(s
-            .gate(
-                0x0800_1004,
-                0x2000_0000,
-                0x1000,
-                0x0800_0000,
-                0x1_0000,
-                false,
-                &[]
-            )
-            .is_some());
+        let r = s.gate(0x0800_1000, layout());
+        assert!(
+            matches!(
+                r,
+                Some(Err(crate::SimulationError::MemoryViolation(0x0800_1000)))
+            ),
+            "{r:?}"
+        );
+        assert!(s.gate(0x0800_1004, layout()).is_some());
+        assert!(s.gate(0x0801_0000, layout()).is_none());
         assert_eq!(s.violations_flash, 2);
         let first = s.first_flash.clone().unwrap();
         assert_eq!(first.addr, 0x0800_1000);
@@ -304,28 +296,8 @@ mod tests {
     #[test]
     fn warn_commits_and_dedups_the_log() {
         let mut s = state_flash(CpuWritePolicy::Warn);
-        assert!(s
-            .gate(
-                0x0800_1000,
-                0x2000_0000,
-                0x1000,
-                0x0800_0000,
-                0x1_0000,
-                false,
-                &[]
-            )
-            .is_none());
-        assert!(s
-            .gate(
-                0x0800_1004,
-                0x2000_0000,
-                0x1000,
-                0x0800_0000,
-                0x1_0000,
-                false,
-                &[]
-            )
-            .is_none());
+        assert!(s.gate(0x0800_1000, layout()).is_none());
+        assert!(s.gate(0x0800_1004, layout()).is_none());
         assert_eq!(s.violations_flash, 2);
         assert!(s.flash_warning_emitted);
     }
@@ -336,37 +308,19 @@ mod tests {
             ram: CpuWritePolicy::Fault,
             ..Default::default()
         };
-        assert!(s
-            .gate(
-                0x2000_0010,
-                0x2000_0000,
-                0x1000,
-                0x0800_0000,
-                0x1000,
-                false,
-                &[]
-            )
-            .is_some());
-        assert!(s
-            .gate(
-                0x0800_0010,
-                0x2000_0000,
-                0x1000,
-                0x0800_0000,
-                0x1000,
-                false,
-                &[]
-            )
-            .is_none());
+        assert!(s.gate(0x2000_0010, layout()).is_some());
+        assert!(s.gate(0x0800_0010, layout()).is_none());
         assert_eq!(s.violations_ram, 1);
     }
 
     #[test]
     fn boot_alias_writes_are_gated_as_flash() {
         let mut s = state_flash(CpuWritePolicy::Fault);
-        assert!(s
-            .gate(0x40, 0x2000_0000, 0x1000, 0x0800_0000, 0x1000, true, &[])
-            .is_some());
+        let alias_layout = MemoryPolicyLayout {
+            flash_alias_active: true,
+            ..layout()
+        };
+        assert!(s.gate(0x40, alias_layout).is_some());
         assert_eq!(s.violations_flash, 1);
     }
 
