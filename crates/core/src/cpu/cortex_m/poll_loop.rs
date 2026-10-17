@@ -241,7 +241,8 @@ impl CortexM {
     #[inline]
     pub(super) fn note_poll_step(&mut self, pc_before: u32) {
         let pc = self.pc;
-        if pc >= pc_before || pc_before - pc > MAX_BACKEDGE_BYTES {
+        // `pc == pc_before` is a branch to itself (`b .`), the tightest loop.
+        if pc > pc_before || pc_before - pc > MAX_BACKEDGE_BYTES {
             return;
         }
         self.poll_loop_note_backedge(pc);
