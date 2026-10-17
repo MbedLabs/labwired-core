@@ -2979,6 +2979,18 @@ pub struct Machine<C: Cpu> {
     pub(crate) secondary_defer: Option<(u64, u64)>,
     /// Retained buffer for [`Cpu::poll_loop_watch`].
     batch_watch_scratch: Vec<(u64, u64)>,
+    /// Plan CPU windows at `config.peripheral_tick_interval` (wide) while
+    /// keeping every boundary cycle-exact: each batch ends right after an
+    /// instruction that touches a device (`bus::BatchStop`), windows already
+    /// end at scheduler and interrupt deadlines, and every boundary ticks. So the tick, IRQ aggregation and
+    /// drain run on each cycle where interval 1 would see a change, and the
+    /// cycles in between, where it would see none, run as one batch.
+    ///
+    /// Pair it with `bus.config.peripheral_tick_interval = 1`: models such as
+    /// the UART pace their own events by the bus interval and quantise to it.
+    /// Off by default (the browser runs wide and quantised); `labwired test`
+    /// sets it for Cortex-M, where hosted runs must be cycle-exact.
+    pub exact_batch_boundaries: bool,
     pub config: SimulationConfig,
     /// Injectable host clock used by [`HostTimeMode::Realtime`] pacing.
     host_clock: Box<dyn host_time::HostClock + Send>,
@@ -3767,6 +3779,7 @@ impl<C: Cpu> Machine<C> {
             primary_batches_beside_deferred: 0,
             secondary_defer: None,
             batch_watch_scratch: Vec::new(),
+            exact_batch_boundaries: false,
             config: SimulationConfig::default(),
             host_clock: Box::new(host_time::StdHostClock::new()),
             step_profile: StepProfile::default(),

@@ -43,6 +43,10 @@ pub(crate) struct TestExecutionContext<'a, C: labwired_core::Cpu> {
     /// the same cycles as a run without any skip. Set on the classic-ESP32
     /// path, where one instruction is one cycle.
     pub counter_metrics: bool,
+    /// `cycles` / `instructions` come from the machine's counters, not a
+    /// per-step observer, while a step stays one retired instruction (so
+    /// `max_steps` means what it did). Set on the Cortex-M bare-ELF path.
+    pub machine_metrics: bool,
     // Architecture of the loaded image (paint is ARM-only in P0).
     pub arch: labwired_core::Arch,
     // Script + env kill switch for main-stack paint.
@@ -744,7 +748,7 @@ pub(crate) fn execute_test_loop<C: labwired_core::Cpu>(
         // count (accumulated from `step_batch` return values); `total_cycles`
         // is the machine's canonical cycle counter. No-op for the non-eligible
         // path, where `metrics` IS the live step observer.
-        if ctx.jit_eligible || ctx.counter_metrics {
+        if ctx.jit_eligible || ctx.counter_metrics || ctx.machine_metrics {
             ctx.metrics.set_cycles(ctx.machine.total_cycles);
             ctx.metrics.set_instructions(step);
         }
@@ -1204,7 +1208,7 @@ pub(crate) fn execute_test_loop<C: labwired_core::Cpu>(
     // before the LAST batch, so capture that batch's retired cycles/instructions
     // here — `result.json` (`cycles`/`instructions`) and `stop_reason_details`
     // read `metrics` below and must report the true totals.
-    if ctx.jit_eligible || ctx.counter_metrics {
+    if ctx.jit_eligible || ctx.counter_metrics || ctx.machine_metrics {
         ctx.metrics.set_cycles(ctx.machine.total_cycles);
         ctx.metrics.set_instructions(steps_executed);
     }

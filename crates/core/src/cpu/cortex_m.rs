@@ -3093,6 +3093,10 @@ impl Cpu for CortexM {
                 if sysbus.pending_wake_left() == Some(0) {
                     break;
                 }
+                // A device access under `Machine::exact_batch_boundaries`.
+                if sysbus.batch_stop.hit() {
+                    break;
+                }
                 // See the `!batch_mode_enabled` arm: a latched SYSRESETREQ ends
                 // the batch here so the reset lands on this exact boundary.
                 if self.sysreset_latched()
@@ -3140,6 +3144,9 @@ impl Cpu for CortexM {
                 #[cfg(feature = "event-scheduler")]
                 bus.advance_cycle(live_step);
                 executed += 1;
+                if bus.batch_stop_hit() {
+                    break;
+                }
                 if self.sysreset_latched()
                     || self.debug_batch_break()
                     || self.firmware_exit_latched()
