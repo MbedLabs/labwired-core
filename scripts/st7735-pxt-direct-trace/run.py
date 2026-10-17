@@ -15,6 +15,10 @@ INPUTS = {
         "dea9ea175d65d885275eb0715d56353674feae88d64d29a5eb2809f899a0d958",
     "LICENSE": "dea9265341829002e2c23a7372393eb2ed6e26085fb623f38a4ba0af833f30a6",
 }
+FRAGMENTS = {
+    "sendIndexedImage444": "95429c6b140c357228bd9a2f56a65cafca75d83b7b2f56fa338bba25f3bdce05",
+    "boardIdPredicate": "89f00c6fbca7dc68e7fdee9a2a459f61a5beb0e8b5337df7adaefa70523c8a71",
+}
 
 
 def fragment(source, start, end):
@@ -25,13 +29,7 @@ def fragment(source, start, end):
     return source[begin:finish]
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--work-dir", required=True)
-    parser.add_argument("--output", required=True)
-    parser.add_argument("--notice-output", required=True)
-    args = parser.parse_args()
-    root = Path(__file__).resolve().parent
+def download_inputs():
     downloaded = {}
     for name, expected in INPUTS.items():
         url = f"https://raw.githubusercontent.com/microsoft/pxt-common-packages/{PIN}/{name}"
@@ -40,6 +38,17 @@ def main():
         if len(data) > 65536 or hashlib.sha256(data).hexdigest() != expected:
             raise RuntimeError(f"pinned input mismatch: {name}")
         downloaded[name] = data
+    return downloaded
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--work-dir", required=True)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--notice-output", required=True)
+    args = parser.parse_args()
+    root = Path(__file__).resolve().parent
+    downloaded = download_inputs()
     source = downloaded["libs/screen---st7735/screen.cpp"]
     # Preserve the exact bytes, including comments/indentation. Only the host
     # class/transport boundary is authored. No source substitutions or fixes.
@@ -49,6 +58,12 @@ def main():
         b"        uint32_t boardId = (uint32_t)getConfig(CFG_BOOTLOADER_BOARD_ID, 0);",
         b"\n#endif",
     )
+    hashes = {
+        "sendIndexedImage444": hashlib.sha256(method).hexdigest(),
+        "boardIdPredicate": hashlib.sha256(predicate).hexdigest(),
+    }
+    if hashes != FRAGMENTS:
+        raise RuntimeError("pinned fragment mismatch")
     with tempfile.TemporaryDirectory(prefix="pxt-direct-", dir=args.work_dir) as folder:
         work = Path(folder)
         (work / "method.inc").write_bytes(method)
@@ -74,10 +89,7 @@ def main():
         "schema": "labwired.st7735.pxt-direct-fragment-trace.v1",
         "sourcePin": PIN,
         "inputSha256": INPUTS,
-        "fragmentSha256": {
-            "sendIndexedImage444": hashlib.sha256(method).hexdigest(),
-            "boardIdPredicate": hashlib.sha256(predicate).hexdigest(),
-        },
+        "fragmentSha256": hashes,
         "compiler": compiler,
         "architecture": "host x86 32-bit; not ARM",
         "capture": captured,

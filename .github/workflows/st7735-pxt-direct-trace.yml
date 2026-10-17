@@ -21,6 +21,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - name: Runner admission controls without network or compilation
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s scripts/st7735-pxt-direct-trace -p 'test_*.py' -v
       - name: Install 32-bit host compiler support
         run: |
           sudo apt-get update

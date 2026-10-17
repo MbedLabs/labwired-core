@@ -11,6 +11,12 @@ fragments in an authored host class/transport boundary, without source fixes or
 substitutions. The original full class, constructor, palette setter, Image type,
 `updateScreen` dispatch and runtime are **not** compiled or executed.
 
+Before compilation the runner also checks the two exact fragment hashes.
+`test_run.py` has ten mocked admission controls: byte preservation, ambiguous or
+missing delimiters, wrong-range selection, exact/corrupt/oversized input, network
+failure and immutable declared pins. These controls perform no network request,
+compiler invocation or renderer execution; they do not qualify the capture.
+
 The artificial boundary supplies literal palette nibbles, source buffers and
 synchronous SPI/pins. Predicate cases cover all six legacy IDs, three VID
 boundary/example IDs, four unknown/absent IDs and missing SPI. Those controls
