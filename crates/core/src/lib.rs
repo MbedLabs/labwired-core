@@ -1432,6 +1432,33 @@ pub trait Peripheral: std::fmt::Debug + Send {
         None
     }
 
+    /// Timer capability: the channel-OUTPUT wire (`CH1`..`CH4`), created on
+    /// first call, so the bus can route it onto GPIO pads. With `arm` the
+    /// timer also starts generating its outputs onto the wire (a pad was
+    /// bound); without it the wire exists but stays inert, so a timer no pad
+    /// can reach costs nothing. `None` for everything that is not a timer
+    /// with output channels.
+    fn timer_output_lines(
+        &mut self,
+        _arm: bool,
+    ) -> Option<std::sync::Arc<crate::peripherals::pad_lines::PadLines>> {
+        None
+    }
+
+    /// GPIO capability: bind pad `pin` CONDITIONALLY to `line` of a timer's
+    /// channel-output wire `cell` — live while the pad is an alternate-function
+    /// output and the timer drives that line (STM32 F1 fixed mapping). A port
+    /// whose register layout is not F1 refuses it and returns `false`.
+    fn bind_timer_output_pad(
+        &mut self,
+        _cell: &std::sync::Arc<crate::peripherals::pad_lines::PadLines>,
+        _pin: u8,
+        _line: usize,
+        _func: &'static str,
+    ) -> bool {
+        false
+    }
+
     /// GPIO capability: bind pad `pin` to input `ti` of the timer at bus
     /// index `timer` — live while the pad selects `af` (an STM32 V2 AFR
     /// nibble), or while it is a digital input when `af` is `None` (STM32 F1
@@ -2302,6 +2329,15 @@ pub trait Peripheral: std::fmt::Debug + Send {
     /// session is built rather than written nowhere for the whole run.
     fn adc_channel_count(&self) -> Option<u8> {
         None
+    }
+
+    /// Set the ambient (die) temperature an on-chip temperature sensor
+    /// reports, in °C. `true` when this peripheral has such a sensor and took
+    /// the value; `false` otherwise (the default). The bus fans one world
+    /// temperature out to every peripheral through
+    /// [`crate::bus::SystemBus::set_ambient_temperature_c`].
+    fn set_ambient_temperature_c(&mut self, _celsius: f64) -> bool {
+        false
     }
 
     /// Hand the peripheral the machine's ONE universal bus trace, plus the name
