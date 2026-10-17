@@ -191,7 +191,10 @@ fn guest(mode: &str) -> (ProgramImage, u32) {
         (PORT, (1 << 7) | (1 << 5), false),
         (SPI, MASTER, false),
         (SPI + 4, 0, false),
-        (SPI + 0x0c, 63, true),
+        // 4096 nominal cycles/byte leaves a real completion-observation
+        // window even at the largest admitted 1024-cycle service interval.
+        // This slow diagnostic is not a representative throughput workload.
+        (SPI + 0x0c, 255, true),
         (SPI, MASTER | 2, false),
     ] {
         g.store(address, value, byte);
