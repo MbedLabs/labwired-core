@@ -746,7 +746,7 @@ jobs:
       - name: SAM SPI controller and guest (FEATURE-OFF)
         run: >
           scripts/ci/cargo-test-nonvacuous.sh
-          -p labwired-core --test sam_sercom_spi --test st7735_sam_guest
+          -p labwired-core --test sam_sercom_spi --test st7735_sam_guest --test sam_dmac_byte
           -- --nocapture
 
       # AVR sim-smoke golden — cheap (~ms), no PlatformIO. Pins Arduino Nano
@@ -1335,7 +1335,7 @@ jobs:
         run: >
           scripts/ci/cargo-test-nonvacuous.sh
           -p labwired-core --features event-scheduler
-          --test sam_sercom_spi --test st7735_sam_guest -- --nocapture
+          --test sam_sercom_spi --test st7735_sam_guest --test sam_dmac_byte -- --nocapture
 
       - name: Scheduler-only fidelity lanes (walk≡scheduler timing gates)
         run: >
