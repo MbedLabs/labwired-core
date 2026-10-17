@@ -230,7 +230,14 @@ const YAML_DEVICES_BASELINE: usize = 90;
 /// is a declarative `camera`/frame-source primitive (window + format registers
 /// in, `DvpSensor` out), after which the SCCB map moves to YAML and this file
 /// goes.
-const RUST_DEVICES_BASELINE: usize = 27;
+/// 27 → 28: `st7735_color.rs`, the ST7735 serial-colour panel, added by the
+/// display PR (#1417) whose merge brought it in ahead of this baseline bump.
+/// It is a genuine Rust model for the same reason `ili9341_parallel.rs` is:
+/// write-driven reset/backlight sequencing and the pixel-validity window have
+/// no declarative primitive yet. Port path: extend the display primitive with
+/// reset/backlight sequencing and explicit pixel validity, then the part moves
+/// to YAML and this count comes back down.
+const RUST_DEVICES_BASELINE: usize = 28;
 
 /// Files in `components/` that are NOT a device model, with the reason. Listed
 /// here rather than pattern-matched so every exemption is a line someone wrote
