@@ -154,9 +154,24 @@ impl SamDmacByte {
         match offset {
             0 => {
                 if requested & 1 != 0 {
+                    if self.control & ENABLE as u16 != 0 {
+                        return Err(SimulationError::Other(
+                            "SAM DMAC reset requires disabled controller".into(),
+                        ));
+                    }
                     *self = Self::new(self.mmio_base);
                 } else {
-                    self.control = ((u32::from(self.control) & !mask) | requested) as u16 & 0x0f02;
+                    if requested & !0x0f02 != 0 {
+                        return Err(SimulationError::NotImplemented(
+                            "sam_dmac_byte: CRC and other control modes excluded".into(),
+                        ));
+                    }
+                    let mut new = ((u32::from(self.control) & !mask) | requested) as u16;
+                    if self.control & ENABLE as u16 != 0 {
+                        // LVLEN fields are enable-protected; DMAENABLE is not.
+                        new = (new & ENABLE as u16) | (self.control & 0x0f00);
+                    }
+                    self.control = new;
                 }
             }
             0x10 => {
@@ -190,7 +205,9 @@ impl SamDmacByte {
                 match (offset - 0x40) % 16 {
                     0 => {
                         if requested & 1 != 0 {
-                            *c = Channel::default();
+                            if c.control & ENABLE == 0 {
+                                *c = Channel::default();
+                            }
                         } else {
                             let new = (c.control & !mask) | requested;
                             if new & !ENABLE != 0 {

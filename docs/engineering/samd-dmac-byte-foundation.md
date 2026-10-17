@@ -51,6 +51,11 @@ produce TCMPL. Handler-written flag/vector/count witnesses and architectural
 entry/return are checked, separately from host-MMIO/refusal/shared-vector tests.
 The model is bus-assisted and not event-migrated or performance-qualified.
 
+The reset guest disables the controller before SWRST. Enabled global reset
+returns an access error, enabled channel reset is ignored, and LVLEN fields are
+enable-protected. Separate host controls assert those boundaries and refusal
+of excluded CRC control rather than silently accepting it.
+
 Unsupported descriptor modes latch an explicit simulator refusal exposed by
 subsequent register reads and inspection; no guessed hardware flags are used.
 Writes that request unsupported trigger/command/priority/event modes refuse

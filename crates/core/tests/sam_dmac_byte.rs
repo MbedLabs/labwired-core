@@ -68,7 +68,24 @@ fn mmio_tables_modes_and_unsupported_descriptors_refuse_without_success() {
         bus.write_u32(DMA + 0x38, WB).unwrap();
         assert!(bus.write_u32(channel(0), 13 << 8 | 2).is_err());
         bus.write_u32(channel(0), 2).unwrap();
+        bus.write_u32(channel(0), 1).unwrap();
+        assert_eq!(
+            bus.read_u32(channel(0)).unwrap(),
+            2,
+            "enabled channel ignores SWRST"
+        );
         bus.write_u32(DMA, 0x102).unwrap();
+        assert!(
+            bus.write_u32(DMA, 1).is_err(),
+            "enabled global SWRST access error"
+        );
+        assert_eq!(bus.read_u32(DMA).unwrap(), 0x102);
+        assert!(
+            bus.write_u32(DMA, 1 << 16).is_err(),
+            "CRC control is not admitted"
+        );
+        bus.write_u32(DMA, 0xf02).unwrap();
+        assert_eq!(bus.read_u32(DMA).unwrap(), 0x102, "LVLEN enable protection");
         bus.write_u32(DMA + 0x34, TABLE + 0x100).unwrap();
         assert_eq!(bus.read_u32(DMA + 0x34).unwrap(), TABLE);
         bus.write_u32(DMA + 0x10, 1).unwrap();
@@ -87,6 +104,7 @@ fn mmio_tables_modes_and_unsupported_descriptors_refuse_without_success() {
             .snapshot();
         assert!(snapshot["refusal"].as_str().is_some());
         assert_eq!(snapshot["channels"][0]["flags"], 0);
+        bus.write_u32(DMA, 0).unwrap();
         bus.write_u32(DMA, 1).unwrap();
         assert_eq!(bus.read_u8(channel(0) + 14).unwrap(), 0);
     }
@@ -293,6 +311,7 @@ fn guest(index: usize, mode: &str) -> ProgramImage {
         );
     }
     if mode == "reset" {
+        store(&mut ops, &mut literals, DMA as u32, 0, false);
         store(&mut ops, &mut literals, DMA as u32, 1, false);
     }
     if mode != "primask" {
