@@ -418,6 +418,10 @@ impl WasmSimulator {
         }
         let coverage = fresh.tools.borrow().coverage.clone();
         if let Some(obs) = coverage {
+            // Counts keep accumulating across the rewind, but the step from
+            // the last instruction before it to the saved point never
+            // happened; don't let it count as a branch outcome.
+            obs.break_chain();
             fresh.jit_browser_enabled = false;
             fresh.jit_browser_cache = None;
             if let Some(m) = fresh.machine.as_mut() {

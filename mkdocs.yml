@@ -83,6 +83,7 @@ nav:
     - Timed UART networks: howto/timed-uart-network.md
     - GPIO nets between machines: howto/gpio-nets.md
     - SEGGER RTT logging: howto/segger-rtt.md
+    - Firmware coverage (lines, branches, CI): howto/firmware-coverage.md
     - CI integration: ci_integration.md
     - Peripheral modeling: peripherals.md
     - Hardware Interaction Guide: hardware_interaction_guide.md

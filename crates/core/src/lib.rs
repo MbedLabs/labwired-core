@@ -257,6 +257,11 @@ pub trait SimulationObserver: std::fmt::Debug + Send + Sync {
     fn on_step_end(&self, _cycles: u32, _registers: &[u32]) {}
     fn on_memory_write(&self, _addr: u64, _old: u8, _new: u8) {}
     fn on_peripheral_tick(&self, _name: &str, _cycles: u32) {}
+    /// The machine is about to step CPU core `core` (0 = the primary). Sent
+    /// only by multi-core machines, before a different core steps and again
+    /// when the primary resumes, so an observer that links one instruction to
+    /// the next can keep one chain per core.
+    fn on_core_switch(&self, _core: usize) {}
 }
 
 /// Offset of the standardized PC slot from the end of an `on_step_end`

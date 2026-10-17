@@ -184,7 +184,13 @@ pub struct Tier1MatrixArgs {
 }
 
 #[derive(Parser, Debug)]
+#[command(args_conflicts_with_subcommands = true)]
 pub struct CoverageArgs {
+    /// Firmware-coverage tools. With no subcommand, `labwired coverage`
+    /// prints the ESP32-S3 chip-model register-coverage matrix.
+    #[command(subcommand)]
+    pub action: Option<CoverageAction>,
+
     /// Path to the ESP32-S3 SVD (else auto-discovered from PlatformIO or
     /// LABWIRED_ESP32S3_SVD env var).
     #[arg(long)]
@@ -193,6 +199,48 @@ pub struct CoverageArgs {
     /// Write the coverage matrix as JSON to this path.
     #[arg(long = "json-out", id = "coverage_json_out")]
     pub json_out: Option<PathBuf>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum CoverageAction {
+    /// Merge firmware-coverage LCOV files (from `labwired test --coverage`,
+    /// gcov/gcovr, llvm-cov, …) into one report: counts add up, and a branch
+    /// stays "never evaluated" only if no run evaluated it. Prints a summary,
+    /// writes LCOV / Cobertura / JSON, and can fail the build under a
+    /// threshold.
+    Merge(CoverageMergeArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct CoverageMergeArgs {
+    /// LCOV files, or directories searched recursively for `*.info`.
+    #[arg(required = true, value_name = "INPUT")]
+    pub inputs: Vec<PathBuf>,
+
+    /// Write the merged LCOV tracefile here.
+    #[arg(short, long, value_name = "PATH")]
+    pub output: Option<PathBuf>,
+
+    /// Write Cobertura XML here (GitLab `coverage_report`, Jenkins, Azure).
+    #[arg(long, value_name = "PATH")]
+    pub cobertura: Option<PathBuf>,
+
+    /// Base directory relative source paths resolve against, for the
+    /// Cobertura `<source>` element. Repeatable. Default: current directory.
+    #[arg(long = "source-root", value_name = "DIR")]
+    pub source_roots: Vec<String>,
+
+    /// Write the summary, per-file numbers and every uncovered branch as JSON.
+    #[arg(long = "json-out", value_name = "PATH", id = "coverage_merge_json")]
+    pub json_out: Option<PathBuf>,
+
+    /// Exit with an error if merged line coverage is below this percentage.
+    #[arg(long, value_name = "PERCENT")]
+    pub fail_under_lines: Option<f64>,
+
+    /// Exit with an error if merged branch coverage is below this percentage.
+    #[arg(long, value_name = "PERCENT")]
+    pub fail_under_branches: Option<f64>,
 }
 
 #[derive(Parser, Debug)]
@@ -632,9 +680,10 @@ struct TestArgs {
     #[arg(long)]
     trace_max: Option<usize>,
 
-    /// Collect firmware statement coverage. Writes coverage.info (LCOV) and
-    /// coverage.json into --output-dir. Distinct from `labwired coverage`,
-    /// which measures chip-model register faithfulness.
+    /// Collect firmware coverage (lines, branches, functions, with hit
+    /// counts) from the unmodified ELF. Writes coverage.info (LCOV),
+    /// coverage.cobertura.xml and coverage.json into --output-dir. Combine
+    /// runs with `labwired coverage merge`.
     #[arg(long)]
     coverage: bool,
 
