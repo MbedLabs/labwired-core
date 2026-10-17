@@ -57,10 +57,11 @@ pub(crate) struct OperateResponse {
     pub(crate) event_present: bool,
 }
 
-/// Decode a device reply `[PD_in..., OD..., CKS]` (Spec A.1.5; length
-/// `pd_in_len + od_len + 1`). There is no leading status octet: the checksum
-/// is over every data octet and CKS with its checksum bits (0-5) zeroed, the
-/// PD status is CKS bit 6 (1 = invalid) and the Event flag is CKS bit 7.
+/// Decode a device reply `[OD..., PD_in..., CKS]` (Spec A.1.5, Figures
+/// A.9/A.10/A.13/A.14; length `od_len + pd_in_len + 1`). There is no leading
+/// status octet: the checksum is over every data octet and CKS with its
+/// checksum bits (0-5) zeroed, the PD status is CKS bit 6 (1 = invalid) and
+/// the Event flag is CKS bit 7.
 pub(crate) fn decode_operate(data: &[u8], pd_in_len: usize, od_len: usize) -> OperateResponse {
     if data.len() < pd_in_len + od_len + 1 {
         return OperateResponse {
@@ -70,8 +71,7 @@ pub(crate) fn decode_operate(data: &[u8], pd_in_len: usize, od_len: usize) -> Op
             event_present: false,
         };
     }
-    let pd_end = data.len() - od_len - 1;
-    let pd = data[..pd_end].to_vec();
+    let pd = data[od_len..data.len() - 1].to_vec();
     let cks = data[data.len() - 1];
     let mut masked = data.to_vec();
     if let Some(last) = masked.last_mut() {
@@ -812,8 +812,8 @@ mod tests {
 
     #[test]
     fn decodes_operate_response_and_extracts_pd() {
-        // Reply is `[PD_in..., OD..., CKS]` with no leading status octet.
-        let resp = decode_operate(&[0xA5, 0x00, 0x22], 1, 1);
+        // Read reply is `[OD..., PD_in..., CKS]` with no leading status octet.
+        let resp = decode_operate(&[0x00, 0xA5, 0x22], 1, 1);
         assert!(resp.checksum_ok);
         assert!(resp.pd_valid);
         assert!(!resp.event_present);
@@ -823,14 +823,14 @@ mod tests {
     #[test]
     fn decode_operate_flags_event_and_pd_invalid_in_cks() {
         // PD valid, Event flag set: CKS = 0x80 | ck6([0xA5, 0x80]) = 0x8A.
-        let ev = decode_operate(&[0xA5, 0x00, 0x8A], 1, 1);
+        let ev = decode_operate(&[0x00, 0xA5, 0x8A], 1, 1);
         assert!(ev.checksum_ok);
         assert!(ev.pd_valid);
         assert!(ev.event_present);
 
         // PD invalid (CKS bit 6), no event: the PD-status bit participates in
         // the checksum, so CKS = 0x40 | ck6([0xA5, 0x40]) = 0x7A.
-        let inv = decode_operate(&[0xA5, 0x00, 0x7A], 1, 1);
+        let inv = decode_operate(&[0x00, 0xA5, 0x7A], 1, 1);
         assert!(inv.checksum_ok);
         assert!(!inv.pd_valid);
         assert!(!inv.event_present);
