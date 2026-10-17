@@ -463,7 +463,24 @@ fn scheduler_clock_gate_freezes_inflight_frame_and_resumes_once() {
 
 #[test]
 fn idle_spi_does_not_arm_events_or_force_the_legacy_walk() {
-    let (bus, _) = board_with_drive(false);
+    let (board_bus, _) = board_with_drive(false);
+    // The full board has a GPIO shift register that drives DATA from the
+    // resident service pass. That independent contract must still pin ticks
+    // to one, even when every controller is scheduler-driven.
+    assert!(board_bus
+        .gpio_devices
+        .iter()
+        .any(|device| device.needs_per_cycle_service()));
+    assert_eq!(board_bus.max_safe_tick_interval(), 1);
+
+    // Isolate controller walk deletion from the board residents. This is the
+    // chip-level perf fleet boundary, not a claim about full-board batching.
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let chip = ChipDescriptor::from_file(root.join("configs/chips/atsamd51-pybadge.yaml")).unwrap();
+    let mut manifest =
+        SystemManifest::from_file(root.join("configs/systems/pybadge.yaml")).unwrap();
+    manifest.external_devices.clear();
+    let bus = SystemBus::from_config(&chip, &manifest).unwrap();
     let spi = &bus
         .peripherals
         .iter()
