@@ -4,7 +4,7 @@
 //! No ASF implementation/header is copied or imported. Unsupported descriptors latch an explicit
 //! simulator refusal; they never masquerade as hardware completion/error flags.
 
-use crate::{Bus, Peripheral, PeripheralTickResult, SimResult, SimulationError};
+use crate::{bus::SystemBus, Bus, Peripheral, PeripheralTickResult, SimResult, SimulationError};
 use std::any::Any;
 
 const ENABLE: u32 = 2;
@@ -251,8 +251,19 @@ impl SamDmacByte {
     }
 
     fn service(&mut self, bus: &mut dyn Bus, index: usize) {
+        // Only the primary SystemBus RAM mapping is admitted. Unmapped addresses
+        // still reach the real bus to exercise its actual AHB-error boundary.
+        // In particular a stub/gated MMIO write returning Ok is NOT RAM writeback.
+        let table = u64::from(self.base) + index as u64 * 16;
+        let writeback = u64::from(self.writeback) + index as u64 * 16;
+        if !Self::memory_extent_admitted(bus, table, 16)
+            || !Self::memory_extent_admitted(bus, writeback, 16)
+        {
+            self.refuse_memory(index);
+            return;
+        }
         if self.channels[index].descriptor.is_none() {
-            let start = u64::from(self.base) + index as u64 * 16;
+            let start = table;
             let mut raw = [0; 16];
             for (byte, value) in raw.iter_mut().enumerate() {
                 match bus.read_u8(start + byte as u64) {
@@ -276,12 +287,10 @@ impl SamDmacByte {
         let mut d = self.channels[index].descriptor.unwrap();
         let source = d.address(true);
         let destination = d.address(false);
-        if [source, destination]
-            .into_iter()
-            .any(|a| (self.mmio_base..self.mmio_base + 0x400).contains(&a))
+        if !Self::memory_extent_admitted(bus, source, 1)
+            || !Self::memory_extent_admitted(bus, destination, 1)
         {
-            self.refusal = Some("self-MMIO DMA is not admitted");
-            self.channels[index].control &= !ENABLE;
+            self.refuse_memory(index);
             return;
         }
         let transferred = bus
@@ -310,6 +319,42 @@ impl SamDmacByte {
                 c.flags |= TCMPL;
             }
         }
+    }
+
+    fn refuse_memory(&mut self, index: usize) {
+        self.refusal = Some("mapped targets other than primary RAM are not admitted");
+        self.channels[index].control &= !ENABLE;
+        self.channels[index].pending = false;
+    }
+
+    fn memory_extent_admitted(bus: &dyn Bus, start: u64, length: u64) -> bool {
+        let Some(system) = bus.as_any().and_then(|any| any.downcast_ref::<SystemBus>()) else {
+            return false;
+        };
+        let contains = |base: u64, size: usize, address: u64| {
+            address
+                .checked_sub(base)
+                .is_some_and(|offset| offset < size as u64)
+        };
+        (0..length).all(|offset| {
+            let Some(address) = start.checked_add(offset) else {
+                return false;
+            };
+            // Reject MMIO even when RAM overlaps it: routing order is not a
+            // substitute for a selected storage capability. NS aliases excluded.
+            if bus.has_mmio_window(system.resolve_ns_alias(address)) {
+                return false;
+            }
+            if contains(system.ram.base_addr, system.ram.data.len(), address) {
+                return true;
+            }
+            !contains(system.flash.base_addr, system.flash.data.len(), address)
+                && !(system.flash_boot_alias && address < system.flash.data.len() as u64)
+                && !system
+                    .extra_mem
+                    .iter()
+                    .any(|memory| contains(memory.base_addr, memory.data.len(), address))
+        })
     }
 }
 

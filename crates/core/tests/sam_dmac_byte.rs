@@ -90,6 +90,67 @@ fn mmio_tables_modes_and_unsupported_descriptors_refuse_without_success() {
         bus.write_u32(DMA, 1).unwrap();
         assert_eq!(bus.read_u8(channel(0) + 14).unwrap(), 0);
     }
+    // Table/data targets that generically return Ok are not RAM capabilities.
+    // Include stub/gated MMIO, self-MMIO while the model is swapped out for a
+    // bus-assisted tick, flash and extra mappings. No byte or writeback commits.
+    for (target, address) in [
+        ("table", DMA as u32),
+        ("table", 0x41000000),
+        ("table", 0x100),
+        ("writeback", DMA as u32),
+        ("writeback", 0x41000000),
+        ("writeback", 0x43000000),
+        ("writeback", 0x53000000),
+        ("writeback", 0x100),
+        ("writeback", 0x60001000),
+        ("source", 0x100),
+        ("source", 0x41000000),
+        ("destination", DMA as u32),
+        ("destination", 0x43000000),
+        ("destination", 0x53000000),
+        ("destination", 0x100),
+    ] {
+        let mut bus = board();
+        bus.ns_alias_offset = Some(0u64.wrapping_sub(0x10000000));
+        // The mapped extent begins halfway through a writeback descriptor;
+        // checking only its first address would miss it.
+        bus.extra_mem
+            .push(labwired_core::memory::LinearMemory::new(8, 0x60001008));
+        host_descriptor(&mut bus, 0, 0x0c09, 1, 0);
+        bus.write_u8(u64::from(SOURCE), 0x59).unwrap();
+        bus.write_u32(0x100, 0xaabbccdd).unwrap();
+        if target == "source" || target == "destination" {
+            let field = if target == "source" { 4 } else { 8 };
+            bus.write_u32(u64::from(TABLE) + field, address + 1)
+                .unwrap();
+        }
+        bus.write_u32(DMA + 0x34, if target == "table" { address } else { TABLE })
+            .unwrap();
+        bus.write_u32(DMA + 0x38, if target == "writeback" { address } else { WB })
+            .unwrap();
+        bus.write_u32(channel(0), 2).unwrap();
+        bus.write_u32(DMA, 0x102).unwrap();
+        bus.write_u32(DMA + 0x10, 1).unwrap();
+        bus.tick_peripherals();
+        assert!(
+            bus.read_u8(channel(0) + 14).is_err(),
+            "{target} {address:x}"
+        );
+        assert_eq!(bus.read_u8(u64::from(DESTINATION)).unwrap(), 0);
+        assert_eq!(bus.read_u32(u64::from(WB)).unwrap(), 0);
+        assert_eq!(bus.read_u32(0x100).unwrap(), 0xaabbccdd);
+        assert_eq!(bus.extra_mem.last().unwrap().data, vec![0; 8]);
+        let snapshot = bus
+            .peripherals
+            .iter()
+            .find(|p| p.name == "dmac-byte")
+            .unwrap()
+            .dev
+            .snapshot();
+        assert!(snapshot["refusal"].as_str().is_some());
+        assert_eq!(snapshot["channels"][0]["flags"], 0);
+        assert_eq!(snapshot["channels"][0]["pending"], false);
+    }
 }
 
 #[test]

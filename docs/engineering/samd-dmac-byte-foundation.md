@@ -29,6 +29,14 @@ the failed beat's count, write back progress, disable the channel and expose
 TERR without TCMPL. Clear VALID in final/error writeback. Completion interrupt
 depends on the selected block action and enabled interrupt, not host injection.
 
+Mapped descriptor, data and writeback targets are limited to primary SystemBus
+RAM. Flash, extra mappings, MMIO (including self/stub/clock-gated windows) and
+nonsecure peripheral aliases explicitly refuse before the affected beat;
+unmapped targets still exercise actual bus faults. Check all16 bytes of each
+table extent before data transfer. A generic bus `Ok` from a dropped MMIO store
+cannot establish RAM writeback or DMA completion. Peripheral DMA admission is
+a separate follow-on, not implied by this profile.
+
 Require actual authored CPU guests to create their own descriptors, program
 DMAC/NVIC, transfer memory, acknowledge the correct handler and return. Test
 all five IRQ routes and channel31; masks, no trigger, disabled controller/channel,
