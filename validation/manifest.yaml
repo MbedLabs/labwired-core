@@ -8342,7 +8342,7 @@ boards:
     note: "NUCLEO-G071RB (STM32G071RB, Cortex-M0+). Bare-metal UART/LED smoke prints OK on USART2 (ST-LINK VCP) after the G0 RCC IOPENR/APBENR1 ungating and toggles LD4 PA5; register-vs-SVD coverage measured against the ST CMSIS-SVD. SIM-DERIVED — no silicon diff; no executing-fidelity differential; DBGMCU DEV_ID 0x460 is ST's published constant, not a bench read."
     offline_tests:
       - "firmware_survival::test_nucleo_g071rb_smoke_survival"
-      - "stm32g071_config::stm32g071_from_config_builds"
+      - "board_config_gates::stm32g071_from_config_builds"
     models:
       - crates/core/src/cpu/cortex_m.rs
       - crates/core/src/decoder/arm.rs

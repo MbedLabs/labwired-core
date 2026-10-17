@@ -380,7 +380,7 @@ The models column is a content digest over everything that board's `models` list
 - Note: NUCLEO-G071RB (STM32G071RB, Cortex-M0+). Bare-metal UART/LED smoke prints OK on USART2 (ST-LINK VCP) after the G0 RCC IOPENR/APBENR1 ungating and toggles LD4 PA5; register-vs-SVD coverage measured against the ST CMSIS-SVD. SIM-DERIVED — no silicon diff; no executing-fidelity differential; DBGMCU DEV_ID 0x460 is ST's published constant, not a bench read.
 - Silicon: none — not validated against real hardware.
   - offline (CI): firmware_survival::test_nucleo_g071rb_smoke_survival
-  - offline (CI): stm32g071_config::stm32g071_from_config_builds
+  - offline (CI): board_config_gates::stm32g071_from_config_builds
 - Drift status: **no silicon capture**
 
 ## `esp32c6-devkitc` — 🟡 smoke-manual

@@ -939,53 +939,36 @@ impl Peripheral for Esp32c3Spi {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use crate::peripherals::esp_gpspi_wire::esp_gpspi_suite;
 
-    struct ExternalCanPoller(Arc<AtomicUsize>);
-    impl SpiDevice for ExternalCanPoller {
-        fn needs_external_bus_poll(&self) -> bool {
-            true
-        }
-        fn component_id(&self) -> Option<&str> {
-            Some("external-can")
-        }
-        fn poll_external_bus(&mut self) {
-            self.0.fetch_add(1, Ordering::SeqCst);
-        }
-        fn transfer(&mut self, _mosi: u8) -> u8 {
-            0
-        }
-        fn cs_pin(&self) -> &str {
-            "GPIO10"
-        }
-    }
-
-    #[test]
-    fn scheduler_arms_recurring_external_can_poll() {
-        let polls = Arc::new(AtomicUsize::new(0));
-        let mut spi = Esp32c3Spi::new(SPI2_INTR_SOURCE_ID);
-        spi.push_device(Box::new(ExternalCanPoller(polls.clone())));
-        spi.attach_cycle_clock(crate::CycleClock::default());
-
-        let events = spi.take_scheduled_events();
-        assert_eq!(
-            events.len(),
-            1,
-            "scheduler mode must arm external CAN polling"
-        );
-        let mut scheduler = crate::sched::EventScheduler::new();
-        let mut bus = crate::bus::SystemBus::new();
-        let result = spi.on_event(events[0].1, &mut scheduler, &mut bus);
-        assert_eq!(polls.load(Ordering::SeqCst), 1);
-        assert_eq!(result.reschedule_delay, Some(1));
-
-        let legacy_polls = Arc::new(AtomicUsize::new(0));
-        let mut legacy = Esp32c3Spi::new(SPI2_INTR_SOURCE_ID);
-        legacy.push_device(Box::new(ExternalCanPoller(legacy_polls.clone())));
-        assert!(legacy.take_scheduled_events().is_empty());
-        legacy.tick();
-        assert_eq!(legacy_polls.load(Ordering::SeqCst), 1);
+    esp_gpspi_suite! {
+        ctrl: Esp32c3Spi,
+        s_name: s,
+        source: SPI2_INTR_SOURCE_ID,
+        reset_test: reset_defaults_match_c3_yaml,
+        dma_conf_reset: 0x0000_0000,
+        date_reset: 0x0200_7220,
+        w0_preload: 0x1234_5678,
+        w1_preload: 0x0000_0000,
+        int_st_pre: {
+            assert!(
+                !s.legacy_tick_active(),
+                "idle level-IRQ SPI must stay out of the legacy tick walk"
+            );
+            assert!(
+                s.legacy_tick_dynamic(),
+                "writes that assert/clear INT_ST must refresh tick membership"
+            );
+        },
+        int_st_mid: {
+            assert!(s.legacy_tick_active(), "asserted INT_ST needs level ticks");
+        },
+        int_st_post: {
+            assert!(
+                !s.legacy_tick_active(),
+                "cleared INT_ST can leave tick walk"
+            );
+        },
     }
 
     #[test]
@@ -993,21 +976,6 @@ mod tests {
         // C3-vs-S3 difference: the C3 routes GP-SPI2 through interrupt-matrix
         // source 19 (SPI_INTR_2_MAP at offset 76 = 4*19), NOT the S3's 21.
         assert_eq!(SPI2_INTR_SOURCE_ID, 19);
-    }
-
-    #[test]
-    fn reset_defaults_match_c3_yaml() {
-        let s = Esp32c3Spi::new(SPI2_INTR_SOURCE_ID);
-        assert_eq!(s.read_u32(CLOCK).unwrap(), 0x8000_3043, "CLOCK");
-        assert_eq!(s.read_u32(CTRL).unwrap(), 0x003C_0000, "CTRL");
-        assert_eq!(s.read_u32(USER).unwrap(), 0x8000_00C0, "USER");
-        assert_eq!(s.read_u32(USER1).unwrap(), 0xB841_0007, "USER1");
-        assert_eq!(s.read_u32(USER2).unwrap(), 0x7800_0000, "USER2");
-        assert_eq!(s.read_u32(MISC).unwrap(), 0x0000_003E, "MISC");
-        // C3-specific resets (differ from the S3).
-        assert_eq!(s.read_u32(DMA_CONF).unwrap(), 0x0000_0000, "DMA_CONF (C3)");
-        assert_eq!(s.read_u32(SLAVE).unwrap(), 0x0280_0000, "SLAVE");
-        assert_eq!(s.read_u32(DATE).unwrap(), 0x0200_7220, "DATE (C3)");
     }
 
     #[test]
@@ -1027,93 +995,6 @@ mod tests {
         let mut s = Esp32c3Spi::new(SPI2_INTR_SOURCE_ID);
         s.write_u32(0x44, 0xDEAD_BEEF).unwrap();
         assert_eq!(s.read_u32(0x44).unwrap(), 0, "0x44 is a hole on the C3");
-    }
-
-    #[test]
-    fn unmapped_offsets_read_zero_and_ignore_writes() {
-        let mut s = Esp32c3Spi::new(SPI2_INTR_SOURCE_ID);
-        for off in [0x48u64, 0x90, 0xD8, 0xEC, 0xF4, 0xFFC] {
-            s.write_u32(off, 0xDEAD_BEEF).unwrap();
-            assert_eq!(s.read_u32(off).unwrap(), 0, "hole at {off:#x}");
-        }
-    }
-
-    #[test]
-    fn cmd_update_bit_self_clears() {
-        let mut s = Esp32c3Spi::new(SPI2_INTR_SOURCE_ID);
-        s.write_u32(CMD, UPDATE_BIT).unwrap();
-        assert_eq!(
-            s.read_u32(CMD).unwrap() & UPDATE_BIT,
-            0,
-            "UPDATE self-clears"
-        );
-    }
-
-    #[test]
-    fn dma_conf_afifo_rst_strobes_self_clear() {
-        let mut s = Esp32c3Spi::new(SPI2_INTR_SOURCE_ID);
-        s.write_u32(DMA_CONF, AFIFO_RST_BITS).unwrap();
-        assert_eq!(
-            s.read_u32(DMA_CONF).unwrap() & AFIFO_RST_BITS,
-            0,
-            "AFIFO reset strobes self-clear"
-        );
-    }
-
-    #[test]
-    fn slave_soft_reset_self_clears() {
-        let mut s = Esp32c3Spi::new(SPI2_INTR_SOURCE_ID);
-        s.write_u32(SLAVE, SOFT_RESET_BIT).unwrap();
-        assert_eq!(
-            s.read_u32(SLAVE).unwrap() & SOFT_RESET_BIT,
-            0,
-            "SOFT_RESET (WT) self-clears"
-        );
-    }
-
-    #[test]
-    fn w_buffer_round_trips() {
-        let mut s = Esp32c3Spi::new(SPI2_INTR_SOURCE_ID);
-        for w in 0..16u64 {
-            s.write_u32(W0 + w * 4, 0xA000_0000 | (w as u32)).unwrap();
-        }
-        for w in 0..16u64 {
-            assert_eq!(s.read_u32(W0 + w * 4).unwrap(), 0xA000_0000 | (w as u32));
-        }
-        assert_eq!(W15, W0 + 15 * 4, "W15 offset");
-    }
-
-    #[test]
-    fn usr_start_auto_clears_and_latches_trans_done() {
-        let mut s = Esp32c3Spi::new(SPI2_INTR_SOURCE_ID);
-        s.write_u32(MS_DLEN, 32 - 1).unwrap(); // 32-bit transfer
-        s.write_u32(CMD, USR_BIT).unwrap();
-        assert_eq!(s.read_u32(CMD).unwrap() & USR_BIT, 0, "USR auto-clears");
-        assert_eq!(
-            s.read_u32(DMA_INT_RAW).unwrap() & TRANS_DONE,
-            TRANS_DONE,
-            "TRANS_DONE latched"
-        );
-    }
-
-    #[test]
-    fn miso_fills_0xff_for_no_device() {
-        let mut s = Esp32c3Spi::new(SPI2_INTR_SOURCE_ID);
-        s.write_u32(W0, 0x1234_5678).unwrap();
-        s.write_u32(W0 + 4, 0x0000_0000).unwrap();
-        // 5-byte (40-bit) transfer → W0 fully 0xFF, W1 low byte 0xFF only.
-        s.write_u32(MS_DLEN, 40 - 1).unwrap();
-        s.write_u32(CMD, USR_BIT).unwrap();
-        assert_eq!(
-            s.read_u32(W0).unwrap(),
-            0xFFFF_FFFF,
-            "first 4 MISO bytes 0xFF"
-        );
-        assert_eq!(
-            s.read_u32(W0 + 4).unwrap(),
-            0x0000_00FF,
-            "5th byte 0xFF, rest untouched"
-        );
     }
 
     #[test]
@@ -1140,50 +1021,6 @@ mod tests {
         // MISO = each byte ^ 0xA5 → 7B 08 1B 4A, packed little-endian.
         let expect = u32::from_le_bytes([0xDE ^ 0xA5, 0xAD ^ 0xA5, 0xBE ^ 0xA5, 0xEF ^ 0xA5]);
         assert_eq!(s.read_u32(W0).unwrap(), expect, "full-duplex MISO in W0");
-    }
-
-    #[test]
-    fn int_clr_is_w1c() {
-        let mut s = Esp32c3Spi::new(SPI2_INTR_SOURCE_ID);
-        s.write_u32(MS_DLEN, 8 - 1).unwrap();
-        s.write_u32(CMD, USR_BIT).unwrap();
-        assert_eq!(s.read_u32(DMA_INT_RAW).unwrap() & TRANS_DONE, TRANS_DONE);
-        s.write_u32(DMA_INT_CLR, TRANS_DONE).unwrap();
-        assert_eq!(
-            s.read_u32(DMA_INT_RAW).unwrap() & TRANS_DONE,
-            0,
-            "W1C cleared"
-        );
-    }
-
-    #[test]
-    fn int_st_masks_with_ena_and_emits_source() {
-        let mut s = Esp32c3Spi::new(SPI2_INTR_SOURCE_ID);
-        assert!(
-            !s.legacy_tick_active(),
-            "idle level-IRQ SPI must stay out of the legacy tick walk"
-        );
-        assert!(
-            s.legacy_tick_dynamic(),
-            "writes that assert/clear INT_ST must refresh tick membership"
-        );
-        s.write_u32(MS_DLEN, 8 - 1).unwrap();
-        s.write_u32(CMD, USR_BIT).unwrap();
-        // No enable yet → ST gated, no source emitted.
-        assert_eq!(s.read_u32(DMA_INT_ST).unwrap(), 0, "ST gated by ENA");
-        assert_eq!(s.tick().explicit_irqs, None, "no source while ST==0");
-        // Enable TRANS_DONE → ST asserts and the source is emitted.
-        s.write_u32(DMA_INT_ENA, TRANS_DONE).unwrap();
-        assert_eq!(s.read_u32(DMA_INT_ST).unwrap() & TRANS_DONE, TRANS_DONE);
-        assert!(s.legacy_tick_active(), "asserted INT_ST needs level ticks");
-        assert_eq!(s.tick().explicit_irqs, Some(vec![SPI2_INTR_SOURCE_ID]));
-        // Clear the raw bit → ST drops, source stops.
-        s.write_u32(DMA_INT_CLR, TRANS_DONE).unwrap();
-        assert!(
-            !s.legacy_tick_active(),
-            "cleared INT_ST can leave tick walk"
-        );
-        assert_eq!(s.tick().explicit_irqs, None);
     }
 
     #[test]

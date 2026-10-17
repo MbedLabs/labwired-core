@@ -479,15 +479,4 @@ mod tests {
             .unwrap_or_else(|_| panic!("Failed to write registers"));
         assert_eq!(target.machine.read_core_reg(2), 0xdeadbeef);
     }
-
-    #[test]
-    fn test_target_memory_access() {
-        let mut bus = SystemBus::new();
-        let (cpu, _nvic) = labwired_core::system::cortex_m::configure_cortex_m(&mut bus);
-        let machine = Machine::new(cpu, bus);
-        let mut target = LabwiredTarget::<CortexM>::new(machine);
-
-        let data = [0xAA, 0xBB, 0xCC, 0xDD];
-        let _ = target.write_addrs(0x20000000, &data);
-    }
 }

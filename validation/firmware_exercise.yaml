@@ -494,7 +494,7 @@ chips:
 
   - id: imxrt1064
     arch: cortex-m7
-    headline: "No tier-1 target (absent from TIER1_TARGETS and tier1-matrix.json). Firmware that runs: the committed Teensy 4.1 smoke ELF, PR-gated as firmware_survival::test_imxrt1064_teensy41_smoke_survival (case firmware_survival.rs:1359-1372) and rebuilt by the nightly coverage-matrix cell examples/teensy-41/uart-smoke.yaml (core-coverage-matrix-smoke.yml:96-102); it un-gates CCM CCGR0/CCGR3, configures GPIO2_IO03 and prints OK over LPUART6 from a soft-float image linked in DTCM because FlexSPI/XIP is not modelled — the chip yaml deliberately claims neither 4 MiB SiP flash nor FlexSPI (configs/chips/imxrt1064.yaml:7-9). imxrt1064_config.rs:23-68 builds the same descriptor. Beyond the rubric there are exactly two blocks, both below; the CCM is the clock class and is firmware-driven."
+    headline: "No tier-1 target (absent from TIER1_TARGETS and tier1-matrix.json). Firmware that runs: the committed Teensy 4.1 smoke ELF, PR-gated as firmware_survival::test_imxrt1064_teensy41_smoke_survival (case firmware_survival.rs:1359-1372) and rebuilt by the nightly coverage-matrix cell examples/teensy-41/uart-smoke.yaml (core-coverage-matrix-smoke.yml:96-102); it un-gates CCM CCGR0/CCGR3, configures GPIO2_IO03 and prints OK over LPUART6 from a soft-float image linked in DTCM because FlexSPI/XIP is not modelled — the chip yaml deliberately claims neither 4 MiB SiP flash nor FlexSPI (configs/chips/imxrt1064.yaml:7-9). board_config_gates.rs builds the same descriptor. Beyond the rubric there are exactly two blocks, both below; the CCM is the clock class and is firmware-driven."
     functional: []
     advanced_unit_only: []
     advanced_dead: []
@@ -521,7 +521,7 @@ chips:
 
   - id: ra4m1
     arch: cortex-m4
-    headline: "No tier-1 target (absent from TIER1_TARGETS and tier1-matrix.json). Firmware that runs: the bare-metal Uno R4 Minima smoke, PR-gated as firmware_survival::test_ra4m1_uno_r4_smoke_survival (case firmware_survival.rs:1346-1358) and rebuilt by the nightly coverage-matrix cell examples/arduino-uno-r4-minima/uart-smoke.yaml (core-coverage-matrix-smoke.yml:89-95); it waits on the ra_sysc HOCO/OSCSF handshake, drives P111 through PORT1 PCNTR1/PCNTR3 and prints OK over SCI2 TDR, and ra4m1_config.rs:20-45 builds the descriptor. Beyond the rubric the descriptor declares exactly one block — the out-of-scope USB CDC serial."
+    headline: "No tier-1 target (absent from TIER1_TARGETS and tier1-matrix.json). Firmware that runs: the bare-metal Uno R4 Minima smoke, PR-gated as firmware_survival::test_ra4m1_uno_r4_smoke_survival (case firmware_survival.rs:1346-1358) and rebuilt by the nightly coverage-matrix cell examples/arduino-uno-r4-minima/uart-smoke.yaml (core-coverage-matrix-smoke.yml:89-95); it waits on the ra_sysc HOCO/OSCSF handshake, drives P111 through PORT1 PCNTR1/PCNTR3 and prints OK over SCI2 TDR, and board_config_gates.rs builds the descriptor. Beyond the rubric the descriptor declares exactly one block — the out-of-scope USB CDC serial."
     functional: []
     advanced_unit_only: []
     advanced_dead: []
