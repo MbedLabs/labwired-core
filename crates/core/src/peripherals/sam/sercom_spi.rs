@@ -73,11 +73,6 @@ impl SamSercomSpi {
         }
     }
 
-    pub fn push_device(&mut self, device: Box<dyn SpiDevice>) {
-        self.devices.push(device);
-        self.selected.push(false);
-    }
-
     fn enabled(&self) -> bool {
         self.ctrla & 2 != 0 && (self.ctrla >> 2) & 7 == 3 && self.ctrlb & 7 == 0
     }
@@ -141,7 +136,7 @@ impl SamSercomSpi {
         let bits = (value << shift) & mask;
         match base {
             0 => {
-                let next = (self.ctrla & !mask) | bits;
+                let next = ((self.ctrla & !mask) | bits) & 0x7f33019f;
                 if next & 1 != 0 {
                     for (dev, selected) in self.devices.iter_mut().zip(&mut self.selected) {
                         if *selected {
@@ -172,7 +167,7 @@ impl SamSercomSpi {
                     }
                 }
             }
-            4 if self.ctrla & 2 == 0 => self.ctrlb = (self.ctrlb & !mask) | bits,
+            4 if self.ctrla & 2 == 0 => self.ctrlb = ((self.ctrlb & !mask) | bits) & 0x0002e247,
             0x0c if self.ctrla & 2 == 0 => self.baud = bits as u8,
             0x14 => self.inten &= !(bits as u8),
             0x16 => self.inten |= bits as u8 & (DRE | TXC | RXC | ERROR),
@@ -259,6 +254,7 @@ impl Peripheral for SamSercomSpi {
         self.holding.is_some() || self.active.is_some() || self.selected.iter().any(|s| *s)
     }
     fn tick_with_bus(&mut self, bus: &mut dyn Bus) {
+        self.selected.resize(self.devices.len(), false);
         for (dev, selected) in self.devices.iter_mut().zip(&mut self.selected) {
             let next = if dev.cs_pin().is_empty() {
                 true

@@ -3391,16 +3391,6 @@ impl SystemBus {
                 ));
             }
             c.push_device(wrapped);
-        } else if let Some(c) =
-            any.downcast_mut::<crate::peripherals::sam::sercom_spi::SamSercomSpi>()
-        {
-            if edge_sampled {
-                return Err(edge_sampling_unsupported(
-                    controller,
-                    "SAM SERCOM byte-level SPI",
-                ));
-            }
-            c.push_device(wrapped);
         } else if let Some(c) = any.downcast_mut::<crate::peripherals::esp32c3::spi::Esp32c3Spi>() {
             // The C3 GP-SPI honours edge sampling through the same shared edge
             // model as the STM32 bit engine.
@@ -3430,7 +3420,18 @@ impl SystemBus {
         } else if let Some(c) = any.downcast_mut::<crate::peripherals::rp2040::spi::Rp2040Spi>() {
             c.push_device(wrapped);
         } else {
-            anyhow::bail!("attach_spi_device: '{name}' is not a SPI controller");
+            // New byte-level controllers join through the existing capability,
+            // without growing this concrete-type dispatch or its downcast debt.
+            let Some(devices) = self.peripherals[idx].dev.spi_attached_devices_mut() else {
+                anyhow::bail!("attach_spi_device: '{name}' is not a SPI controller");
+            };
+            if edge_sampled {
+                return Err(edge_sampling_unsupported(
+                    controller,
+                    "byte-level SPI capability",
+                ));
+            }
+            devices.push(wrapped);
         }
         Ok(())
     }
