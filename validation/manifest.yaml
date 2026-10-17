@@ -454,7 +454,7 @@ boards:
     # files. This is an ACK, NOT A CAPTURE — a live re-capture is still owed.
     # 2026-09-17 (merge #1138): VFP FPSCR FZ/DN interpreter semantics landed on
     # top of the perf/bus-scheduler changes; digest re-stamped over the merged tree.
-    drift_ack_digest: 0e013bd95ab6e654dd206b5ecc6c0b1d73ba33034319d506716627b281b44057
+    drift_ack_digest: 632ba2571eca45262a0ba306efbbbcd76871bd056f7838bbe508a34d1fa9a121
     # 2026-09-18: no execution change, step_execute arm bodies moved verbatim into cpu/cortex_m/exec/*; perf gate within noise; ACK, NOT A CAPTURE
     models:
       - crates/core/src/cpu/cortex_m.rs
@@ -605,6 +605,10 @@ boards:
     # the 2026-08-09 asserted set (0x4000_0000/0x5000_0000 peripheral space) can
     # move. Pinned by chip_cortex_m_systick. Approved by the maintainer.
     # ACK, NOT A CAPTURE.
+    # 2026-10-16 (fork #242): core-local reset guest and 38 affected caller
+    # cases passed; reset mask/IT/xPSR/LR semantics changed. ACK, NOT a
+    # physical capture. Preserve the existing acknowledgement age; physical
+    # re-capture is owed.
     # 2026-10-16 (fork A10 / PR244+PR247): source-built UARTE stack-reuse and
     # ENDTX/STOPTX guest passed under the scheduler; UARTE buffer capture and
     # configured local PPI / nRF5340 DPPI stop routing changed. Physical
@@ -915,7 +919,7 @@ boards:
     # files. This is an ACK, NOT A CAPTURE — a live re-capture is still owed.
     # 2026-09-17 (merge #1138): VFP FPSCR FZ/DN interpreter semantics landed on
     # top of the perf/bus-scheduler changes; digest re-stamped over the merged tree.
-    drift_ack_digest: 0e013bd95ab6e654dd206b5ecc6c0b1d73ba33034319d506716627b281b44057
+    drift_ack_digest: 632ba2571eca45262a0ba306efbbbcd76871bd056f7838bbe508a34d1fa9a121
     # 2026-09-18: no execution change, step_execute arm bodies moved verbatim into cpu/cortex_m/exec/*; perf gate within noise; ACK, NOT A CAPTURE
     models:
       - crates/core/src/cpu/cortex_m.rs
@@ -1066,6 +1070,10 @@ boards:
     # the 2026-08-09 asserted set (0x4000_0000/0x5000_0000 peripheral space) can
     # move. Pinned by chip_cortex_m_systick. Approved by the maintainer.
     # ACK, NOT A CAPTURE.
+    # 2026-10-16 (fork #242): core-local reset guest and 38 affected caller
+    # cases passed; reset mask/IT/xPSR/LR semantics changed. ACK, NOT a
+    # physical capture. Preserve the existing acknowledgement age; physical
+    # re-capture is owed.
     # 2026-10-16 (fork A10 / PR244+PR247): source-built UARTE stack-reuse and
     # ENDTX/STOPTX guest passed under the scheduler; UARTE buffer capture and
     # configured local PPI / nRF5340 DPPI stop routing changed. Physical
@@ -1522,7 +1530,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: fc9759043be5459f99d42e463ff40e3f19d869f8a797262899f38a52a2029f18
+    drift_ack_digest: feeaae7a395b7a1e2314e83384567509395b7e317a450711500d62e24cc74457
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -2014,6 +2022,10 @@ boards:
     # BNDT, CSAR/CDAR) is unchanged and still pinned by the gpdma tests. No
     # register map or reset value changed. No physical probe connected.
     # Approved by the maintainer. ACK, NOT A CAPTURE.
+    # 2026-10-16 (fork #242): core-local reset guest and 38 affected caller
+    # cases passed; reset mask/IT/xPSR/LR semantics changed. ACK, NOT a
+    # physical capture. Preserve the existing acknowledgement age; physical
+    # re-capture is owed.
     # 2026-10-16 (fork #243, STM32F103 fidelity): shared timer.rs / adc.rs /
     # gpio.rs / pad_routing.rs / bus wiring changed. Timer channel-output pad
     # routes are wired only behind STM32F1 GPIO ports, and the ADC IN16/IN17
@@ -3374,7 +3386,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: 2c8406618009a501d3a7ae8f2f942f9adc4877144f6d939f2dd89f276c9be37f
+    drift_ack_digest: 507c8a7d8c45fb36896109a38795995f6c9ffacd9382a6474634fd736873fb7e
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -3839,6 +3851,10 @@ boards:
     # untouched. No register map or
     # reset value changed; the SPI DMA net tests pass unchanged. No physical
     # probe connected. Approved by the maintainer. ACK, NOT A CAPTURE.
+    # 2026-10-16 (fork #242): core-local reset guest and 38 affected caller
+    # cases passed; reset mask/IT/xPSR/LR semantics changed. ACK, NOT a
+    # physical capture. Preserve the existing acknowledgement age; physical
+    # re-capture is owed.
     # 2026-10-16 (fork #243, STM32F103 fidelity): shared timer.rs / adc.rs /
     # gpio.rs / pad_routing.rs / bus wiring changed. Timer channel-output pad
     # routes are wired only behind STM32F1 GPIO ports, and the ADC IN16/IN17
@@ -4238,7 +4254,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: d85623bb28b11511662446d3b3a09606fceaf06fe4eb293f2bf27ccac41fcde1
+    drift_ack_digest: a6c733365b1ed96b57160b4916bf35dee0d083defb0240e810d9fd518eadbd72
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -4647,6 +4663,10 @@ boards:
     # TEIF/GIF, clears CCR.EN and pends with TEIE. No register map or
     # reset value changed; the SPI DMA net tests pass unchanged. No physical
     # probe connected. Approved by the maintainer. ACK, NOT A CAPTURE.
+    # 2026-10-16 (fork #242): core-local reset guest and 38 affected caller
+    # cases passed; reset mask/IT/xPSR/LR semantics changed. ACK, NOT a
+    # physical capture. Preserve the existing acknowledgement age; physical
+    # re-capture is owed.
     # 2026-10-16 (fork #243, STM32F103 fidelity): shared timer.rs / adc.rs /
     # gpio.rs / pad_routing.rs / bus wiring changed. Timer channel-output pad
     # routes are wired only behind STM32F1 GPIO ports, and the ADC IN16/IN17
@@ -5100,7 +5120,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: c8d90f70d810153030c0eae2716a0d982e1a09766b37a8776ffc1cb526d9f3b4
+    drift_ack_digest: 10a0e62b54fb05751dfede54055666ff5489386c61730a1c6d24c2b1f2894858
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -5582,6 +5602,10 @@ boards:
     # untouched. No register map or
     # reset value changed; the SPI DMA net tests pass unchanged. No physical
     # probe connected. Approved by the maintainer. ACK, NOT A CAPTURE.
+    # 2026-10-16 (fork #242): core-local reset guest and 38 affected caller
+    # cases passed; reset mask/IT/xPSR/LR semantics changed. ACK, NOT a
+    # physical capture. Preserve the existing acknowledgement age; physical
+    # re-capture is owed.
     # 2026-10-16 (fork #243): F103 model changes that a re-capture must confirm:
     # timer OC1..OC4 driven onto the default AF pads; RCC gates added for GPIOB,
     # GPIOC, TIM1, TIM3, TIM4, USART2, USART3, I2C2, SPI2, ADC2 (RM0008 7.3.7/7.3.8);
@@ -5999,7 +6023,7 @@ boards:
     # receives the same explicit GPIO edge through a capability. Captured
     # families retain their previous behavior. ACK, NOT A SILICON CAPTURE;
     # physical re-capture remains pending.
-    drift_ack_digest: d01be19bac241d694c9753d32144ea79dd48498db74f1b010eee6755f9203a75
+    drift_ack_digest: 50e376768eb053f13499e1a47b2985d0a642cf93c0aa046c0ce18bfded62a0f4
     # 2026-09-18 (STM32U575 fidelity expansion, Task A: RCC completeness):
     # re-acked. `crates/core/src/peripherals/rcc.rs` gained the full U5
     # enable/reset block (AHB1/AHB2ENR1+2/AHB3/APB1ENR1+2/APB2/APB3 + the
@@ -6421,6 +6445,10 @@ boards:
     # TEIF and clears EN. Register offsets and reset values unchanged (SxFCR
     # still reads 0x21; FS bits are now read-only as on silicon). No physical
     # probe connected. Approved by the maintainer. ACK, NOT A CAPTURE.
+    # 2026-10-16 (fork #242): core-local reset guest and 38 affected caller
+    # cases passed; reset mask/IT/xPSR/LR semantics changed. ACK, NOT a
+    # physical capture. Preserve the existing acknowledgement age; physical
+    # re-capture is owed.
     # 2026-10-16 (fork #243, STM32F103 fidelity): shared timer.rs / adc.rs /
     # gpio.rs / pad_routing.rs / bus wiring changed. Timer channel-output pad
     # routes are wired only behind STM32F1 GPIO ports, and the ADC IN16/IN17
