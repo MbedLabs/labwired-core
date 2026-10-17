@@ -1,7 +1,9 @@
-# Pinned PXT direct RGB444 fragment capture — execution pending
+# Pinned PXT direct RGB444 fragment capture — host check passed
 
-This is a proposed hosted-only source-component control, not a working PyBadge
-panel or full PXT runtime. No compiler/guest passing result is claimed yet.
+This hosted-only source-component control passed its focused
+[actual capture check](../../docs/receipts/2026-10-07-st7735-pxt-direct/README.md).
+It is not a working PyBadge panel or full PXT runtime, and does not qualify
+the separate retention guest or all PR gates.
 
 `run.py` downloads and SHA256-checks `screen.cpp` and its Microsoft MIT license
 at pxt-common-packages commit `31abf23d118f35010fb75122e60a1eb2b6dffe9f`.
@@ -35,8 +37,8 @@ the first data byte and must fail with `RAMWR mismatch`.
 - Width 159, height 4: expected transfers 720, 240 bytes, with each row's padded
   pixel retained. This does not establish correct production Image layout.
 
-These are independently tabulated source-review expectations pending hosted
-execution. They establish no panel RGB444 transfer function, valid pixels,
+These independently tabulated expectations matched the source-bound hosted
+execution recorded above. They establish no panel RGB444 transfer function, valid pixels,
 module GM/aperture, actual PXT Image storage, ARM/SAM/DMA/IRQ/fiber behavior,
 physical timing, performance or consumer adoption. Do not seed an identity LUT
 to make the existing ST7735R prototype render these bytes. Follow the
