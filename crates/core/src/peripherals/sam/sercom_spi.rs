@@ -93,6 +93,25 @@ impl SamSercomSpi {
         self.holding.is_some() || self.active.is_some() || self.selected.iter().any(|s| *s)
     }
 
+    fn refresh_chip_select(&mut self, bus: &mut dyn Bus) {
+        self.selected.resize(self.devices.len(), false);
+        for (dev, selected) in self.devices.iter_mut().zip(&mut self.selected) {
+            let next = if dev.cs_pin().is_empty() {
+                true
+            } else {
+                bus.read_gpio_output_by_label(dev.cs_pin()) == Some(false)
+            };
+            if next != *selected {
+                if next {
+                    dev.cs_select();
+                } else {
+                    dev.cs_release();
+                }
+            }
+            *selected = next;
+        }
+    }
+
     fn pending_irqs(&self) -> Vec<u32> {
         let Some(base) = self.irq_base else {
             return Vec::new();
@@ -398,28 +417,16 @@ impl Peripheral for SamSercomSpi {
     fn needs_bus_tick_forced(&self) -> bool {
         self.has_bus_work()
     }
+    fn prepare_dma_tx(&mut self, bus: &mut dyn Bus) {
+        self.refresh_chip_select(bus);
+    }
     fn tick_with_bus(&mut self, bus: &mut dyn Bus) {
         if !self.sched_driven() {
             self.tick_with_bus_forced(bus);
         }
     }
     fn tick_with_bus_forced(&mut self, bus: &mut dyn Bus) {
-        self.selected.resize(self.devices.len(), false);
-        for (dev, selected) in self.devices.iter_mut().zip(&mut self.selected) {
-            let next = if dev.cs_pin().is_empty() {
-                true
-            } else {
-                bus.read_gpio_output_by_label(dev.cs_pin()) == Some(false)
-            };
-            if next != *selected {
-                if next {
-                    dev.cs_select();
-                } else {
-                    dev.cs_release();
-                }
-            }
-            *selected = next;
-        }
+        self.refresh_chip_select(bus);
         if !self.enabled() || !self.pads_ready(bus) {
             return;
         }

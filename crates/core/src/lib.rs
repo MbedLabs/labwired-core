@@ -989,6 +989,12 @@ pub trait Peripheral: std::fmt::Debug + Send {
         None
     }
 
+    /// Refresh bus-sourced transport control inputs before an admitted TX beat.
+    /// This is not a tick: implementations must not advance time, drain bytes
+    /// or commit DMA progress. The bus calls this only after clock/readiness
+    /// admission, before the byte acceptance and its observer notification.
+    fn prepare_dma_tx(&mut self, _bus: &mut dyn Bus) {}
+
     /// Atomically accept one TX byte, or return `false` without changing
     /// state when not ready. Unsupported endpoints refuse explicitly.
     /// A successful ordinary register store is not an acceptance certificate.

@@ -69,6 +69,14 @@ impl SystemBus {
                     ));
                 }
             }
+            // Refresh external control inputs before acceptance. An idle SPI
+            // has no bus tick yet, so waiting until its first DATA-triggered
+            // tick would notify CS selection after the first accepted byte.
+            let placeholder: Box<dyn Peripheral> =
+                Box::new(crate::peripherals::stub::StubPeripheral::new(0));
+            let mut dev = std::mem::replace(&mut self.peripherals[idx].dev, placeholder);
+            dev.prepare_dma_tx(self);
+            self.peripherals[idx].dev = dev;
         }
         self.maybe_latch_dc(idx);
         let brackets = self.pad_brackets_present();
