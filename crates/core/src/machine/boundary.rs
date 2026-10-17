@@ -656,11 +656,31 @@ impl<C: Cpu> Machine<C> {
             }
             self.reset_core_system_state();
             self.reset()?;
+            self.record_peripheral_reset_cause(crate::PeripheralResetCause::System);
             // An emulated SoftDevice restarts with the chip (crate::sd_hle).
             if let Some(slot) = self.sd_hle.as_mut() {
                 slot.sd.reset();
             }
             tracing::debug!("SCB SYSRESETREQ: CPU rebooted through vector table");
+        }
+
+        // Peripheral-requested CPU reset (e.g. a watchdog time-out with reset
+        // enabled). Same clean-boundary contract and the same reboot sequence
+        // as SYSRESETREQ above; the requesting peripheral clears its own latch
+        // inside `take_reset_request`. Short-circuits on an empty index list.
+        if !self.reset_request_indices.is_empty() {
+            let requests = self.drain_peripheral_reset_requests();
+            if !requests.is_empty() {
+                self.reset_core_system_state();
+                self.reset()?;
+                for cause in requests.into_iter().flatten() {
+                    self.record_peripheral_reset_cause(cause);
+                }
+                if let Some(slot) = self.sd_hle.as_mut() {
+                    slot.sd.reset();
+                }
+                tracing::debug!("peripheral reset request: CPU rebooted through vector table");
+            }
         }
 
         // nRF52 NVMC erase drain (same clean-boundary contract as the SCB

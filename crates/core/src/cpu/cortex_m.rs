@@ -2687,6 +2687,16 @@ impl Cpu for CortexM {
         self.pc = 0x0000_0000;
         self.sp = 0x2000_0000;
         self.pending_exceptions = [0; 4];
+        // Reset is not exception return: no interrupt mask, IT block or
+        // exception-return LR from the previous boot may survive. Cortex-M4
+        // DUI0553A table 2-1 defines these reset values. General registers
+        // remain architecturally UNKNOWN; do not invent a zeroing promise.
+        self.primask = false;
+        self.basepri = 0;
+        self.faultmask = false;
+        self.it_state = 0;
+        self.xpsr = 0x0100_0000;
+        self.lr = u32::MAX;
         self.exclusive_subword = None;
         self.firmware_exit = None;
         self.set_core_sleeping(false);

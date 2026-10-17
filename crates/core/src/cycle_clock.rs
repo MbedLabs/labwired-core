@@ -39,6 +39,13 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+/// The single compile-time scheduler availability predicate. Harnesses can
+/// exercise both configurations without copying feature conditionals; models
+/// must additionally have an attached clock (see `scheduler_mode!`).
+pub const fn event_scheduler_enabled() -> bool {
+    cfg!(feature = "event-scheduler")
+}
+
 /// Shared, bus-published "now" in CPU cycles. Cheap to clone (one `Arc`);
 /// one instance per [`crate::bus::SystemBus`], handed to peripherals at
 /// attach time.

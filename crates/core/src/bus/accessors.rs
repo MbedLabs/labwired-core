@@ -191,6 +191,16 @@ impl SystemBus {
         }
     }
 
+    /// Exact committed RAM bytes, unlike peripheral callbacks' unknown old value.
+    #[inline(never)]
+    fn notify_ram_store_cold(&self, addr: u64, old: &[u8], new: &[u8]) {
+        for (i, (&old, &new)) in old.iter().zip(new).enumerate() {
+            for observer in &self.observers {
+                observer.on_memory_write(addr + i as u64, old, new);
+            }
+        }
+    }
+
     /// Route a flash-region store through the U5 quad-word program machine when
     /// the opt-in U5 gate is on (`config: { error_flags: true }` on the U5
     /// FLASH). Mirrors the H5 gate in `write_u8`, but word-granular: U5 programs
@@ -1008,6 +1018,11 @@ impl crate::Bus for SystemBus {
         if let Some(r) = self.try_u5_program_store(addr, 2, value as u32) {
             return r;
         }
+        let observed_old = if self.config.observe_wide_ram_stores && !self.observers.is_empty() {
+            self.ram.read_u16(addr)
+        } else {
+            None
+        };
         let mut wrote = self.ram.write_u16(addr, value) || self.flash.write_u16(addr, value);
         if !wrote
             && self.flash_boot_alias
@@ -1018,6 +1033,9 @@ impl crate::Bus for SystemBus {
         }
         if wrote {
             self.note_memory_write();
+            if let Some(old) = observed_old {
+                self.notify_ram_store_cold(addr, &old.to_le_bytes(), &value.to_le_bytes());
+            }
             return Ok(());
         }
         let mmio_addr = self.resolve_ns_alias(addr);
@@ -1179,6 +1197,11 @@ impl crate::Bus for SystemBus {
             }
         }
 
+        let observed_old = if self.config.observe_wide_ram_stores && !self.observers.is_empty() {
+            self.ram.read_u32(addr)
+        } else {
+            None
+        };
         let mut wrote = self.ram.write_u32(addr, value) || self.flash.write_u32(addr, value);
         if !wrote
             && self.flash_boot_alias
@@ -1189,6 +1212,9 @@ impl crate::Bus for SystemBus {
         }
         if wrote {
             self.note_memory_write();
+            if let Some(old) = observed_old {
+                self.notify_ram_store_cold(addr, &old.to_le_bytes(), &value.to_le_bytes());
+            }
             return Ok(());
         }
         let mmio_addr = self.resolve_ns_alias(addr);
