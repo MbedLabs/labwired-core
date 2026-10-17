@@ -126,6 +126,7 @@ pub(crate) fn write_outputs<C: labwired_core::Cpu>(
         stimuli,
         footprint,
         memory,
+        memory_policy,
         metrics: metrics_block,
         rtt: rtt_status,
         semihosting: semihost_status.clone(),
@@ -486,6 +487,8 @@ pub(crate) fn write_config_error_outputs(
         // Config error: no firmware footprint or stack paint collected.
         footprint: None,
         memory: None,
+        // Config error: no machine ran, so no CPU-write policy was exercised.
+        memory_policy: None,
         metrics: None,
         // Config error: no machine, so no RTT model and no diagnostics.
         rtt: None,
