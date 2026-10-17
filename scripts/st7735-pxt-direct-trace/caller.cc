@@ -52,15 +52,18 @@ struct SPI {
     Pin& cs;
     Pin& dc;
     std::vector<std::vector<uint8_t>> payloads;
+    std::vector<std::vector<int>> transfers;
     void write(int value) {
         require(cs.level == 0 && dc.level == 0 && value == 0x2c, "caller command mismatch");
         payloads.emplace_back();
+        transfers.emplace_back();
     }
     void transfer(uint8_t* src, int n, uint8_t* rx, int rx_size) {
         require(cs.level == 0 && dc.level == 1 && n > 0 && n <= 720 && !rx && !rx_size,
                 "caller data boundary mismatch");
         require(!payloads.empty(), "caller missing RAMWR");
         auto& bytes = payloads.back();
+        transfers.back().push_back(n);
         for (int i = 0; i < n; ++i) {
             uint8_t value = src[i];
             if (corrupt_capture && payloads.size() == 1 && bytes.empty()) value ^= 1;
@@ -80,7 +83,7 @@ public:
     std::vector<uint8_t> storage;
     uint8_t* screenBuf;
     Pin cs, dc;
-    SPI spi{cs, dc, {}};
+    SPI spi{cs, dc, {}, {}};
     SPI* spi_ = &spi;
     Pin* csPin_ = &cs;
     Pin* dcPin_ = &dc;
@@ -172,9 +175,14 @@ static void capture(const char* name, WDisplay& d, Image* main, Image* status,
             if (main) { images.push_back(main); heights.push_back(d.displayHeight); }
             if (status) { images.push_back(status); heights.push_back(d.height - d.displayHeight); }
             require(d.spi.payloads.size() == images.size(), "caller direct dispatch mismatch");
-            for (unsigned i = 0; i < images.size(); ++i)
+            for (unsigned i = 0; i < images.size(); ++i) {
                 require(d.spi.payloads[i] == expected_bytes(*images[i], d.width * heights[i]),
                         "caller RAMWR mismatch");
+                // For W160 the original lookahead flushes after two rows.
+                std::vector<int> transfers(heights[i] / 2, 480);
+                if (heights[i] & 1) transfers.push_back(240);
+                require(d.spi.transfers[i] == transfers, "caller transfer sizes mismatch");
+            }
             for (unsigned i = 0; i < images.size(); ++i)
                 require(padding_selected(*images[i], d.width * heights[i]) == images[i]->hasPadding(),
                         "caller padding selection mismatch");
@@ -196,7 +204,18 @@ static void capture(const char* name, WDisplay& d, Image* main, Image* status,
               << ",\"fallbackCalls\":" << d.fallbackCalls
               << ",\"mainPaddingSelected\":" << (main && expect_direct && compiled() && !error && padding_selected(*main, emitted) ? "true" : "false")
               << ",\"statusPaddingSelected\":" << (status && expect_direct && compiled() && !error && padding_selected(*status, d.width * (d.height - d.displayHeight)) ? "true" : "false")
-              << ",\"rejected\":" << (error ? "true" : "false") << "}";
+              << ",\"rejected\":" << (error ? "true" : "false") << ",\"frames\":[";
+    for (unsigned frame = 0; frame < d.spi.payloads.size(); ++frame) {
+        if (frame) std::cout << ",";
+        std::cout << "{\"ramwr\":[";
+        const auto& bytes = d.spi.payloads[frame];
+        for (unsigned i = 0; i < bytes.size(); ++i) { if (i) std::cout << ","; std::cout << unsigned(bytes[i]); }
+        std::cout << "],\"transfers\":[";
+        const auto& transfers = d.spi.transfers[frame];
+        for (unsigned i = 0; i < transfers.size(); ++i) { if (i) std::cout << ","; std::cout << transfers[i]; }
+        std::cout << "],\"csReleased\":true}";
+    }
+    std::cout << "]}";
 }
 int main(int argc, char** argv) {
     try {

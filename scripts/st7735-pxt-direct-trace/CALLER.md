@@ -32,6 +32,9 @@ with an independent literal RGB444 palette oracle. The expected padded-copy
 sizes are checked separately from the original Image methods. A named host
 capture mutant flips the first caller RAMWR byte and must fail with
 `caller RAMWR mismatch`.
+The artifact retains every RAMWR byte and transfer size for independent audit;
+logs print only a short summary. Width160's original two-row batching remains
+unchanged and is checked for each main/status frame.
 
 The exact caller's memcpy is intercepted at the authored boundary to record
 length and reject an oversized copy before mutation. Destination capacity uses

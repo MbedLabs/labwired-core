@@ -79,6 +79,7 @@ def main():
         "inputSha256": {**direct.INPUTS, HEADER: HEADER_SHA},
         "fragmentSha256": FRAGMENTS,
         "architecture": "32-bit host x86; not ARM",
+        "compiler": subprocess.check_output(["g++", "--version"], text=True).splitlines()[0],
         "capture": captures,
         "negativeControl": "corrupt first caller RAMWR byte rejected",
         "limits": [
@@ -91,7 +92,11 @@ def main():
         ],
     }
     Path(args.output).write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps(result, indent=2))
+    print(json.dumps({
+        "schema": result["schema"], "sourcePin": direct.PIN,
+        "builds": {key: len(value["cases"]) for key, value in captures.items()},
+        "negativeControl": result["negativeControl"],
+    }))
 
 
 if __name__ == "__main__":
