@@ -331,4 +331,16 @@ mod tests {
         let s = state_flash(CpuWritePolicy::Fault);
         assert!(s.report().is_some());
     }
+
+    #[test]
+    fn from_config_copies_policies() {
+        let chip_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../configs/chips/stm32f103.yaml");
+        let mut chip = labwired_config::ChipDescriptor::from_file(chip_path).unwrap();
+        chip.flash.cpu_writes = CpuWritePolicy::Fault;
+        let state = MemoryPolicyState::for_chip(&chip);
+        assert_eq!(state.flash, CpuWritePolicy::Fault);
+        assert_eq!(state.ram, CpuWritePolicy::Allow);
+        assert!(state.active());
+    }
 }
