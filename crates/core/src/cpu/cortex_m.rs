@@ -2431,6 +2431,17 @@ impl CortexM {
         if bus.requires_cycle_accurate() {
             return false;
         }
+        if let Some(sb) = bus
+            .as_any()
+            .and_then(|a| a.downcast_ref::<crate::bus::SystemBus>())
+        {
+            // A non-default RAM `cpu_writes` policy is enforced by the
+            // interpreter's store gate; compiled blocks write `bus.ram.data`
+            // directly, so they must not run while it is in force.
+            if sb.ram_cpu_writes_gated() {
+                return false;
+            }
+        }
         true
     }
 

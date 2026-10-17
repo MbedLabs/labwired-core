@@ -3793,3 +3793,15 @@ fn vmov_two_core_registers_moves_and_stores_nothing() {
     run_test_instr(&mut cpu, &mut bus, 0xEC532A12, true);
     assert_eq!((cpu.r2, cpu.r3), (0x1111_2222, 0x3333_4444));
 }
+
+#[cfg(feature = "jit")]
+#[test]
+fn jit_gate_refuses_non_default_ram_policy() {
+    let cpu = CortexM::new();
+    let mut bus = crate::bus::SystemBus::new();
+    assert!(cpu.jit_gate_allows(&bus, &[]));
+    bus.memory_policy.ram = CpuWritePolicy::Warn;
+    assert!(!cpu.jit_gate_allows(&bus, &[]));
+    bus.memory_policy.ram = CpuWritePolicy::Fault;
+    assert!(!cpu.jit_gate_allows(&bus, &[]));
+}

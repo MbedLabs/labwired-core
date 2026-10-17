@@ -303,6 +303,8 @@ pub struct SystemBus {
     /// scoped deferral, revisit if a chip ships a non-default `cpu_writes`
     /// RAM policy. Loader writes bypass by construction (direct
     /// `LinearMemory`); debugger/session writes through the bus ARE gated.
+    /// JIT lanes refuse to run while the RAM policy is non-default
+    /// (`jit_gate_allows`), so they cannot bypass the gate.
     /// See [`SystemBus::with_memory_policy_bypass`].
     pub(crate) memory_policy_bypass: bool,
     pub ram: LinearMemory,

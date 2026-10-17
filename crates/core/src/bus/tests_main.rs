@@ -6068,6 +6068,16 @@ fn cpu_store_u64_obeys_ram_policy() {
 }
 
 #[test]
+fn ram_cpu_writes_gated_tracks_the_policy() {
+    let mut bus = SystemBus::new();
+    assert!(!bus.ram_cpu_writes_gated());
+    bus.memory_policy.ram = crate::bus::CpuWritePolicy::Warn;
+    assert!(bus.ram_cpu_writes_gated());
+    bus.memory_policy.ram = crate::bus::CpuWritePolicy::Fault;
+    assert!(bus.ram_cpu_writes_gated());
+}
+
+#[test]
 fn riscv_spin_commit_refused_under_ram_policy() {
     let mut bus = SystemBus::new();
     bus.flash = LinearMemory::new_erased(64 * 1024, 0x0800_0000);

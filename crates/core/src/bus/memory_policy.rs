@@ -238,12 +238,22 @@ impl crate::bus::SystemBus {
         r
     }
 
+    /// True when a non-default RAM `cpu_writes` policy is in force — the
+    /// interpreter's store gate owns every RAM store; consumers that write
+    /// `bus.ram` directly (JIT lanes) must refuse instead.
+    #[inline]
+    pub(crate) fn ram_cpu_writes_gated(&self) -> bool {
+        self.memory_policy.ram != crate::bus::CpuWritePolicy::Allow
+    }
+
     /// True when a CPU store at `addr` must skip the direct-RAM fast paths in
     /// the Cortex-M core (policy is non-default for RAM).
     #[inline(always)]
     pub(crate) fn ram_cpu_writes_blocked(&self, addr: u64) -> bool {
-        self.memory_policy
-            .ram_blocked(addr, self.ram.base_addr, self.ram.data.len() as u64)
+        self.ram_cpu_writes_gated()
+            && self
+                .memory_policy
+                .ram_blocked(addr, self.ram.base_addr, self.ram.data.len() as u64)
     }
 
     /// The `result.json` block; `None` on default-allow buses.
