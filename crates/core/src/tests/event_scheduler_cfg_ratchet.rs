@@ -192,7 +192,14 @@ const FEATURE: &str = "event-scheduler";
 // AVR coalescer's new equivalent gate are folded into one inline
 // `advance_batch_cycle` choke point. This both avoids growing the split for a
 // new CPU fast path and removes one existing site.
-const MAX_MODEL_SITES: usize = 178;
+//
+// 2026-10-17: 178 -> 179. `cycle_clock::event_scheduler_enabled()` is the
+// single public compile-time availability predicate for harnesses (the
+// source-bound SAMD reset guest picks its profile label with it instead of
+// copying its own feature conditional). It is a centralisation point, not a
+// new model fork: no peripheral gained a second-world branch, and the guest
+// that reads it is a test harness outside this crate's `src/**`.
+const MAX_MODEL_SITES: usize = 179;
 
 /// The rest of `crates/**` — test harnesses and downstream crates.
 ///
