@@ -2875,6 +2875,13 @@ pub trait Bus {
         false
     }
 
+    /// A read-only view of plain memory (RAM or flash) holding `addr`, as
+    /// `(start, end, bytes)`: reading it has no side effects and changes
+    /// nothing. Used by poll-loop proofs. Default: [`Self::fetch_slice`].
+    fn plain_memory_slice(&self, addr: u64) -> Option<(u64, u64, &[u8])> {
+        self.fetch_slice(addr)
+    }
+
     fn fetch_slice(&self, _pc: u64) -> Option<(u64, u64, &[u8])> {
         None
     }
@@ -4237,7 +4244,23 @@ impl<C: Cpu> Machine<C> {
             let primary_spin = match wfi_budget {
                 Some(budget) if budget > 0 => None,
                 _ if self.cpu.poll_loop_anchor_ready() => {
-                    self.cpu.poll_loop_skip_budget(&self.bus, remaining)
+                    // The proof may only skip to the nearest deadline, so
+                    // hand it that limit: a window too short for a whole
+                    // iteration refuses before probing.
+                    let mut limit = remaining;
+                    let now = self.total_cycles;
+                    for deadline in [
+                        self.bus.next_cpu_interrupt_deadline_cycle(),
+                        self.bus.next_motor_service_deadline_cycle(),
+                        self.bus.next_resident_edge_deadline_cycle(),
+                        self.sched.next_event_deadline(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        limit = limit.min(deadline.saturating_sub(now));
+                    }
+                    self.cpu.poll_loop_skip_budget(&self.bus, limit)
                 }
                 _ => None,
             };
