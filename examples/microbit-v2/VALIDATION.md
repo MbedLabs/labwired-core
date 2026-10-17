@@ -158,3 +158,24 @@ The model controls separately require that early capture publishes no bytes,
 AMOUNT, completion event or interrupt, while the original frame-count completion
 deadline is retained. This is a bounded simulated UART/stack-lifetime proof;
 MakeCode firmware on the released WASM engine and Lite adoption remain separate.
+
+## A10 interrupt-chained completion regression
+
+`uarte-irq-chain.S` is separately authored MIT assembly; no Nordic or CODAL
+implementation is copied. UARTE0's real interrupt vector chains each next
+stack-backed byte from ENDTX, then inspects TXSTOPPED in that same handler.
+An unsolicited stop records failure before the new transfer can be mistaken
+for idle. After the last byte, the guest explicitly requests STOPTX and requires
+its TXSTOPPED event to finish. The exact expected stream is `A10 IRQ chain OK\n`.
+
+The same `microbit_v2_uarte_stack_guest` target runs both guests. The new guest
+requires done=1, every byte completed in order, zero unsolicited stops, idle
+state only after the final explicit stop, and an exact serial-byte comparison.
+Scheduler runs cover intervals 1, 64 and 1024; feature-off runs select interval 1.
+The earlier stack-reuse guest remains unchanged. These tests do not substitute
+for Lite's actual MakeCode CLI and browser complete-line qualification.
+
+The event distinction follows the [nRF52833 UARTE transmission specification](https://docs.nordicsemi.com/r/bundle/ps_nrf52833/page/uarte.html):
+ENDTX marks a completed buffer; TXSTOPPED acknowledges STOPTX. Existing framing,
+completion-cycle bounds, descriptor capture and explicit-stop IRQ checks stay
+required. No physical timing or silicon re-capture result is implied.

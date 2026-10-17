@@ -720,7 +720,7 @@ impl Peripheral for Nrf52Uarte {
         if self.tx_pending && !self.tx_chain_live {
             self.tx_chain_live = true;
             // One framed character per byte, at the current BAUDRATE. A
-            // zero-length arm (Zephyr drives TXSTOPPED with MAXCNT 0) has
+            // zero-length arm has
             // nothing to shift and still completes on the next cycle.
             let bytes = u64::from(self.tx_active_len);
             let delay = if bytes == 0 {
@@ -882,14 +882,14 @@ impl Nrf52Uarte {
         // enter this function until one frame per byte has elapsed.
         self.wire_flush();
 
-        // Raise the TX-path events a polling driver waits on. nrfx's poll_out
-        // enables the ENDTX_STOPTX short and waits on TXSTOPPED, so that one
-        // must be set or it spins forever. They fire together at the end of
-        // the last stop bit, which is when this wake was scheduled.
+        // ENDTX completes the buffer; it does not stop the transmitter.
+        // nRF52833 PS, UARTE Transmission: TXSTOPPED follows STOPTX, not
+        // ENDTX. An ENDTX handler may already start its next transfer before
+        // checking TXSTOPPED; inventing both events clears that new busy state.
+        // Keep completion publication at the original last-stop-bit deadline.
         self.events_txstarted = 1;
         self.events_txdrdy = 1;
         self.events_endtx = 1;
-        self.events_txstopped = 1;
     }
 
     /// EasyDMA RX engine shared by `tick_with_bus` and `on_event` so the two
@@ -979,7 +979,7 @@ mod tests {
         assert_eq!(&*sink.lock().unwrap(), b"AB");
         assert_eq!(u.read_u32(OFF_TXD_AMOUNT).unwrap(), 2);
         assert_eq!(u.read_u32(OFF_EVENTS_ENDTX).unwrap(), 1);
-        assert_eq!(u.read_u32(OFF_EVENTS_TXSTOPPED).unwrap(), 1);
+        assert_eq!(u.read_u32(OFF_EVENTS_TXSTOPPED).unwrap(), 0);
         assert!(u.take_scheduled_events().is_empty());
 
         // A fresh STARTTX must capture fresh bytes rather than reuse the old copy.
@@ -1043,10 +1043,10 @@ mod tests {
 
         assert_eq!(&*sink.lock().unwrap(), b"Hi", "buffer DMAed out of RAM");
         assert_eq!(u.read_u32(OFF_TXD_AMOUNT).unwrap(), 2);
-        // poll_out (ENDTX_STOPTX short) waits on these — all must be set.
+        // Buffer completion is independent of a STOPTX task.
         assert_eq!(u.read_u32(OFF_EVENTS_ENDTX).unwrap(), 1);
         assert_eq!(u.read_u32(OFF_EVENTS_TXSTARTED).unwrap(), 1);
-        assert_eq!(u.read_u32(OFF_EVENTS_TXSTOPPED).unwrap(), 1);
+        assert_eq!(u.read_u32(OFF_EVENTS_TXSTOPPED).unwrap(), 0);
         assert!(!u.needs_bus_tick(), "transfer consumes the pending flag");
     }
 
@@ -1247,7 +1247,7 @@ mod tests {
 
         assert_eq!(&*sink.lock().unwrap(), b"OK");
         assert_eq!(u.read_u32(OFF_EVENTS_ENDTX).unwrap(), 1);
-        assert_eq!(u.read_u32(OFF_EVENTS_TXSTOPPED).unwrap(), 1);
+        assert_eq!(u.read_u32(OFF_EVENTS_TXSTOPPED).unwrap(), 0);
         assert!(!u.tx_pending, "on_event consumes pending");
         assert!(u.take_scheduled_events().is_empty());
     }
@@ -1266,7 +1266,7 @@ mod tests {
         for (inten, want) in [
             (0u32, false),
             (1 << 8, true),
-            (1 << 22, true),
+            (1 << 22, false),
             (1 << 2, false),
         ] {
             let mut bus = SystemBus::empty();
@@ -1281,10 +1281,60 @@ mod tests {
             let res = u.on_event(1, &mut EventScheduler::new(), &mut bus);
             assert_eq!(
                 res.raise_own_irq, want,
-                "INTEN {inten:#x}: ENDTX/TXSTOPPED pend"
+                "INTEN {inten:#x}: only completion events pend"
             );
             assert_eq!(u.irq_line_level(), Some(want), "INTEN {inten:#x}: line");
         }
+    }
+
+    /// An interrupt handler starts its next byte on ENDTX and then inspects
+    /// TXSTOPPED. Completion must not report a stop of that new transfer.
+    #[test]
+    fn endtx_handler_can_chain_a_transfer_without_a_spurious_stop() {
+        use crate::bus::SystemBus;
+        use crate::memory::LinearMemory;
+        use crate::sched::EventScheduler;
+
+        let mut bus = SystemBus::empty();
+        bus.ram = LinearMemory::new(256, 0x2000_0000);
+        bus.write_u8(0x2000_0010, b'A').unwrap();
+        bus.write_u8(0x2000_0011, b'B').unwrap();
+        let mut u = Nrf52Uarte::new();
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        u.set_sink(Some(sink.clone()), false);
+        u.write_u32(OFF_ENABLE, ENABLE_UARTE).unwrap();
+        u.write_u32(OFF_INTENSET, (1 << 8) | (1 << 22)).unwrap();
+        let mut sched = EventScheduler::new();
+        for (i, byte) in [b'A', b'B'].into_iter().enumerate() {
+            u.write_u32(OFF_TXD_PTR, 0x2000_0010 + i as u32).unwrap();
+            u.write_u32(OFF_TXD_MAXCNT, 1).unwrap();
+            u.write_u32(OFF_TASKS_STARTTX, 1).unwrap();
+            assert_eq!(
+                u.read_u32(OFF_EVENTS_TXSTOPPED).unwrap(),
+                0,
+                "the previous ENDTX must not stop the newly armed byte"
+            );
+            let wakes = u.take_scheduled_events();
+            assert_eq!(wakes, vec![(0, 4), (u.frame_cycles(), 1)]);
+            u.on_event(4, &mut sched, &mut bus);
+            assert_eq!(sink.lock().unwrap().len(), i, "capture is not publication");
+            let result = u.on_event(1, &mut sched, &mut bus);
+            assert!(result.raise_own_irq);
+            assert_eq!(sink.lock().unwrap()[i], byte);
+            assert_eq!(u.read_u32(OFF_EVENTS_ENDTX).unwrap(), 1);
+            u.write_u32(OFF_EVENTS_ENDTX, 0).unwrap();
+            assert_eq!(u.irq_line_level(), Some(false), "no phantom stop IRQ");
+        }
+        u.write_u32(OFF_TASKS_STOPTX, 1).unwrap();
+        assert_eq!(u.read_u32(OFF_EVENTS_TXSTOPPED).unwrap(), 1);
+        assert_eq!(
+            u.irq_line_level(),
+            Some(true),
+            "explicit stop still interrupts"
+        );
+        u.write_u32(OFF_EVENTS_TXSTOPPED, 0).unwrap();
+        assert_eq!(u.irq_line_level(), Some(false));
+        assert_eq!(&*sink.lock().unwrap(), b"AB");
     }
 
     /// The line is a level: it follows (EVENTS_x != 0) && INTEN bit x, so an
