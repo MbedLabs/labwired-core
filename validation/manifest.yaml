@@ -7619,6 +7619,10 @@ boards:
       # declares the Cortex-M SysTick, so its model joins the watch list. No
       # silicon capture is recorded for this board, so no ack is implied.
       - crates/core/src/peripherals/systick.rs
+      # 2026-10-17, model_paths_drift_gate: #1407 registers nrf5340_dppic, whose
+      # source was not on this watch list. No silicon capture is recorded for
+      # this board, so no ack is implied.
+      - crates/core/src/peripherals/nrf52/dppic.rs
 
   - id: stm32h735
     doc: docs/boards/stm32h735.md
