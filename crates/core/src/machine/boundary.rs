@@ -122,6 +122,18 @@ impl<C: Cpu> Machine<C> {
                     .cpu
                     .instruction_cycles_are_time()
                     .then(|| self.cpu.clock_cycles());
+                // Only beside a DEFERRED secondary: beside a WAITI-parked one
+                // the same batch moved a servo edge stamp by 776 cycles on the
+                // four-servo lab, so that core keeps the per-cycle loop.
+                if self.secondary_defer.is_some()
+                    && count > 1
+                    && self.config.peripheral_tick_interval.max(1) == 1
+                    && self.observers.is_empty()
+                    && !self.logic_capture.poll_active()
+                    && self.bus.per_cycle_tick_is_trivial()
+                {
+                    return self.run_primary_beside_quiet_secondary(count);
+                }
                 if (parked_secondary || reset_held_secondary)
                     && self.config.peripheral_tick_interval.max(1) == 1
                 {
@@ -388,6 +400,75 @@ impl<C: Cpu> Machine<C> {
             secondary_steps: 1,
             timed_cycles: None,
             internally_committed_cycles: false,
+        })
+    }
+
+    /// The quantum-1 window beside a deferred secondary, as one primary batch
+    /// instead of one instruction per tick.
+    ///
+    /// On a bus whose per-cycle tick does nothing (`per_cycle_tick_is_trivial`)
+    /// and with the window already clamped to the next scheduler event, motor
+    /// and resident-edge deadline and the secondary's own timer edge, the
+    /// per-cycle tick, drain and secondary step change nothing until the
+    /// primary touches a device or stores into a byte the deferred loop reads
+    /// (`bus::BatchStop`). The batch ends right after that instruction, which
+    /// is the window's last cycle; there the secondary catches up and steps
+    /// if anything its loop depends on changed, and the tick and drain run,
+    /// as the per-cycle loop does after the same instruction.
+    fn run_primary_beside_quiet_secondary(&mut self, count: u32) -> SimResult<CoreProgress> {
+        let mut watch = std::mem::take(&mut self.batch_watch_scratch);
+        watch.clear();
+        if let Some(sec) = self.cpu_secondary.as_ref() {
+            sec.poll_loop_watch(&mut watch);
+        }
+        self.primary_batches_beside_deferred += 1;
+        self.bus.batch_stop.arm(&watch);
+        self.batch_watch_scratch = watch;
+        self.bus.set_current_cycle(self.total_cycles);
+        self.bus.bus_trace.set_cycle(self.total_cycles);
+        if self.logic_capture.push_active() {
+            self.bus.logic_tap.set_clock(self.total_cycles);
+        }
+        let retired = self
+            .cpu
+            .step_batch(&mut self.bus, &self.observers, &self.config, count);
+        self.bus.batch_stop.disarm();
+        let retired = retired?;
+        if retired == 0 {
+            return Ok(CoreProgress {
+                primary_steps: 0,
+                secondary_steps: 0,
+                timed_cycles: None,
+                internally_committed_cycles: true,
+            });
+        }
+        self.total_cycles += u64::from(retired);
+        let mut secondary_steps = 0u32;
+        if self.secondary_defer.is_some() {
+            let changed = self
+                .cpu_secondary
+                .as_ref()
+                .is_some_and(|sec| sec.poll_loop_defer_changed(&self.bus));
+            if changed {
+                self.end_secondary_defer(self.total_cycles - 1);
+                if let Some(sec) = self.cpu_secondary.as_mut() {
+                    sec.step(&mut self.bus, &self.observers, &self.config)?;
+                    secondary_steps = 1;
+                }
+            }
+        }
+        self.bus.set_current_cycle(self.total_cycles);
+        self.bus.bus_trace.set_cycle(self.total_cycles);
+        self.tick_peripherals_at_boundary();
+        // Only reached on a walk-free bus, which needs the scheduler.
+        #[cfg(feature = "event-scheduler")]
+        self.drain_scheduler_events();
+        self.check_secondary_defer();
+        Ok(CoreProgress {
+            primary_steps: retired,
+            secondary_steps,
+            timed_cycles: None,
+            internally_committed_cycles: true,
         })
     }
 

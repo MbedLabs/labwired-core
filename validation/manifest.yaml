@@ -7175,8 +7175,11 @@ boards:
     # records, CCOUNT and machine cycles with and without the deferral.
     # Ran: core lib (event-scheduler), the same S3 differentials. ACK, NOT A
     # CAPTURE; the ack date is unchanged.
+    # Same follow-up, second PR: xtensa_lx7.rs exposes the deferred loop's
+    # watched byte ranges (`poll_loop_watch`) for the machine's batch stop.
+    # No register, reset value or readback changes. ACK, NOT A CAPTURE.
     drift_ack: 2026-10-16
-    drift_ack_digest: 66f3c2b157e47105b4d5f8df33cf09a47cffc5312455f390f2ca21f69d617982
+    drift_ack_digest: 712f1a67ed4ad5511c0b6e9297215264d8ac06fa1c95c34e89f3dc1ff0805dea
 
   - id: esp32s3-zero
     # Board variant of esp32s3: same silicon (LX7), 4 MiB flash / 480 KiB RAM.

@@ -99,6 +99,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the advance). Servo edge stamps are identical to a run without any skip.
   The four-servo lab's native browser-path harness goes from 3.75x to 5.4x
   real time.
+- Beside a deferred secondary, the primary runs as one CPU batch instead of
+  one instruction per tick, on a bus whose per-cycle tick does nothing. The
+  batch ends right after the instruction that touches a device or stores
+  into a byte the deferred loop reads (`bus::BatchStop`). Servo edge stamps
+  are unchanged; the four-servo lab's native harness goes from 5.3x to 8.7x.
 - Idle fast-forward also skips a proven CCOUNT busy-wait, on any core. A
   core in a loop that only reads CCOUNT, computes with it and compares it
   (`while (ESP.getCycleCount() - t0 < n) {}`, a servo pulse loop) counts as

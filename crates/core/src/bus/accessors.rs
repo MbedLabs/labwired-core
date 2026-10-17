@@ -282,6 +282,7 @@ impl crate::Bus for SystemBus {
     }
 
     fn write_u64(&mut self, addr: u64, value: u64) -> SimResult<()> {
+        self.batch_stop.note_store(addr, 8);
         let offset =
             addr.checked_sub(self.ram.base_addr)
                 .and_then(|v| usize::try_from(v).ok())
@@ -332,6 +333,14 @@ impl crate::Bus for SystemBus {
         elided: u64,
     ) -> SimResult<bool> {
         SystemBus::commit_plain_memory_store_spin(self, addr, value, elided)
+    }
+
+    fn batch_stop_armed(&self) -> bool {
+        self.batch_stop.armed()
+    }
+
+    fn batch_stop_hit(&self) -> bool {
+        self.batch_stop.hit()
     }
 
     fn systick_ticks_until_fire(&self) -> Option<u64> {
@@ -497,6 +506,7 @@ impl crate::Bus for SystemBus {
     }
 
     fn write_u8(&mut self, addr: u64, value: u8) -> SimResult<()> {
+        self.batch_stop.note_store(addr, 1);
         // ESP32-C3 permission control (PMS): a store into a region the
         // SENSITIVE PMS marks non-writable is blocked on silicon and raises
         // ETS_CORE0_{I,D}RAM0_PMS_INTR_SOURCE. Inert (one bool test) unless
@@ -986,6 +996,7 @@ impl crate::Bus for SystemBus {
     }
 
     fn write_u16(&mut self, addr: u64, value: u16) -> SimResult<()> {
+        self.batch_stop.note_store(addr, 2);
         // ESP32-C3 permission control (PMS): a store into a region the
         // SENSITIVE PMS marks non-writable is blocked on silicon and raises
         // ETS_CORE0_{I,D}RAM0_PMS_INTR_SOURCE. Inert (one bool test) unless
@@ -1098,6 +1109,7 @@ impl crate::Bus for SystemBus {
     }
 
     fn write_u32(&mut self, addr: u64, value: u32) -> SimResult<()> {
+        self.batch_stop.note_store(addr, 4);
         // ESP32-C3 permission control (PMS): a store into a region the
         // SENSITIVE PMS marks non-writable is blocked on silicon and raises
         // ETS_CORE0_{I,D}RAM0_PMS_INTR_SOURCE. Inert (one bool test) unless
@@ -1462,7 +1474,13 @@ impl crate::Bus for SystemBus {
         &self,
         pc: u32,
     ) -> Option<crate::peripherals::esp_xtensa_common::rom_thunks::RomThunkFn> {
-        SystemBus::get_rom_thunk(self, pc)
+        let thunk = SystemBus::get_rom_thunk(self, pc);
+        // A thunk is host code with effects of its own (an APP_CPU release,
+        // a cross-core hand-off): an armed batch ends on it, as on a device.
+        if thunk.is_some() {
+            self.batch_stop.note_device_access();
+        }
+        thunk
     }
 
     fn route_irq_source_to_cpu_irq(&self, source_id: u32) -> Option<u8> {

@@ -325,6 +325,7 @@ impl SystemBus {
             pending_schedule: Vec::new(),
             freerunning_timer_poll_mmio: Cell::new(0),
             side_effecting_mmio: Cell::new(0),
+            batch_stop: Default::default(),
             memory_reads: Cell::new(0),
             memory_writes: Cell::new(0),
             peripheral_accesses: Cell::new(0),
