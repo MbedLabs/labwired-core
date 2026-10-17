@@ -14,4 +14,5 @@
 //! SERCOM, the one block that *is* the UART, the SPI controller and the I²C
 //! controller depending on `CTRLA.MODE`.
 
+pub mod sercom_spi;
 pub mod sercom_usart;

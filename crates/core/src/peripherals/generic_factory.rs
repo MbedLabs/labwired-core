@@ -158,6 +158,7 @@ pub const MODEL_TYPES: &[&str] = &[
     // offsets mean nothing to a SERCOM. That is the silent shape — a console
     // that enables cleanly and never emits a byte.
     "sam_sercom_usart",
+    "sam_sercom_spi",
     // ⚠️ Load-bearing. Without this entry the fuzzy `contains("spi")` heuristic
     // coerces `nrf54l_spim` onto the shared `spi` arm, which then sees
     // `contains("nrf")` and picks the nRF52 SPIM offset map. That failure is
@@ -550,6 +551,33 @@ pub fn try_build(
         "avr_adc" => Box::new(crate::peripherals::avr_adc::AvrAdcInputs::new()),
         "sam_sercom_usart" => {
             Box::new(crate::peripherals::sam::sercom_usart::SamSercomUsart::new())
+        }
+        "sam_sercom_spi" => {
+            let number = |key: &str| -> anyhow::Result<u64> {
+                p_cfg
+                    .config
+                    .get(key)
+                    .and_then(|v| v.as_u64())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("SAM SPI '{}' requires integer config.{key}", p_cfg.id)
+                    })
+            };
+            let sck = number("sck_bit")?;
+            let mosi = number("mosi_bit")?;
+            let mux = number("pad_mux")?;
+            let dopo = number("dopo")?;
+            if sck >= 32 || mosi >= 32 || mux >= 16 || dopo >= 4 {
+                anyhow::bail!("SAM SPI '{}' has invalid pad configuration", p_cfg.id);
+            }
+            Box::new(crate::peripherals::sam::sercom_spi::SamSercomSpi::new(
+                crate::peripherals::sam::sercom_spi::SamSpiPads {
+                    port_base: number("port_base")?,
+                    sck: sck as u8,
+                    mosi: mosi as u8,
+                    mux: mux as u8,
+                    dopo: dopo as u8,
+                },
+            ))
         }
         "spi" | "stm32spi" => {
             let layout: crate::peripherals::spi::SpiRegisterLayout = if p_cfg.r#type.contains("nrf")

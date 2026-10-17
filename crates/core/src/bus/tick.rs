@@ -493,6 +493,13 @@ impl SystemBus {
         let mut bus_tick_pos = 0;
         while bus_tick_pos < self.bus_tick_indices.len() {
             let i = self.bus_tick_indices[bus_tick_pos];
+            // Bus-assisted transfer work must obey the same live clock gate
+            // as register accesses and the legacy walk. In particular, a
+            // completed frame must not reach its slave while its clock is off.
+            if !self.is_peripheral_clocked(i) {
+                bus_tick_pos += 1;
+                continue;
+            }
             let placeholder: Box<dyn Peripheral> =
                 Box::new(crate::peripherals::stub::StubPeripheral::new(0));
             let mut dev = std::mem::replace(&mut self.peripherals[i].dev, placeholder);
