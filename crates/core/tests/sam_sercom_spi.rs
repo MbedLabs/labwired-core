@@ -190,16 +190,39 @@ fn missing_clock_mux_or_master_mode_never_reaches_slave() {
 
 #[test]
 fn pending_completion_freezes_when_clock_is_removed() {
-    let (mut bus, seen) = board();
-    enable(&mut bus);
-    bus.write_u8(SPI + 0x28, 0x51).unwrap();
-    bus.tick_peripherals();
-    bus.write_u32(MCLK, 0).unwrap();
-    settle(&mut bus);
-    assert!(seen.lock().unwrap().bytes.is_empty());
-    bus.write_u32(MCLK, 1).unwrap();
-    settle(&mut bus);
-    assert_eq!(seen.lock().unwrap().bytes, [0x51]);
+    for forced in [false, true] {
+        for gate in [MCLK, GCLK] {
+            let (mut bus, seen) = board();
+            let tick = |bus: &mut SystemBus| {
+                if forced {
+                    let _ = bus.tick_peripherals_fully_forced();
+                } else {
+                    bus.tick_peripherals();
+                }
+            };
+            enable(&mut bus);
+            bus.write_u8(SPI + 0x28, 0x51).unwrap();
+            tick(&mut bus);
+            bus.write_u32(gate, 0).unwrap();
+            for _ in 0..100 {
+                tick(&mut bus);
+            }
+            assert!(seen.lock().unwrap().bytes.is_empty());
+            bus.write_u32(gate, if gate == MCLK { 1 } else { 1 << 6 })
+                .unwrap();
+            for _ in 0..10 {
+                tick(&mut bus);
+            }
+            assert!(
+                seen.lock().unwrap().bytes.is_empty(),
+                "gated countdown advanced: forced={forced}, gate={gate:#x}"
+            );
+            for _ in 0..100 {
+                tick(&mut bus);
+            }
+            assert_eq!(seen.lock().unwrap().bytes, [0x51]);
+        }
+    }
 }
 
 #[test]
