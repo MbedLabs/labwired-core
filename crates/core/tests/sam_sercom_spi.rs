@@ -462,3 +462,47 @@ fn idle_spi_does_not_arm_events_or_force_the_legacy_walk() {
     machine.step().unwrap();
     assert!(machine.sched.is_empty());
 }
+
+#[test]
+fn reset_cancels_pending_wake_without_reselecting_slave_and_next_frame_works() {
+    let (bus, seen) = board_with_drive(false);
+    let mut machine = Machine::new(CortexM::new(), bus);
+    let mut bytes = vec![0u8; 0x100];
+    bytes[0..4].copy_from_slice(&0x20004000u32.to_le_bytes());
+    bytes[4..8].copy_from_slice(&0x4101u32.to_le_bytes());
+    bytes.extend(0xe7feu16.to_le_bytes()); // authored idle branch, no MMIO setup
+    let mut image = ProgramImage::new(0x4101, Arch::Arm);
+    image.add_segment(0x4000, bytes);
+    machine.load_firmware(&image).unwrap();
+    // Explicit host-MMIO cancellation adversary; not native firmware proof.
+    enable(&mut machine.bus);
+    machine.bus.write_u8(SPI + 0x28, 0x81).unwrap();
+    for _ in 0..5 {
+        machine.step().unwrap();
+    }
+    assert_eq!(seen.lock().unwrap().selects, 1);
+    machine.bus.write_u32(SPI, 1).unwrap();
+    for _ in 0..100 {
+        machine.step().unwrap();
+    }
+    {
+        let seen = seen.lock().unwrap();
+        assert!(seen.bytes.is_empty());
+        assert_eq!(seen.selects, 1);
+        assert_eq!(seen.releases, 1);
+    }
+    assert!(machine.sched.is_empty(), "stale reset wake stayed armed");
+    assert_eq!(machine.bus.read_u8(SPI + 0x18).unwrap(), 0);
+    enable(&mut machine.bus);
+    machine.bus.write_u8(SPI + 0x28, 0x42).unwrap();
+    for _ in 0..100 {
+        machine.step().unwrap();
+    }
+    assert_eq!(seen.lock().unwrap().bytes, [0x42]);
+    machine.bus.write_u32(PORT + 0x18, 1 << 7).unwrap();
+    for _ in 0..5 {
+        machine.step().unwrap();
+    }
+    assert_eq!(seen.lock().unwrap().releases, 2);
+    assert!(machine.sched.is_empty());
+}

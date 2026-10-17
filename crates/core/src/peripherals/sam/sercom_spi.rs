@@ -308,6 +308,12 @@ impl Peripheral for SamSercomSpi {
         _sched: &mut crate::sched::EventScheduler,
         bus: &mut dyn Bus,
     ) -> crate::sched::EventResult {
+        // SWRST/disable can cancel a queued frame before its wake is delivered.
+        // A stale wake must not select a slave (or perpetuate itself) on idle CS.
+        if !self.has_bus_work() {
+            self.scheduled = false;
+            return crate::sched::EventResult::default();
+        }
         // Match the historical PRE-tick bus pass, then the countdown tick.
         // Active transfers intentionally retain one-cycle service; the win is
         // removing idle SPI from the walk, not changing BAUD/CS/mux semantics.
