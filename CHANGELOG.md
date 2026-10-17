@@ -73,6 +73,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (GPIO32..36, GPIO39); the rest are byte-identical.
 
 ### Performance
+- `labwired test` on a classic ESP32 (the hosted `labwired_run` /
+  `labwired_verify` path, including the `arduino-esp32` profile with loopTask
+  on PRO_CPU) runs the idle and CCOUNT poll-loop skips, as every other test
+  path already did (`LABWIRED_IDLE_FAST_FORWARD=0` opts out). Metrics come
+  from the machine's counters instead of a per-step observer, and a step is a
+  machine cycle, retired or skipped, so every advance call, assertion check,
+  settle window and `max_steps` lands on the same cycle as a run with no
+  skip. result.json is unchanged except `metrics.pc_samples` and
+  `metrics.peripheral_accesses`, which count retired work. The four-servo lab
+  (d26Wk2eXNiFS): 10 s simulated in 1.4 s, was ~450 s.
 - A dual-core machine no longer runs in lockstep while the secondary core
   busy-waits on CCOUNT and the primary is busy. The secondary's proven poll
   loop is deferred: the primary runs alone, and the secondary catches up

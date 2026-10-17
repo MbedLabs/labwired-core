@@ -378,6 +378,7 @@ fn run_s3_rom_boot_no_elf(
         uart_injections,
         // Xtensa is never JIT-eligible (the JIT is RISC-V only).
         jit_eligible: false,
+        counter_metrics: false,
         arch: labwired_core::Arch::XtensaLx7,
         stack_paint,
         chip_mem,
@@ -690,6 +691,7 @@ fn run_c3_rom_boot_no_elf(
         uart_injections,
         // rom-boot is never JIT-eligible (it forces cycle-accurate stepping).
         jit_eligible: false,
+        counter_metrics: false,
         arch: labwired_core::Arch::RiscV,
         stack_paint,
         chip_mem,
@@ -1633,7 +1635,10 @@ pub(crate) fn run_test(
                 // flash-thunks, no forged s_cpu_up — APP_CPU runs call_start_cpu1.
                 let mut machine =
                     labwired_core::Machine::new(pro_cpu, esp_bus).with_secondary_cpu(app_cpu);
-                machine.add_observer(metrics.clone());
+                // Idle and CCOUNT poll-loop skips, as every other `test` path
+                // (opt out with LABWIRED_IDLE_FAST_FORWARD=0). No per-step
+                // observer: `counter_metrics` below.
+                apply_run_speed_opts(&mut machine);
                 if let Err(e) = machine.load_firmware(&program) {
                     return handle_load_error(
                         &args,
@@ -1746,8 +1751,11 @@ pub(crate) fn run_test(
                 stimuli: &stimuli,
                 uart_injections: &uart_injections,
                 // Xtensa (ESP32) path: never JIT-eligible (the RV32IMC JIT is
-                // RISC-V only), so keep the exact current observer-based metrics.
+                // RISC-V only). Metrics come from the machine's counters: a
+                // per-step observer would count the skipped iterations it
+                // never sees, and its presence costs every instruction.
                 jit_eligible: false,
+                counter_metrics: true,
                 arch: labwired_core::Arch::XtensaLx7,
                 stack_paint,
                 chip_mem,
@@ -2003,6 +2011,7 @@ pub(crate) fn run_test(
                 stimuli: &stimuli,
                 uart_injections: &uart_injections,
                 jit_eligible,
+                counter_metrics: false,
                 arch: program.arch,
                 stack_paint,
                 chip_mem,
