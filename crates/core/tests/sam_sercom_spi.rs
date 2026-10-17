@@ -88,14 +88,14 @@ fn enable(bus: &mut SystemBus) {
     bus.write_u32(MCLK, 1).unwrap();
     bus.write_u32(GCLK, 1 << 6).unwrap();
     // Odd pins use the high mux nibble; PINCFG.PMUXEN is independent of DIR.
-    bus.write(PORT + 0x30 + 6, 0x20).unwrap();
-    bus.write(PORT + 0x30 + 7, 0x20).unwrap();
-    bus.write(PORT + 0x40 + 13, 1).unwrap();
-    bus.write(PORT + 0x40 + 15, 1).unwrap();
+    bus.write_u8(PORT + 0x30 + 6, 0x20).unwrap();
+    bus.write_u8(PORT + 0x30 + 7, 0x20).unwrap();
+    bus.write_u8(PORT + 0x40 + 13, 1).unwrap();
+    bus.write_u8(PORT + 0x40 + 15, 1).unwrap();
     bus.write_u32(PORT, (1 << 7) | (1 << 5)).unwrap();
     bus.write_u32(SPI, MASTER).unwrap();
     bus.write_u32(SPI + 4, 1 << 17).unwrap();
-    bus.write(SPI + 0x0c, 1).unwrap();
+    bus.write_u8(SPI + 0x0c, 1).unwrap();
     bus.write_u32(SPI, MASTER | 2).unwrap();
 }
 fn settle(bus: &mut SystemBus) {
@@ -108,24 +108,24 @@ fn settle(bus: &mut SystemBus) {
 fn blocking_mmio_frames_cs_dc_fifo_and_w1c() {
     let (mut bus, seen) = board();
     enable(&mut bus);
-    assert_eq!(bus.read(SPI + 0x18).unwrap() & 7, 1);
+    assert_eq!(bus.read_u8(SPI + 0x18).unwrap() & 7, 1);
     bus.write_u32(SPI + 0x28, 0x81).unwrap();
-    assert_eq!(bus.read(SPI + 0x18).unwrap() & 3, 0);
+    assert_eq!(bus.read_u8(SPI + 0x18).unwrap() & 3, 0);
     settle(&mut bus);
     assert_eq!(seen.lock().unwrap().bytes, [0x81]); // 32-bit access sends ONE byte
     assert_eq!(seen.lock().unwrap().dc, [false]);
-    assert_eq!(bus.read(SPI + 0x18).unwrap() & 7, 7);
-    bus.write(SPI + 0x18, 7).unwrap(); // RXC/DRE are not W1C
-    assert_eq!(bus.read(SPI + 0x18).unwrap() & 7, 5);
+    assert_eq!(bus.read_u8(SPI + 0x18).unwrap() & 7, 7);
+    bus.write_u8(SPI + 0x18, 7).unwrap(); // RXC/DRE are not W1C
+    assert_eq!(bus.read_u8(SPI + 0x18).unwrap() & 7, 5);
     assert_eq!(bus.read_u32(SPI + 0x28).unwrap(), 0xdb);
-    assert_eq!(bus.read(SPI + 0x18).unwrap() & 4, 0);
+    assert_eq!(bus.read_u8(SPI + 0x18).unwrap() & 4, 0);
     bus.write_u32(PORT + 0x18, 1 << 5).unwrap();
     bus.write_u16(SPI + 0x28, 0x42).unwrap();
     settle(&mut bus);
     assert_eq!(seen.lock().unwrap().dc, [false, true]);
     bus.write_u32(PORT + 0x18, 1 << 7).unwrap();
     settle(&mut bus);
-    bus.write(SPI + 0x28, 0x19).unwrap();
+    bus.write_u8(SPI + 0x28, 0x19).unwrap();
     settle(&mut bus);
     assert_eq!(seen.lock().unwrap().bytes, [0x81, 0x42]);
     assert_eq!(seen.lock().unwrap().selects, 1);
@@ -137,25 +137,25 @@ fn missing_clock_mux_or_master_mode_never_reaches_slave() {
     let (mut bus, seen) = board();
     enable(&mut bus);
     bus.write_u32(MCLK, 0).unwrap();
-    bus.write(SPI + 0x28, 0x11).unwrap();
+    bus.write_u8(SPI + 0x28, 0x11).unwrap();
     settle(&mut bus);
     assert!(seen.lock().unwrap().bytes.is_empty());
     bus.write_u32(MCLK, 1).unwrap();
     bus.write_u32(GCLK, 0).unwrap();
-    bus.write(SPI + 0x28, 0x22).unwrap();
+    bus.write_u8(SPI + 0x28, 0x22).unwrap();
     settle(&mut bus);
     assert!(seen.lock().unwrap().bytes.is_empty());
     bus.write_u32(GCLK, 1 << 6).unwrap();
-    bus.write(PORT + 0x40 + 13, 0).unwrap();
-    bus.write(SPI + 0x28, 0x33).unwrap();
+    bus.write_u8(PORT + 0x40 + 13, 0).unwrap();
+    bus.write_u8(SPI + 0x28, 0x33).unwrap();
     settle(&mut bus);
     assert!(seen.lock().unwrap().bytes.is_empty());
-    bus.write(PORT + 0x40 + 13, 1).unwrap();
+    bus.write_u8(PORT + 0x40 + 13, 1).unwrap();
     settle(&mut bus);
     assert_eq!(seen.lock().unwrap().bytes, [0x33]);
     bus.write_u32(SPI, MASTER).unwrap();
     bus.write_u32(SPI, (1 << 2) | 2).unwrap();
-    bus.write(SPI + 0x28, 0x44).unwrap();
+    bus.write_u8(SPI + 0x28, 0x44).unwrap();
     settle(&mut bus);
     assert_eq!(seen.lock().unwrap().bytes, [0x33]);
 }
@@ -164,7 +164,7 @@ fn missing_clock_mux_or_master_mode_never_reaches_slave() {
 fn pending_completion_freezes_when_clock_is_removed() {
     let (mut bus, seen) = board();
     enable(&mut bus);
-    bus.write(SPI + 0x28, 0x51).unwrap();
+    bus.write_u8(SPI + 0x28, 0x51).unwrap();
     bus.tick_peripherals();
     bus.write_u32(MCLK, 0).unwrap();
     settle(&mut bus);
@@ -188,15 +188,15 @@ fn reset_cancels_inflight_and_preserves_attachment_and_edges_are_rejected() {
         }),
     );
     assert!(err.is_err());
-    bus.write(SPI + 0x28, 0x99).unwrap();
+    bus.write_u8(SPI + 0x28, 0x99).unwrap();
     bus.tick_peripherals();
     bus.write_u32(SPI, 1).unwrap();
     settle(&mut bus);
     assert!(seen.lock().unwrap().bytes.is_empty());
     assert_eq!(bus.read_u32(SPI).unwrap(), 0);
-    assert_eq!(bus.read(SPI + 0x18).unwrap(), 0);
+    assert_eq!(bus.read_u8(SPI + 0x18).unwrap(), 0);
     enable(&mut bus);
-    bus.write(SPI + 0x28, 0x73).unwrap();
+    bus.write_u8(SPI + 0x28, 0x73).unwrap();
     settle(&mut bus);
     assert_eq!(seen.lock().unwrap().bytes, [0x73]);
 }

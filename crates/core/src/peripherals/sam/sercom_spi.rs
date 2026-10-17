@@ -189,9 +189,11 @@ impl SamSercomSpi {
             return false;
         }
         [self.pads.sck, self.pads.mosi].iter().all(|&pin| {
-            let cfg = bus.read(self.pads.port_base + 0x40 + u64::from(pin)).ok();
+            let cfg = bus
+                .read_u8(self.pads.port_base + 0x40 + u64::from(pin))
+                .ok();
             let mux = bus
-                .read(self.pads.port_base + 0x30 + u64::from(pin / 2))
+                .read_u8(self.pads.port_base + 0x30 + u64::from(pin / 2))
                 .ok();
             cfg.is_some_and(|v| v & 1 != 0)
                 && mux.is_some_and(|v| (v >> ((pin & 1) * 4)) & 15 == self.pads.mux)
