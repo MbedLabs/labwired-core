@@ -935,3 +935,113 @@ fn st7735_guest_retains_physical_ram_and_replaces_lut_only_for_future_pixels() {
         }
     }
 }
+
+#[test]
+fn st7735_guest_invalid_ranges_preserve_known_and_unknown_corners_then_recover() {
+    // Literal logical extents and physical corners for all GM00 orientations.
+    let vectors = [
+        (0x00, 132u16, 162u16, 131, 161),
+        (0x40, 132, 162, 0, 161),
+        (0x80, 132, 162, 131, 0),
+        (0xc0, 132, 162, 0, 0),
+        (0x20, 162, 132, 131, 161),
+        (0x60, 162, 132, 0, 161),
+        (0xa0, 162, 132, 131, 0),
+        (0xe0, 162, 132, 0, 0),
+    ];
+    let window = |start: u16, end: u16| {
+        let [a, b] = start.to_be_bytes();
+        let [c, d] = end.to_be_bytes();
+        [a, b, c, d]
+    };
+    let empty_commands = serde_json::json!([]);
+    for (madctl, cols, rows, x, y) in vectors {
+        for legacy in [false, true] {
+            for seed_corner in [false, true] {
+                let mut guest =
+                    guest_trace_prefix(Wiring::Correct, None, None, Some(&empty_commands), false);
+                guest.command(0x3a, &[6], Wiring::Correct);
+                guest.command(0x36, &[madctl], Wiring::Correct);
+                guest.command(0x2a, &window(cols - 1, cols - 1), Wiring::Correct);
+                guest.command(0x2b, &window(rows - 1, rows - 1), Wiring::Correct);
+                if seed_corner {
+                    guest.command(0x2c, &[0, 0, 0xfc], Wiring::Correct);
+                }
+                guest.store(0x20000000, 1, false);
+                // Oversized column must not turn an unknown pixel into known.
+                guest.command(0x2a, &window(cols, cols), Wiring::Correct);
+                guest.command(0x2c, &[0xfc, 0, 0], Wiring::Correct);
+                guest.store(0x20000000, 2, false);
+                guest.command(0x2a, &window(cols - 1, cols), Wiring::Correct);
+                guest.command(0x2b, &window(rows - 1, rows), Wiring::Correct);
+                guest.command(
+                    0x2c,
+                    &[0, 0xfc, 0, 0xfc, 0, 0, 0, 0, 0xfc, 0xfc, 0xfc, 0],
+                    Wiring::Correct,
+                );
+                guest.store(0x20000000, 3, false);
+                guest.command(0x2a, &window(u16::MAX, u16::MAX), Wiring::Correct);
+                guest.command(0x2b, &window(rows - 1, rows - 1), Wiring::Correct);
+                guest.command(0x2c, &[0xfc, 0, 0], Wiring::Correct);
+                guest.store(0x20000000, 4, false);
+                guest.command(0x2a, &window(cols - 1, cols - 2), Wiring::Correct);
+                guest.command(0x2c, &[0xfc, 0, 0], Wiring::Correct);
+                guest.store(0x20000000, 5, false);
+                guest.command(0x3a, &[3], Wiring::Correct);
+                guest.command(0x2a, &window(cols, cols), Wiring::Correct);
+                guest.command(0x2c, &[0x12], Wiring::Correct); // incomplete RGB444
+                guest.store(0x20000000, 6, false);
+                guest.command(0x3a, &[6], Wiring::Correct); // discard fragment
+                guest.command(0x2a, &window(cols - 1, cols - 1), Wiring::Correct);
+                guest.command(0x2c, &[0x44, 0x74, 0xac], Wiring::Correct);
+                guest.store(0x20000000, 7, false);
+                let mut machine = Machine::new(
+                    CortexM::new(),
+                    board_with_window(
+                        legacy,
+                        false,
+                        GlassWindow {
+                            col_offset: x,
+                            row_offset: y,
+                            cols: 1,
+                            rows: 1,
+                        },
+                    ),
+                );
+                machine.load_firmware(&guest.image()).unwrap();
+                for stage in 1..=7 {
+                    for _ in 0..50000 {
+                        machine.step().unwrap();
+                        if machine.bus.read_u32(0x20000000).unwrap() == stage {
+                            break;
+                        }
+                    }
+                    assert_eq!(
+                        machine.bus.read_u32(0x20000000).unwrap(),
+                        stage,
+                        "MADCTL={madctl:#x}, stage={stage}, legacy={legacy}"
+                    );
+                    let frame = artifact(&machine.bus);
+                    if stage <= 2 && !seed_corner {
+                        assert_eq!(frame.meta["known_pixels"], 0);
+                        assert_eq!(frame.meta["unknown_pixels"], 1);
+                        assert!(frame.bytes.is_none());
+                    } else {
+                        let expected: &[u8] = match stage {
+                            1 | 2 => &[0, 0, 255],
+                            7 => &[69, 117, 174],
+                            _ => &[0, 255, 0],
+                        };
+                        assert_eq!(frame.meta["known_pixels"], 1);
+                        assert_eq!(frame.meta["unknown_pixels"], 0);
+                        assert_eq!(
+                            frame.bytes.as_deref(),
+                            Some(expected),
+                            "MADCTL={madctl:#x}, stage={stage}, legacy={legacy}, seed={seed_corner}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

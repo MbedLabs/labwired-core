@@ -39,16 +39,16 @@ behavior:
         do:
           - set_window:
               axis: col
-              start: { args: [0, 1], clamp_axis_max: true }
-              end: { args: [2, 3], clamp_axis_max: true }
+              start: { args: [0, 1] }
+              end: { args: [2, 3] }
       - opcode: 0x2B
         name: RASET
         args: 4
         do:
           - set_window:
               axis: row
-              start: { args: [0, 1], clamp_axis_max: true }
-              end: { args: [2, 3], clamp_axis_max: true }
+              start: { args: [0, 1] }
+              end: { args: [2, 3] }
       - { opcode: 0x2C, name: RAMWR, do: [{ ram_write: { reset_cursor: true } }] }
       - { opcode: 0x2D, name: RGBSET, args: 128, do: [{ load_rgb_lut: true }] }
       - { opcode: 0x36, name: MADCTL, args: 1, do: [{ set_var: { name: madctl, value: { args: [0] } } }] }

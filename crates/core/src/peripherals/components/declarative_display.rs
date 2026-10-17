@@ -1675,8 +1675,20 @@ impl GenericDisplay {
         if self.serial_color.is_some() {
             let pixel = self.serial_color.as_mut().unwrap().decoder.push(byte);
             let Some(pixel) = pixel else { return };
-            let (x, y) = self.to_physical(self.col, self.row);
-            if x < self.width && y < self.height {
+            // ST7735 out-of-range data is consumed, not clamped onto border
+            // RAM. Check logical coordinates BEFORE the generic saturating
+            // mirror transform can alias an invalid address to physical zero.
+            // Inverted windows violate the command's start<=end restriction;
+            // conservatively suppress their writes (an API policy, not a
+            // claim about unspecified silicon behavior).
+            let (cols, rows) = self.addressable_units();
+            let valid = self.col < cols
+                && self.row < rows
+                && self.col_start <= self.col_end
+                && self.row_start <= self.row_end;
+            if valid {
+                let (x, y) = self.to_physical(self.col, self.row);
+                debug_assert!(x < self.width && y < self.height);
                 let index = y * self.width + x;
                 let color = self.serial_color.as_mut().unwrap();
                 color.known[index] = matches!(pixel, DecodedPixel::Rgb666(_));
@@ -2776,6 +2788,60 @@ mod tests {
 
     fn serial_lut() -> [u8; 128] {
         std::array::from_fn(|i| ((i * 19 + i / 32 * 7 + 11) & 63) as u8)
+    }
+
+    #[test]
+    fn st7735_stream_invalid_addresses_do_not_alias_border_ram_or_known_bits() {
+        // Literal GM00 dimensions and physical corners, not to_physical().
+        for (madctl, cols, rows, x, y) in [
+            (0x00, 132u16, 162u16, 131, 161),
+            (0x40, 132, 162, 0, 161),
+            (0x80, 132, 162, 131, 0),
+            (0xc0, 132, 162, 0, 0),
+            (0x20, 162, 132, 131, 161),
+            (0x60, 162, 132, 0, 161),
+            (0xa0, 162, 132, 131, 0),
+            (0xe0, 162, 132, 0, 0),
+        ] {
+            let mut panel = serial_panel(132, 162);
+            serial_command(&mut panel, 0x36, &[madctl]);
+            let window = |start: u16, end: u16| {
+                let [a, b] = start.to_be_bytes();
+                let [c, d] = end.to_be_bytes();
+                [a, b, c, d]
+            };
+            serial_command(&mut panel, 0x2a, &window(cols - 1, cols));
+            serial_command(&mut panel, 0x2b, &window(rows - 1, rows));
+            let mut expected_ram = panel.framebuffer().to_vec();
+            let mut expected_known = panel.known_pixels().unwrap().to_vec();
+            let index = y * 132 + x;
+            expected_ram[index * 3..index * 3 + 3].copy_from_slice(&[0, 255, 0]);
+            expected_known[index] = true;
+            // Only the first of four complete pixels has a valid address.
+            serial_command(
+                &mut panel,
+                0x2c,
+                &[0, 0xfc, 0, 0xfc, 0, 0, 0, 0, 0xfc, 0xfc, 0xfc, 0],
+            );
+            assert_eq!(panel.framebuffer(), expected_ram, "MADCTL={madctl:#x}");
+            assert_eq!(panel.known_pixels().unwrap(), expected_known);
+            assert_eq!((panel.col, panel.row), (cols - 1, rows - 1));
+            for (columns, row_window) in [
+                (window(cols, cols), window(rows - 1, rows - 1)),
+                (window(cols - 1, cols - 1), window(rows, rows)),
+                (window(u16::MAX, u16::MAX), window(rows - 1, rows - 1)),
+                (window(cols - 1, cols - 1), window(u16::MAX, u16::MAX)),
+                // Inverted bounds are an explicit conservative API policy.
+                (window(cols - 1, cols - 2), window(rows - 1, rows - 1)),
+                (window(cols - 1, cols - 1), window(rows - 1, rows - 2)),
+            ] {
+                serial_command(&mut panel, 0x2a, &columns);
+                serial_command(&mut panel, 0x2b, &row_window);
+                serial_command(&mut panel, 0x2c, &[0xfc, 0, 0]);
+                assert_eq!(panel.framebuffer(), expected_ram);
+                assert_eq!(panel.known_pixels().unwrap(), expected_known);
+            }
+        }
     }
 
     fn expand_channels(values: [u8; 3]) -> [u8; 3] {
