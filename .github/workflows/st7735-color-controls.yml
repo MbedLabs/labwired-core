@@ -9,6 +9,8 @@ on:
       - crates/core/src/peripherals/components/mod.rs
       - crates/config/src/peripherals.rs
       - configs/devices/st7735r.yaml
+      - crates/core/src/inspect.rs
+      - crates/core/tests/st7735_sam_guest.rs
       - .github/workflows/st7735-color-controls.yml
   workflow_dispatch:
 

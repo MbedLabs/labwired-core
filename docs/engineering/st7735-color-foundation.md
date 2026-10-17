@@ -50,7 +50,11 @@ if any visible pixel is unknown, even when bytes were requested. `painted_bytes`
 is then null. Raw `framebuffer()` users must consult `known_pixels()` rather than
 interpret storage placeholders as valid black. Generation includes validity,
 so unknown-to-known black is observable. This policy avoids a fabricated frame,
-but downstream RGB888 rendering/verification still needs integration.
+The shared inspection decoder now accepts RGB888 for region ink measurements
+and explicitly rejects unknown-pixel metadata, even if a caller supplies black
+placeholders. Short payloads, overflowing RGB geometry/regions and malformed
+unknown counts are errors. This is not a physical-colour or browser-rendering
+claim; downstream RGB888 rendering still needs integration.
 
 Software reset retains COLMOD, MADCTL, LUT, RAM and pixel validity; hardware
 reset restores COLMOD/MADCTL defaults and invalidates the LUT, retaining RAM
@@ -65,19 +69,39 @@ Existing fixed-format v1 snapshots are unchanged. Cross-profile/wrong-size
 restores are refused before mutation. As with existing display snapshots,
 control/parser state is rebuilt by bus replay, not restored by this RAM snapshot.
 
-Fifteen `st7735_stream_*` controls in
+Sixteen `st7735_stream_*` controls in
 `crates/core/src/peripherals/components/declarative_display.rs` exercise this
 prototype through the SPI door, plus descriptor/validity/snapshot checks.
 They run in the normal hosted crate/workspace checks, not the standalone codec
 job. Until exact-head checks pass these are proposed controls, not a passing
 qualification receipt. No guest or performance result is implied.
 
+## Authored SAM SPI guest — hosted qualification pending
+
+`crates/core/tests/st7735_sam_guest.rs` loads authored Thumb instructions, vector
+bytes and literals into the actual Cortex-M machine with the PyBadge chip/system
+descriptors. The host attaches the prototype and sets a **fixture-only** visible
+2×2 crop; it does not configure guest MMIO, write pixel RAM, replace the guest's
+SPI implementation or seed completion. The guest enables MCLK/GCLK, configures
+SERCOM4 and PB13/PB15 mux, controls PB7 CS/PB5 D/C, uploads a non-linear RGBSET,
+selects RGB444 and a 2×2 window, sends four packed pixels and polls TXC before
+releasing CS after each byte. An SRAM marker distinguishes guest completion.
+
+Two integration tests cover exact memory bytes/region measurement and separate
+MCLK/GCLK/mux/CS/D/C negatives in both ordinary and forced-legacy controller
+paths. Clock/mux negatives must stall completion; CS/D/C negatives must complete
+controller transmission without painting. The normal CI feature-off and
+scheduler jobs invoke this target through the nonvacuous wrapper. Hosted
+execution is still pending: the test's existence is **not yet a passing guest
+receipt**. It proves no real module crop, full native frame, reset/backlight,
+IRQ, DMA or RTx result, even once its bounded assertions pass.
+
 ## Next implementation slice
 
 1. Review and qualify the opt-in parser/memory integration on hosted CI,
    including the existing fixed-format display controls. Keep partial-table
    silicon contents outside the declared boundary unless independently modelled.
-2. Add RGB888 downstream artifact decoding/verification and independently check
+2. Qualify RGB888 artifact verification and independently check
    BGR semantics without confusing controller memory with glass colour. Match
    independent vectors to the pinned driver's packed stream.
 3. Determine module

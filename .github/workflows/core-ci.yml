@@ -742,6 +742,13 @@ jobs:
           scripts/ci/cargo-test-nonvacuous.sh
           -p labwired-core --no-default-features --test microbit_v2_uarte_stack_guest
           -- --nocapture
+
+      - name: SAM SPI controller and guest (FEATURE-OFF)
+        run: >
+          scripts/ci/cargo-test-nonvacuous.sh
+          -p labwired-core --test sam_sercom_spi --test st7735_sam_guest
+          -- --nocapture
+
       # AVR sim-smoke golden — cheap (~ms), no PlatformIO. Pins Arduino Nano
       # UART+D13 behavior on every PR so the twin cannot regress silently.
       - name: AVR Nano golden survival
@@ -1320,6 +1327,14 @@ jobs:
       # refuse rather than fake it — the wrapper is the second lock, and it also
       # catches the emptying this step could still suffer silently: a per-item
       # `#[cfg]` or a deleted test leaving a binary with nothing in it.
+      # A real authored blocking-SPI guest, not a host transfer substitute.
+      # Reuse this job's compiled feature set, and run the feature-off reference
+      # in pr-feature-off. Neither qualifies native Arcade or GPIO reset/light.
+      - name: ST7735 controller-memory guest (FEATURE-ON)
+        run: >
+          scripts/ci/cargo-test-nonvacuous.sh
+          -p labwired-core --features event-scheduler --test st7735_sam_guest
+
       - name: Scheduler-only fidelity lanes (walk≡scheduler timing gates)
         run: >
           scripts/ci/cargo-test-nonvacuous.sh

@@ -326,7 +326,7 @@ fn validate_spec(spec: &DisplaySpec) -> Result<()> {
     let h = spec.height as usize;
     if let Some(color) = &spec.serial_color {
         if spec.pixel_format != DisplayPixelFormat::Rgb888
-            || spec.artifact_format != "rgb888"
+            || spec.artifact_format != crate::inspect::artifact_format::RGB888
             || spec.ram.layout != DisplayRamLayout::RowMajor
             || !spec.ram.planes.is_empty()
             || spec.ram.units.col.pixels_per_step() != 1
@@ -2902,6 +2902,44 @@ mod tests {
                 "accepted {new}"
             );
         }
+    }
+
+    #[test]
+    fn st7735_stream_valid_frame_is_measurable_by_shared_artifact_decoder() {
+        let mut panel = serial_panel(2, 1);
+        serial_command(&mut panel, 0x2c, &[0xfc, 0, 0, 0, 0, 0]);
+        let artifact = serial_artifact(&panel);
+        let measured = crate::inspect::artifact_region_ink(
+            crate::inspect::artifact_format::RGB888,
+            &artifact.meta,
+            artifact.bytes.as_deref().unwrap(),
+            crate::inspect::PixelRegion {
+                x: 0,
+                y: 0,
+                w: 2,
+                h: 1,
+            },
+        )
+        .unwrap();
+        assert_eq!(measured, (1, 2));
+        panel.hardware_reset();
+        serial_command(&mut panel, 0x3a, &[5]);
+        serial_command(&mut panel, 0x2c, &[0, 0]);
+        let undefined = serial_artifact(&panel);
+        assert!(undefined.bytes.is_none());
+        assert!(crate::inspect::artifact_region_ink(
+            crate::inspect::artifact_format::RGB888,
+            &undefined.meta,
+            &[0; 6],
+            crate::inspect::PixelRegion {
+                x: 0,
+                y: 0,
+                w: 2,
+                h: 1
+            },
+        )
+        .unwrap_err()
+        .contains("unknown pixels"));
     }
 
     #[test]
