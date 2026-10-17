@@ -17,7 +17,7 @@
 # Not silicon-verified. Bench silicon may be ItsyBitsy M4 (SAMD51G19A);
 # Playground pinout is Metro M4. QSPI, USB, NeoPixel, and unused SERCOMs
 # are intentionally stubbed / omitted — only the MCU core, PORT, MCLK/GCLK,
-# SERCOM1/3 UARTs and SysTick are modelled here.
+# SERCOM1/3 UARTs, blocking SERCOM4 SPI and SysTick are modelled here.
 # Pin labels follow Adafruit ArduinoCore-samd variants/metro_m4/variant.cpp.
 
 name: "atsamd51j19a-pybadge"

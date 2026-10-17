@@ -23,7 +23,9 @@ through the standard trace, CS, D/C, inspection and input interfaces.
 The authored MMIO tests exercise the actual board descriptor, a transport-only
 slave observer, blocking byte/halfword/word transfers, FIFO consumption,
 W1C flags, reset cancellation, wrong mode/mux, clock-off writes and a paused
-in-flight transfer. These are not firmware execution or display pixel proofs.
+in-flight transfer. An independently authored Thumb guest also configures MMIO,
+polls TXC and writes an SRAM completion marker; with the wrong mux it must
+remain blocked. Neither test proves display pixels or production native firmware.
 
 Limits: no edge-sampling slave support (attachment is rejected), no split-vector
 IRQ delivery, no DMA, no display attached, and no dynamically derived kernel
