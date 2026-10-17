@@ -482,6 +482,10 @@ fn reset_cancels_pending_wake_without_reselecting_slave_and_next_frame_works() {
     }
     assert_eq!(seen.lock().unwrap().selects, 1);
     machine.bus.write_u32(SPI, 1).unwrap();
+    assert_eq!(machine.bus.read_u8(SPI + 0x18).unwrap(), 0);
+    // Cancellation is clock-independent: a stale wake must retire even if
+    // the guest turns the clock off before the next scheduler boundary.
+    machine.bus.write_u32(MCLK, 0).unwrap();
     for _ in 0..100 {
         machine.step().unwrap();
     }

@@ -292,7 +292,9 @@ impl Peripheral for SamSercomSpi {
         !self.sched_driven()
     }
     fn event_is_clock_tick(&self) -> bool {
-        true
+        // A cancelled wake has no clocked work. Let on_event retire it even
+        // if firmware gated the controller immediately after SWRST/disable.
+        self.has_bus_work()
     }
     fn take_scheduled_events(&mut self) -> Vec<(u64, u32)> {
         if self.sched_driven() && self.has_bus_work() && !self.scheduled {
