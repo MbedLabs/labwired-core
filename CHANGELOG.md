@@ -91,6 +91,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (GPIO32..36, GPIO39); the rest are byte-identical.
 
 ### Performance
+- `labwired snapshot capture --profile arduino-esp32` (the hosted
+  `labwired_run` path for a classic ESP32 without watches, stimuli or
+  acceptance) advances in chunks with the idle and CCOUNT poll-loop skips
+  instead of one instruction per call. A step is still a machine cycle, so
+  `--steps`, `--progress-every` and the captured state land on the same
+  cycle. `LABWIRED_IDLE_FAST_FORWARD=0` and `--trace-out` keep single steps.
+  The four-servo lab: 10 s simulated in 1.3 s (was ~110 s).
 - `labwired test` on a classic ESP32 (the hosted `labwired_run` /
   `labwired_verify` path, including the `arduino-esp32` profile with loopTask
   on PRO_CPU) runs the idle and CCOUNT poll-loop skips, as every other test
