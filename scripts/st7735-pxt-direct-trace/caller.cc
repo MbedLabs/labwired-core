@@ -156,6 +156,12 @@ static bool padding_selected(Image& img, int emitted_pixels) {
     }
     return false;
 }
+static void image_metadata(Image* img) {
+    if (!img) { std::cout << "null"; return; }
+    std::cout << "{\"width\":" << img->width() << ",\"height\":" << img->height()
+              << ",\"bpp\":" << img->bpp() << ",\"columnStride\":" << img->byteHeight()
+              << ",\"pixelStorageBytes\":" << img->pixLength() << "}";
+}
 static void capture(const char* name, WDisplay& d, Image* main, Image* status,
                     bool expect_direct, const char* error = nullptr) {
     selected = &d;
@@ -197,14 +203,24 @@ static void capture(const char* name, WDisplay& d, Image* main, Image* status,
         require(d.inUpdate, "panic boundary unexpectedly repaired original reentry state");
     }
     const int emitted = main ? d.width * d.displayHeight : 0;
-    std::cout << "{\"name\":\"" << name << "\",\"copiedBytes\":[";
+    std::cout << "{\"name\":\"" << name << "\",\"mainImage\":";
+    image_metadata(main);
+    std::cout << ",\"statusImage\":";
+    image_metadata(status);
+    std::cout << ",\"displayWidth\":" << d.width << ",\"displayHeight\":" << d.height
+              << ",\"mainHeight\":" << d.displayHeight << ",\"copiedBytes\":[";
     for (unsigned i = 0; i < d.copies.size(); ++i) { if (i) std::cout << ","; std::cout << d.copies[i]; }
     std::cout << "],\"allocationBytes\":" << d.storage.size()
               << ",\"directFrames\":" << d.spi.payloads.size()
               << ",\"fallbackCalls\":" << d.fallbackCalls
+              << ",\"inUpdateAfter\":" << (d.inUpdate ? "true" : "false")
+              << ",\"waits\":" << d.waits
+              << ",\"mainWindows\":" << d.mainWindows
+              << ",\"statusWindows\":" << d.statusWindows
               << ",\"mainPaddingSelected\":" << (main && expect_direct && compiled() && !error && padding_selected(*main, emitted) ? "true" : "false")
               << ",\"statusPaddingSelected\":" << (status && expect_direct && compiled() && !error && padding_selected(*status, d.width * (d.height - d.displayHeight)) ? "true" : "false")
-              << ",\"rejected\":" << (error ? "true" : "false") << ",\"frames\":[";
+              << ",\"rejected\":" << (error ? "true" : "false")
+              << ",\"rejectionReason\":\"" << failure << "\",\"frames\":[";
     for (unsigned frame = 0; frame < d.spi.payloads.size(); ++frame) {
         if (frame) std::cout << ",";
         std::cout << "{\"ramwr\":[";
@@ -242,12 +258,13 @@ int main(int argc, char** argv) {
         capture("bpp-negative",j,&mono,nullptr,true,"dimension/bpp panic");
         std::cout << ","; Image tallpad(160,1); WDisplay k(160,1,1);
         capture("padded-allocation-negative",k,&tallpad,nullptr,true,"screenBuf copy extent rejected");
-        std::cout << ",{\"name\":\"missing-display-and-reentry\"}";
         selected=nullptr; updateScreen(&full);
         WDisplay reentry(160,128,128); reentry.inUpdate=true; selected=&reentry;
         updateScreen(&full);
         require(reentry.inUpdate && reentry.copies.empty() && reentry.spi.payloads.empty()
                 && reentry.fallbackCalls == 0, "reentry negative mismatch");
+        std::cout << ",{\"name\":\"missing-display-and-reentry\",\"inUpdateAfter\":true,"
+                  << "\"copiedBytes\":[],\"directFrames\":0,\"fallbackCalls\":0}";
         std::cout << "]}\n";
         return 0;
     } catch (const std::exception& e) { std::cerr << e.what() << "\n"; return 1; }

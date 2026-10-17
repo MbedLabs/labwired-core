@@ -19,6 +19,47 @@ FRAGMENTS = {
     "image-accessors.inc": "8198b2664d5627e90b54d477f11751c7788b06e1d9abfe0d345bf02da5f26436",
     "method.inc": direct.FRAGMENTS["sendIndexedImage444"],
 }
+CASE_NAMES = [
+    "full-aligned", "partial-padded", "aligned-status", "padded-status",
+    "predicate-off-fallback", "missing-lcd-fallback", "doubled-fallback",
+    "dimension-negative", "bpp-negative", "padded-allocation-negative",
+    "missing-display-and-reentry",
+]
+
+
+def validate_capture(capture, enabled):
+    if capture["rgb444Compiled"] is not enabled:
+        raise RuntimeError("caller macro identity mismatch")
+    cases = capture["cases"]
+    if [case["name"] for case in cases] != CASE_NAMES:
+        raise RuntimeError("missing caller boundary cases")
+    reentry = cases[-1]
+    if (reentry["inUpdateAfter"] is not True or reentry["copiedBytes"]
+            or reentry["directFrames"] != 0 or reentry["fallbackCalls"] != 0):
+        raise RuntimeError("caller reentry verdict mismatch")
+    for index, case in enumerate(cases[:10]):
+        rejected = 7 <= index <= 9
+        frames = (2 if index in [2, 3] else 1) if enabled and index < 4 else 0
+        fallback = 0 if rejected or frames else (2 if index in [2, 3] else 1)
+        if (case["rejected"] is not rejected or case["directFrames"] != frames
+                or case["fallbackCalls"] != fallback or len(case["frames"]) != frames):
+            raise RuntimeError("caller branch verdict mismatch")
+        if (case["mainPaddingSelected"] is not (enabled and index in [1, 3])
+                or case["statusPaddingSelected"] is not (enabled and index == 3)):
+            raise RuntimeError("caller padding verdict mismatch")
+        if rejected:
+            reason = "screenBuf copy extent rejected" if index == 9 else "dimension/bpp panic"
+            if case["rejectionReason"] != reason or case["inUpdateAfter"] is not True:
+                raise RuntimeError("caller rejection identity mismatch")
+        elif case["inUpdateAfter"] is not False or case["rejectionReason"]:
+            raise RuntimeError("caller completion identity mismatch")
+        for frame in case["frames"]:
+            if (frame["csReleased"] is not True or not frame["ramwr"]
+                    or len(frame["ramwr"]) % 3 or not frame["transfers"]
+                    or any(type(n) is not int or n <= 0 for n in frame["transfers"])
+                    or any(type(n) is not int or not 0 <= n <= 255 for n in frame["ramwr"])
+                    or sum(frame["transfers"]) != len(frame["ramwr"])):
+                raise RuntimeError("caller frame extent mismatch")
 
 
 def extract(source, header):
@@ -63,8 +104,7 @@ def main():
                 "-I", str(work), str(root / "caller.cc"), "-o", str(binary),
             ], check=True, timeout=60)
             capture = json.loads(subprocess.check_output([str(binary)], text=True, timeout=15))
-            if capture["rgb444Compiled"] != enabled or len(capture["cases"]) != 11:
-                raise RuntimeError("missing caller boundary cases")
+            validate_capture(capture, enabled)
             captures["macro-on" if enabled else "macro-off"] = capture
             if enabled:
                 negative = subprocess.run(
