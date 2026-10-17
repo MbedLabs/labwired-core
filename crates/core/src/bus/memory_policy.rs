@@ -216,7 +216,7 @@ impl crate::bus::SystemBus {
     /// Policy gate for one CPU store. See [`MemoryPolicyState::gate`].
     #[inline]
     pub(crate) fn memory_policy_gate_store(&mut self, addr: u64) -> Option<SimResult<()>> {
-        if !self.memory_policy.active() {
+        if self.memory_policy_bypass || !self.memory_policy.active() {
             return None;
         }
         self.memory_policy.gate(
@@ -229,6 +229,16 @@ impl crate::bus::SystemBus {
                 flash_alias_active: self.flash_boot_alias && self.flash.base_addr != 0,
             },
         )
+    }
+
+    /// Runs `f` with the CPU-write policy gate bypassed (non-CPU hardware
+    /// writes: DMA engines). Nesting-safe; restores the previous state.
+    pub(crate) fn with_memory_policy_bypass<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let saved = self.memory_policy_bypass;
+        self.memory_policy_bypass = true;
+        let r = f(self);
+        self.memory_policy_bypass = saved;
+        r
     }
 
     /// True when a CPU store at `addr` must skip the direct-RAM fast paths in

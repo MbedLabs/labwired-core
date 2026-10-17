@@ -296,6 +296,9 @@ pub struct SystemBus {
     pub flash: LinearMemory,
     /// Violation record + counts + mirrored PC/cycle for the policy gate.
     pub(crate) memory_policy: crate::bus::memory_policy::MemoryPolicyState,
+    /// Non-CPU hardware writes (DMA) bypass the `cpu_writes` gate; host/loader
+    /// writes already bypass via direct `LinearMemory`.
+    pub(crate) memory_policy_bypass: bool,
     pub ram: LinearMemory,
     /// Extra CPU-visible RAM/ROM windows beyond `flash`/`ram` (e.g. ESP32 IRAM
     /// `0x4037C000` and flash-DROM `0x3C000000`), from the chip's

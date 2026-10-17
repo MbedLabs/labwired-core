@@ -3558,6 +3558,7 @@ fn test_flash_boot_alias_read_and_write() {
     let mut bus = SystemBus {
         flash: LinearMemory::new_erased(256, 0x0800_0000),
         memory_policy: crate::bus::memory_policy::MemoryPolicyState::default(),
+        memory_policy_bypass: false,
         ram: LinearMemory::new(256, 0x2000_0000),
         extra_mem: Vec::new(),
         peripherals: Vec::new(),
@@ -3667,6 +3668,7 @@ fn h5_flash_bus(gate: bool) -> SystemBus {
     let mut bus = SystemBus {
         flash,
         memory_policy: crate::bus::memory_policy::MemoryPolicyState::default(),
+        memory_policy_bypass: false,
         ram: LinearMemory::new(256, 0x2000_0000),
         extra_mem: Vec::new(),
         peripherals: vec![PeripheralEntry {
@@ -3942,6 +3944,7 @@ fn h5_rww_bus(gate: bool) -> SystemBus {
     let mut bus = SystemBus {
         flash,
         memory_policy: crate::bus::memory_policy::MemoryPolicyState::default(),
+        memory_policy_bypass: false,
         ram: LinearMemory::new(0x1000, 0x2000_0000),
         extra_mem: Vec::new(),
         peripherals: vec![PeripheralEntry {
@@ -4207,6 +4210,7 @@ fn test_peripheral_range_index_lookup() {
     let mut bus = SystemBus {
         flash: LinearMemory::new_erased(256, 0x0800_0000),
         memory_policy: crate::bus::memory_policy::MemoryPolicyState::default(),
+        memory_policy_bypass: false,
         ram: LinearMemory::new(256, 0x2000_0000),
         extra_mem: Vec::new(),
         peripherals: vec![
@@ -4345,6 +4349,7 @@ fn test_dma_tick_executes_copy_and_raises_irq() {
     let mut bus = SystemBus {
         flash: LinearMemory::new_erased(256, 0x0800_0000),
         memory_policy: crate::bus::memory_policy::MemoryPolicyState::default(),
+        memory_policy_bypass: false,
         ram: LinearMemory::new(256, 0x2000_0000),
         extra_mem: Vec::new(),
         peripherals: vec![PeripheralEntry {
@@ -5978,6 +5983,92 @@ fn default_policy_remains_byte_identical() {
     bus.ram = LinearMemory::new(16 * 1024, 0x2000_0000);
     bus.write_u8(0x0800_1000, 0xAB).unwrap();
     assert!(bus.memory_policy.report().is_none());
+    assert_eq!(
+        bus.flash.read_u8(0x0800_1000),
+        Some(0xAB),
+        "default policy must commit the byte"
+    );
+    assert_eq!(bus.memory_policy.violations_flash, 0);
+}
+
+#[test]
+fn dma_writes_bypass_the_cpu_policy() {
+    let mut bus = SystemBus::new();
+    bus.flash = LinearMemory::new_erased(64 * 1024, 0x0800_0000);
+    bus.ram = LinearMemory::new(16 * 1024, 0x2000_0000);
+    bus.memory_policy.ram = crate::bus::CpuWritePolicy::Fault;
+
+    let write = crate::DmaRequest {
+        src_addr: 0,
+        addr: 0x2000_0020,
+        val: 0xAB,
+        direction: crate::DmaDirection::Write,
+        transform: None,
+        remaining: None,
+    };
+    bus.execute_dma_request(&write).unwrap();
+    assert_eq!(bus.ram.read_u8(0x2000_0020), Some(0xAB));
+
+    bus.ram.write_u8(0x2000_0010, 0x5A);
+    let copy = crate::DmaRequest {
+        src_addr: 0x2000_0010,
+        addr: 0x2000_0030,
+        val: 0,
+        direction: crate::DmaDirection::Copy,
+        transform: Some(crate::DmaUnitTransform {
+            src_width: 4,
+            dst_width: 4,
+            pam: 0,
+            sbx: false,
+            dbx: false,
+            dhx: false,
+        }),
+        remaining: None,
+    };
+    bus.execute_dma_request(&copy).unwrap();
+    assert_eq!(bus.ram.read_u8(0x2000_0030), Some(0x5A));
+
+    assert_eq!(bus.memory_policy.violations_ram, 0);
+}
+
+#[test]
+fn cpu_store_u64_obeys_ram_policy() {
+    let mut bus = SystemBus::new();
+    bus.flash = LinearMemory::new_erased(64 * 1024, 0x0800_0000);
+    bus.ram = LinearMemory::new(16 * 1024, 0x2000_0000);
+    bus.memory_policy.ram = crate::bus::CpuWritePolicy::Fault;
+    let err = crate::Bus::write_u64(&mut bus, 0x2000_0100, 0xDEAD_BEEF_DEAD_BEEF).unwrap_err();
+    assert!(matches!(
+        err,
+        crate::SimulationError::MemoryViolation(0x2000_0100)
+    ));
+    assert_eq!(bus.memory_policy.violations_ram, 1);
+    assert_eq!(bus.ram.read_u32(0x2000_0100), Some(0));
+    assert_eq!(bus.ram.read_u32(0x2000_0104), Some(0));
+
+    bus.memory_policy.ram = crate::bus::CpuWritePolicy::Allow;
+    crate::Bus::write_u64(&mut bus, 0x2000_0100, 0xDEAD_BEEF_DEAD_BEEF).unwrap();
+    assert_eq!(bus.ram.read_u32(0x2000_0100), Some(0xDEAD_BEEF));
+    assert_eq!(bus.ram.read_u32(0x2000_0104), Some(0xDEAD_BEEF));
+}
+
+#[test]
+fn riscv_spin_commit_refused_under_ram_policy() {
+    let mut bus = SystemBus::new();
+    bus.flash = LinearMemory::new_erased(64 * 1024, 0x0800_0000);
+    bus.ram = LinearMemory::new(16 * 1024, 0x2000_0000);
+    bus.memory_policy.ram = crate::bus::CpuWritePolicy::Fault;
+
+    assert!(!bus.commit_ram_store_spin(0x2000_0100, 0xDEAD_BEEF, 4));
+    assert_eq!(bus.ram.read_u32(0x2000_0100), Some(0));
+    assert_eq!(bus.memory_policy.violations_ram, 0);
+
+    let err = bus.write_u32(0x2000_0100, 0xDEAD_BEEF).unwrap_err();
+    assert!(matches!(
+        err,
+        crate::SimulationError::MemoryViolation(0x2000_0100)
+    ));
+    assert_eq!(bus.memory_policy.violations_ram, 1);
 }
 
 #[test]

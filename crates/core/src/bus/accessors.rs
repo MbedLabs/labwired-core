@@ -282,6 +282,9 @@ impl crate::Bus for SystemBus {
     }
 
     fn write_u64(&mut self, addr: u64, value: u64) -> SimResult<()> {
+        if let Some(r) = self.memory_policy_gate_store(addr) {
+            return r;
+        }
         let offset =
             addr.checked_sub(self.ram.base_addr)
                 .and_then(|v| usize::try_from(v).ok())
