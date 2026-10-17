@@ -120,6 +120,74 @@ fn settle(bus: &mut SystemBus) {
     }
 }
 
+#[test]
+fn dma_tx_endpoint_reports_acceptance_not_generic_store_success() {
+    use labwired_core::{peripherals::stub::StubPeripheral, Peripheral};
+
+    let mut stub = StubPeripheral::new(0);
+    assert_eq!(stub.dma_tx_request(0x28), None);
+    assert!(stub.try_dma_write_tx_u8(0x28, 0x99).is_err());
+    assert_eq!(stub.read(0x28).unwrap(), 0);
+
+    let (mut bus, seen) = board();
+    let idx = bus
+        .peripherals
+        .iter()
+        .position(|p| p.name == "sercom4")
+        .unwrap();
+    assert_eq!(bus.peripherals[idx].dev.dma_tx_request(0x28), Some(false));
+    assert!(!bus.peripherals[idx]
+        .dev
+        .try_dma_write_tx_u8(0x28, 0x99)
+        .unwrap());
+    enable(&mut bus);
+    assert_eq!(bus.read_u8(SPI + 0x16).unwrap(), 0);
+    assert_eq!(bus.peripherals[idx].dev.dma_tx_request(0x28), Some(true));
+    for off in [0, 0x18, 0x29, 0x2a, 0x2b, 0x128] {
+        assert_eq!(bus.peripherals[idx].dev.dma_tx_request(off), None);
+        assert!(bus.peripherals[idx]
+            .dev
+            .try_dma_write_tx_u8(off, 0xff)
+            .is_err());
+        assert_eq!(bus.read_u8(SPI + 0x18).unwrap(), 1);
+    }
+    assert!(bus.peripherals[idx]
+        .dev
+        .try_dma_write_tx_u8(0x28, 0x31)
+        .unwrap());
+    assert_eq!(bus.peripherals[idx].dev.dma_tx_request(0x28), Some(false));
+    assert!(!bus.peripherals[idx]
+        .dev
+        .try_dma_write_tx_u8(0x28, 0x32)
+        .unwrap());
+    // Ordinary stores still return Ok when full; they cannot certify a beat.
+    bus.write_u8(SPI + 0x28, 0x55).unwrap();
+    // This is a controller-local host control, NOT an admitted bus/DMA path.
+    // Rebuild the pump after bypassing the ordinary bus write choke above.
+    bus.refresh_peripheral_index();
+    settle(&mut bus);
+    assert_eq!(seen.lock().unwrap().bytes, vec![0x31]);
+    assert_eq!(bus.peripherals[idx].dev.dma_tx_request(0x28), Some(true));
+    bus.write_u8(SPI + 0x16, 1).unwrap();
+    assert_eq!(bus.peripherals[idx].dev.dma_tx_request(0x28), Some(true));
+    bus.write_u8(SPI + 0x14, 1).unwrap();
+    assert_eq!(bus.peripherals[idx].dev.dma_tx_request(0x28), Some(true));
+    assert_eq!(bus.read_u8(SPI + 0x28).unwrap(), 0x31 ^ 0x5a);
+    assert!(bus.peripherals[idx]
+        .dev
+        .try_dma_write_tx_u8(0x28, 0x44)
+        .unwrap());
+    // Reset discards an accepted but not yet shifted byte.
+    bus.write_u32(SPI, 1).unwrap();
+    assert_eq!(bus.peripherals[idx].dev.dma_tx_request(0x28), Some(false));
+    assert!(!bus.peripherals[idx]
+        .dev
+        .try_dma_write_tx_u8(0x28, 0x99)
+        .unwrap());
+    settle(&mut bus);
+    assert_eq!(seen.lock().unwrap().bytes, vec![0x31]);
+}
+
 fn split_pending(bus: &SystemBus) -> [bool; 4] {
     use std::sync::atomic::Ordering;
     let nvic = bus.nvic.as_ref().unwrap();

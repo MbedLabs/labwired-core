@@ -980,6 +980,24 @@ pub enum MmioAccessClass {
 pub trait Peripheral: std::fmt::Debug + Send {
     fn read(&self, offset: u64) -> SimResult<u8>;
     fn write(&mut self, offset: u64, value: u8) -> SimResult<()>;
+
+    /// Controller-local byte TX DMA request. `None` refuses this endpoint;
+    /// `Some(false)` is a supported endpoint that is not ready. This does not
+    /// grant bus access: the bus must separately enforce clocks and routing.
+    /// DMA requests are independent of CPU interrupt-enable bits.
+    fn dma_tx_request(&self, _offset: u64) -> Option<bool> {
+        None
+    }
+
+    /// Atomically accept one TX byte, or return `false` without changing
+    /// state when not ready. Unsupported endpoints refuse explicitly.
+    /// A successful ordinary register store is not an acceptance certificate.
+    /// The bus remains responsible for gating, observers and scheduler wakes.
+    fn try_dma_write_tx_u8(&mut self, _offset: u64, _value: u8) -> SimResult<bool> {
+        Err(SimulationError::NotImplemented(
+            "peripheral has no byte TX DMA endpoint".into(),
+        ))
+    }
     fn read_u16(&self, offset: u64) -> SimResult<u16> {
         let b0 = self.read(offset)? as u16;
         let b1 = self.read(offset + 1)? as u16;

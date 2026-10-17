@@ -290,6 +290,23 @@ impl Peripheral for SamSercomSpi {
         self.store(offset, value.into(), 8);
         Ok(())
     }
+    fn dma_tx_request(&self, offset: u64) -> Option<bool> {
+        (offset == 0x28).then(|| self.enabled() && self.holding.is_none())
+    }
+    fn try_dma_write_tx_u8(&mut self, offset: u64, value: u8) -> SimResult<bool> {
+        match self.dma_tx_request(offset) {
+            Some(true) => {
+                // Exclusive access: the same readiness predicate guards DATA
+                // in store(), so this call really places this byte in holding.
+                self.store(offset, value.into(), 8);
+                Ok(true)
+            }
+            Some(false) => Ok(false),
+            None => Err(crate::SimulationError::NotImplemented(
+                "SAM SPI byte TX DMA only supports the low DATA lane".into(),
+            )),
+        }
+    }
     fn write_u16(&mut self, offset: u64, value: u16) -> SimResult<()> {
         self.store(offset, value.into(), 16);
         Ok(())
