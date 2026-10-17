@@ -1024,9 +1024,25 @@ pub trait Peripheral: std::fmt::Debug + Send {
     /// the latch. The machine drains it at a clean instruction boundary and
     /// reboots the CPU through the existing reset path (see
     /// `Machine::advance`). Default: no reset requests.
+    ///
+    /// Read [`Self::latched_reset_cause`] before this call. It is `None` once
+    /// the latch has been taken.
     fn take_reset_request(&mut self) -> bool {
         false
     }
+
+    /// Why [`Self::take_reset_request`] would return `true` right now.
+    /// `None` when nothing is latched, or when the peripheral does not name a
+    /// cause (the CPU still reboots; no reset-cause flag is recorded).
+    fn latched_reset_cause(&self) -> Option<PeripheralResetCause> {
+        None
+    }
+
+    /// A peripheral's reset request was drained and the CPU is about to
+    /// reboot. Sticky cause registers (RESETCAUSE and its equivalents) record
+    /// `cause` here. Called after the requesting peripheral has cleared its
+    /// own latch. Default: ignore.
+    fn on_peripheral_reset(&mut self, _cause: PeripheralResetCause) {}
 
     /// `true` if this peripheral can ever return `true` from
     /// [`Self::take_reset_request`]. The machine caches the bus indices of
@@ -2922,6 +2938,16 @@ pub trait DebugControl {
     // State Management
     fn snapshot(&self) -> snapshot::MachineSnapshot;
     fn restore(&mut self, snapshot: &snapshot::MachineSnapshot) -> SimResult<()>;
+}
+
+/// Why a peripheral asked the machine to reboot the CPU.
+///
+/// `Watchdog` and `System` match the K32W041 RESETCAUSE bits WDTRESET and
+/// SYSTEMRESET. Peripherals that only need the reboot leave the cause unset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeripheralResetCause {
+    Watchdog,
+    System,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -5046,16 +5072,25 @@ impl<C: Cpu> Machine<C> {
 
     /// Drain every reset-capable peripheral's latch. Every capable peripheral
     /// is polled (no short-circuit) so each latch clears even when another
-    /// already fired. Returns true if any requested a reset.
-    pub(crate) fn drain_peripheral_reset_requests(&mut self) -> bool {
-        let mut requested = false;
+    /// already fired. The returned causes are what was latched before the
+    /// take; an empty vec means nobody requested a reset.
+    pub(crate) fn drain_peripheral_reset_requests(&mut self) -> Vec<Option<PeripheralResetCause>> {
+        let mut requests = Vec::new();
         for i in 0..self.reset_request_indices.len() {
             let idx = self.reset_request_indices[i];
+            let cause = self.bus.peripherals[idx].dev.latched_reset_cause();
             if self.bus.peripherals[idx].dev.take_reset_request() {
-                requested = true;
+                requests.push(cause);
             }
         }
-        requested
+        requests
+    }
+
+    /// Tell every peripheral that a CPU reboot from `cause` is being applied.
+    fn record_peripheral_reset_cause(&mut self, cause: PeripheralResetCause) {
+        for peripheral in &mut self.bus.peripherals {
+            peripheral.dev.on_peripheral_reset(cause);
+        }
     }
 
     /// Returns true (and clears the latch) if the registered SCB peripheral

@@ -31,8 +31,36 @@ mod peripheral_reset_request_tests {
             std::mem::take(&mut self.latch)
         }
 
+        fn latched_reset_cause(&self) -> Option<crate::PeripheralResetCause> {
+            self.latch.then_some(crate::PeripheralResetCause::Watchdog)
+        }
+
         fn reset_request_capable(&self) -> bool {
             true
+        }
+    }
+
+    /// Records the cause the machine publishes after it drains a request.
+    #[derive(Debug, Default)]
+    struct CauseListener {
+        seen: Option<crate::PeripheralResetCause>,
+    }
+
+    impl Peripheral for CauseListener {
+        fn read(&self, _offset: u64) -> SimResult<u8> {
+            Ok(0)
+        }
+
+        fn write(&mut self, _offset: u64, _value: u8) -> SimResult<()> {
+            Ok(())
+        }
+
+        fn on_peripheral_reset(&mut self, cause: crate::PeripheralResetCause) {
+            self.seen = Some(cause);
+        }
+
+        fn as_any(&self) -> Option<&dyn std::any::Any> {
+            Some(self)
         }
     }
 
@@ -53,6 +81,13 @@ mod peripheral_reset_request_tests {
             0x100,
             None,
             Box::new(ResetOnWrite::default()),
+        );
+        bus.add_peripheral(
+            "cause_listener",
+            PERIPH_BASE + 0x100,
+            0x100,
+            None,
+            Box::new(CauseListener::default()),
         );
         let mut m = Machine::new(cpu, bus);
 
@@ -83,5 +118,14 @@ mod peripheral_reset_request_tests {
             MSP,
             "SP must reload from vector[0] after a peripheral reset request"
         );
+        let seen = m
+            .bus
+            .peripherals
+            .iter()
+            .find(|p| p.name == "cause_listener")
+            .and_then(|p| p.dev.as_any())
+            .and_then(|a| a.downcast_ref::<CauseListener>())
+            .and_then(|l| l.seen);
+        assert_eq!(seen, Some(crate::PeripheralResetCause::Watchdog));
     }
 }
