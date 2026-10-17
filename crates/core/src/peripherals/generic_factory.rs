@@ -160,6 +160,8 @@ pub const MODEL_TYPES: &[&str] = &[
     "sam_sercom_usart",
     "sam_sercom_spi",
     "sam_dmac_byte",
+    // Reserve the full name: never fuzzy-coerce an unqualified SAM DMAC to STM32.
+    "sam_dmac",
     // ⚠️ Load-bearing. Without this entry the fuzzy `contains("spi")` heuristic
     // coerces `nrf54l_spim` onto the shared `spi` arm, which then sees
     // `contains("nrf")` and picks the nRF52 SPIM offset map. That failure is
@@ -552,6 +554,9 @@ pub fn try_build(
         "avr_adc" => Box::new(crate::peripherals::avr_adc::AvrAdcInputs::new()),
         "sam_sercom_usart" => {
             Box::new(crate::peripherals::sam::sercom_usart::SamSercomUsart::new())
+        }
+        "sam_dmac" => {
+            anyhow::bail!("full SAM DMAC is not admitted; sam_dmac_byte is an opt-in software-byte foundation only");
         }
         "sam_dmac_byte" => {
             if p_cfg.irq != Some(31) || p_cfg.base_address != 0x4100a000 {

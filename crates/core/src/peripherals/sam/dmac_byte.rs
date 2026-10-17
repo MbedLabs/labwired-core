@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Opt-in SAMD51 software-triggered byte-block foundation, not full DMAC.
 //! Primary register facts: DS60001507F sections 22.6, 22.7, 22.8 and 22.10.
-//! No ASF implementation/header input. Unsupported descriptors latch an explicit
+//! No ASF implementation/header is copied or imported. Unsupported descriptors latch an explicit
 //! simulator refusal; they never masquerade as hardware completion/error flags.
 
 use crate::{Bus, Peripheral, PeripheralTickResult, SimResult, SimulationError};

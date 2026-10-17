@@ -11,6 +11,8 @@ claimed from source declarations or local formatting.
 Author an MIT, explicitly opt-in `sam_dmac_byte` model from primary register
 facts. Do not copy ASF4 implementations or import vendor-restricted headers.
 Do not change the production PyBadge descriptor, application pins or captures.
+Reserve `sam_dmac` with an explicit not-admitted refusal; it must not silently
+fall through the generic name heuristic to an unrelated STM32 DMA register map.
 
 Primary input: Microchip
 [DS60001507F](https://ww1.microchip.com/downloads/en/DeviceDoc/SAM_D5xE5x_Family_Data_Sheet_DS60001507F.pdf),

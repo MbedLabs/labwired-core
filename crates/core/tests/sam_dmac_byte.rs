@@ -43,6 +43,17 @@ fn host_descriptor(bus: &mut SystemBus, index: usize, control: u16, count: u16, 
 
 #[test]
 fn mmio_tables_modes_and_unsupported_descriptors_refuse_without_success() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut chip =
+        ChipDescriptor::from_file(root.join("configs/chips/atsamd51-pybadge.yaml")).unwrap();
+    chip.peripherals.push(serde_yaml::from_str(
+        "id: unqualified-full-dmac\ntype: sam_dmac\nbase_address: 0x4100a000\nsize: 1KB\nirq: 31\n"
+    ).unwrap());
+    let manifest = SystemManifest::from_file(root.join("configs/systems/pybadge.yaml")).unwrap();
+    assert!(
+        SystemBus::from_config(&chip, &manifest).is_err(),
+        "full SAM name must not fuzzy-resolve to STM32 DMA"
+    );
     for (control, count, next) in [
         (0x0c08, 1, 0),
         (0x0d09, 1, 0),
