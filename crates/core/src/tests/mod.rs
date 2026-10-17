@@ -78,6 +78,8 @@ pub mod out_of_line_test_modules;
 #[cfg(test)]
 pub mod peripheral_reachability;
 #[cfg(test)]
+pub mod peripheral_reset_request;
+#[cfg(test)]
 pub mod pre_merge_lane_covers_browser;
 #[cfg(test)]
 pub mod rp2040;

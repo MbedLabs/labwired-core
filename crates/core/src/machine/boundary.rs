@@ -643,6 +643,19 @@ impl<C: Cpu> Machine<C> {
             tracing::debug!("SCB SYSRESETREQ: CPU rebooted through vector table");
         }
 
+        // Peripheral-requested CPU reset (e.g. a watchdog time-out with reset
+        // enabled). Same clean-boundary contract and the same reboot sequence
+        // as SYSRESETREQ above; the requesting peripheral clears its own latch
+        // inside `take_reset_request`. Short-circuits on an empty index list.
+        if !self.reset_request_indices.is_empty() && self.drain_peripheral_reset_requests() {
+            self.reset_core_system_state();
+            self.reset()?;
+            if let Some(slot) = self.sd_hle.as_mut() {
+                slot.sd.reset();
+            }
+            tracing::debug!("peripheral reset request: CPU rebooted through vector table");
+        }
+
         // nRF52 NVMC erase drain (same clean-boundary contract as the SCB
         // reset above): ERASEPAGE/ERASEALL/ERASEUICR latched during this
         // instruction are applied here, so no observer sees a half-erased
