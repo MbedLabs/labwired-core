@@ -14,16 +14,39 @@ use labwired_core::fault_verdict::{decode_fault, FaultSymbolizer, FaultVerdict};
 
 /// The verdict for `cpu`, symbolized against `elf` when it parses. `None`
 /// when nothing faulted (or the CPU models no ARM fault registers).
+///
+/// `policy` is the run's memory-policy report: when the fault address matches
+/// a recorded read-only-region violation, the verdict names the region.
 pub fn fault_verdict<C: labwired_core::Cpu + ?Sized>(
     cpu: &C,
     elf: Option<&[u8]>,
+    policy: Option<&labwired_core::bus::MemoryPolicyReport>,
 ) -> Option<FaultVerdict> {
     let capture = cpu.fault_capture()?;
     let symbols = elf.and_then(|b| labwired_loader::SymbolProvider::from_bytes(b.to_vec()).ok());
-    decode_fault(
-        &capture,
-        symbols.as_ref().map(|s| s as &dyn FaultSymbolizer),
-    )
+    let symbolizer = symbols.as_ref().map(|s| s as &dyn FaultSymbolizer);
+    let mut verdict = decode_fault(&capture, symbolizer, None)?;
+    if let (Some(report), Some(addr_hex)) = (policy, verdict.fault_address.as_deref()) {
+        // `hex` renders `0x` + 8 fixed-width uppercase digits, no separators.
+        if let Ok(addr) = u64::from_str_radix(addr_hex.trim_start_matches("0x"), 16) {
+            let region = if report.flash.first.as_ref().is_some_and(|v| v.addr == addr) {
+                Some("flash")
+            } else if report.ram.first.as_ref().is_some_and(|v| v.addr == addr) {
+                Some("ram")
+            } else {
+                None
+            };
+            if let Some(region) = region {
+                verdict = decode_fault(
+                    &capture,
+                    symbolizer,
+                    Some(&labwired_core::fault_verdict::DataFaultReason::ReadOnlyRegion { region }),
+                )
+                .expect("capture is a fault");
+            }
+        }
+    }
+    Some(verdict)
 }
 
 /// The two human lines: the sentence, then the raw registers it came from.

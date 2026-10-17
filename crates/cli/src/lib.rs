@@ -1412,6 +1412,8 @@ fn handle_load_error<C: labwired_core::Cpu>(
         // Load failed: no successful machine run for footprint/paint/metrics.
         None,
         None,
+        // No machine: no policy report either.
+        None,
         None,
         // No machine: no CAN bridges ran.
         Vec::new(),
