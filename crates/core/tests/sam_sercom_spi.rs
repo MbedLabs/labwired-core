@@ -371,6 +371,7 @@ fn polling_guest_matches_legacy_with_auto_batches_and_scheduler() {
                 let (mut bus, seen) = board_with_drive(legacy);
                 bus.config.peripheral_tick_interval = if legacy { 1 } else { interval };
                 let mut machine = Machine::new(CortexM::new(), bus);
+                machine.config.peripheral_tick_interval = if legacy { 1 } else { interval };
                 machine.load_firmware(&polling_guest(correct_mux)).unwrap();
                 machine.advance(AdvanceRequest::run(Some(2000))).unwrap();
                 let marker = machine.bus.read_u32(0x20000000).unwrap();
