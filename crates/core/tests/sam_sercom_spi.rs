@@ -187,7 +187,7 @@ fn split_irq_mask_unmask_ack_read_and_software_pending_are_independent() {
 /// Authored Thumb bytes, not a vendor program. The guest configures SPI and
 /// NVIC, causes one selected source, acknowledges it in an actual handler,
 /// returns to thread and parks. No host writes IRQ/status or completes frames.
-fn split_irq_guest(line: usize, unmask: bool) -> ProgramImage {
+fn split_irq_guest(line: usize, unmask: bool, reset: bool) -> ProgramImage {
     let mut ops = Vec::<u16>::new();
     let mut literals = Vec::<(usize, u8, u32)>::new();
     let load = |ops: &mut Vec<u16>, literals: &mut Vec<(usize, u8, u32)>, rt, value| {
@@ -251,6 +251,10 @@ fn split_irq_guest(line: usize, unmask: bool) -> ProgramImage {
         1 << (irq % 32),
         false,
     );
+    if reset {
+        store(&mut ops, &mut literals, SPI as u32, 1, false);
+        store(&mut ops, &mut literals, MCLK as u32, 0, false);
+    }
     if unmask {
         ops.push(0xb662); // CPSIE i
     }
@@ -309,14 +313,15 @@ fn four_split_vectors_enter_once_acknowledge_return_and_obey_primask() {
                 continue;
             }
             for line in 0..4 {
-                for unmask in [true, false] {
+                for (unmask, reset) in [(true, false), (false, false), (true, true)] {
+                    let delivered = unmask && !reset;
                     let (mut bus, seen) = board_with_drive(legacy);
                     let (cpu, _) = labwired_core::system::cortex_m::configure_cortex_m(&mut bus);
                     bus.config.peripheral_tick_interval = interval;
                     let mut machine = Machine::new(cpu, bus);
                     machine.config.peripheral_tick_interval = interval;
                     machine
-                        .load_firmware(&split_irq_guest(line, unmask))
+                        .load_firmware(&split_irq_guest(line, unmask, reset))
                         .unwrap();
                     let mut entries = 0;
                     let mut previous = 0;
@@ -336,24 +341,31 @@ fn four_split_vectors_enter_once_acknowledge_return_and_obey_primask() {
                     assert_eq!(machine.bus.read_u32(0x20000000).unwrap(), 0xcafebabe);
                     assert_eq!(
                         entries,
-                        usize::from(unmask),
-                        "legacy={legacy} interval={interval} line={line}"
+                        usize::from(delivered),
+                        "legacy={legacy} interval={interval} line={line} reset={reset}"
                     );
-                    assert_eq!(returned, unmask);
-                    assert_eq!(machine.bus.read_u32(0x20000004).unwrap(), u32::from(unmask));
+                    assert_eq!(returned, delivered);
+                    assert_eq!(
+                        machine.bus.read_u32(0x20000004).unwrap(),
+                        u32::from(delivered)
+                    );
                     assert_eq!(
                         machine.bus.read_u32(0x20000008).unwrap(),
-                        if unmask { 62 + line as u32 } else { 0 }
+                        if delivered { 62 + line as u32 } else { 0 }
                     );
                     assert_eq!(machine.cpu.active_exception, 0);
                     assert_eq!(machine.bus.read_u32(0xe000ed28).unwrap(), 0);
                     assert_eq!(machine.bus.read_u32(0xe000ed2c).unwrap(), 0);
+                    if reset {
+                        assert_eq!(split_pending(&machine.bus), [false; 4]);
+                        assert_eq!(machine.bus.read_u8(SPI + 0x18).unwrap(), 0);
+                    }
                     if line == 0 {
                         let seen = seen.lock().unwrap();
                         assert!(seen.bytes.is_empty());
                         assert_eq!(seen.selects, 0, "pure IRQ wake must not select a slave");
                     }
-                    println!("SAM_SPLIT_IRQ legacy={legacy} interval={interval} line={line} unmask={unmask} entries={entries} returned={returned} exception={}", machine.cpu.active_exception);
+                    println!("SAM_SPLIT_IRQ legacy={legacy} interval={interval} line={line} unmask={unmask} reset={reset} entries={entries} returned={returned} exception={}", machine.cpu.active_exception);
                 }
             }
         }

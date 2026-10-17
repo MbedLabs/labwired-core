@@ -39,7 +39,9 @@ This does not add SPI client/SSL support or claim wire-edge timing.
   exercise all four handlers, leave time for a held-source re-pend, acknowledge
   inside the handler and return to thread exactly once. PRIMASK-blocked controls
   must run without handler entry. Scheduler intervals 1/64/1024 and the
-  one-cycle forced reference are checked separately.
+  one-cycle forced reference are checked separately. Additional guests reset
+  already-pending sources and gate MCLK before unmasking: no stale handler or
+  pending bit may survive, and an IRQ-only cancelled wake must not select CS.
 - Feature-off and feature-on PR checks run those integration tests nonvacuously
   and print actual guest rows. Require every enabled exact-head check and inspect
   the original hosted guest output before merging; a test declaration is not
