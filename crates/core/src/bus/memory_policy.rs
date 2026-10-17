@@ -233,6 +233,8 @@ impl crate::bus::SystemBus {
 
     /// Runs `f` with the CPU-write policy gate bypassed (non-CPU hardware
     /// writes: DMA engines). Nesting-safe; restores the previous state.
+    /// Currently used only by the generic DMA request path; peripheral-internal
+    /// DMA models writing through `&mut dyn Bus` are a recorded deferral.
     pub(crate) fn with_memory_policy_bypass<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
         let saved = self.memory_policy_bypass;
         self.memory_policy_bypass = true;

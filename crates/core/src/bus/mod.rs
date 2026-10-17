@@ -296,8 +296,14 @@ pub struct SystemBus {
     pub flash: LinearMemory,
     /// Violation record + counts + mirrored PC/cycle for the policy gate.
     pub(crate) memory_policy: crate::bus::memory_policy::MemoryPolicyState,
-    /// Non-CPU hardware writes (DMA) bypass the `cpu_writes` gate; host/loader
-    /// writes already bypass via direct `LinearMemory`.
+    /// Scoped bypass for the CPU-write policy gate. Set only by the generic
+    /// DMA request path (`execute_dma_request`), which is hardware, not CPU.
+    /// NOT yet covered: peripheral-internal DMA models that write through
+    /// `&mut dyn Bus` (nrf52/rp2040/imxrt/esp gdma, RTT host writes, …) —
+    /// scoped deferral, revisit if a chip ships a non-default `cpu_writes`
+    /// RAM policy. Loader writes bypass by construction (direct
+    /// `LinearMemory`); debugger/session writes through the bus ARE gated.
+    /// See [`SystemBus::with_memory_policy_bypass`].
     pub(crate) memory_policy_bypass: bool,
     pub ram: LinearMemory,
     /// Extra CPU-visible RAM/ROM windows beyond `flash`/`ram` (e.g. ESP32 IRAM
