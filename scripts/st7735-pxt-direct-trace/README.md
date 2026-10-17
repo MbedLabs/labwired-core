@@ -42,6 +42,30 @@ physical timing, performance or consumer adoption. Do not seed an identity LUT
 to make the existing ST7735R prototype render these bytes. Follow the
 [panel contract](../../docs/boards/pybadge-native.md) for those separate gaps.
 
+## Image-storage boundary — source review only
+
+At the same PXT pin,
+[RefImage accessors](https://github.com/microsoft/pxt-common-packages/blob/31abf23d118f35010fb75122e60a1eb2b6dffe9f/libs/base/pxtbase.h)
+and [image allocation](https://github.com/microsoft/pxt-common-packages/blob/31abf23d118f35010fb75122e60a1eb2b6dffe9f/libs/screen/image.cpp)
+use column-major storage with four-byte-aligned column strides for 4bpp:
+`byteHeight = ((height*4 + 31) >> 5) << 2` and
+`pix(x,y) = pix() + byteHeight*x + (y >> 1)`.
+The header SHA256 is
+`87c459c4d8fefa5bd851f862be8e83659185825c41448155caed34a22fe0bd17`;
+the image source SHA256 is
+`74b51956789d8cc6da461415ae80a5016e207b140ae190ebfc60fa022baac193`.
+Both match the inspected pinned package bundle.
+
+Thus a 4×2 RefImage has 16 pixel-storage bytes, while this direct method's
+loops consume four bytes for those dimensions. The small capture's tightly
+packed input is deliberately **not** a real RefImage. For 160×128, both extents
+are 10,240 bytes, but matching extents alone do not prove coordinate/color
+correctness or actual runtime dispatch. Height-dependent padding also matters
+for status bars and partial images. Before claiming production compatibility,
+execute the actual Image/caller boundary with distinct column/row sentinels and
+padding, including even full frames and supported partial dimensions. Do not
+silently transpose, repack or strip padding from the original source path.
+
 The workflow is intended to produce only the capture JSON and exact downloaded
 Microsoft license. It does not upload binaries or restricted firmware. Wait for
 the current orientation qualification before opening the next source PR; require
