@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! Opt-in SAMD51 software-triggered byte-block foundation, not full DMAC.
+//! Opt-in SAMD51 software-byte and SERCOM4 TX-byte profiles, not full DMAC.
 //! Primary register facts: DS60001507F sections 22.6, 22.7, 22.8 and 22.10.
 //! No ASF implementation/header is copied or imported. Unsupported descriptors latch an explicit
 //! simulator refusal; they never masquerade as hardware completion/error flags.
@@ -10,6 +10,14 @@ use std::any::Any;
 const ENABLE: u32 = 2;
 const TERR: u8 = 1;
 const TCMPL: u8 = 2;
+const SERCOM4_DATA: u64 = 0x43000028;
+const TX_TRIGGER: u32 = (0x0d << 8) | (2 << 20);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Profile {
+    SoftwareBlock,
+    Sercom4Tx,
+}
 
 #[derive(Clone, Copy, Debug, Default)]
 struct Descriptor {
@@ -78,6 +86,7 @@ struct Channel {
 #[derive(Debug)]
 pub struct SamDmacByte {
     mmio_base: u64,
+    profile: Profile,
     control: u16,
     base: u32,
     writeback: u32,
@@ -87,8 +96,17 @@ pub struct SamDmacByte {
 
 impl SamDmacByte {
     pub fn new(mmio_base: u64) -> Self {
+        Self::with_profile(mmio_base, Profile::SoftwareBlock)
+    }
+
+    pub fn new_sercom4_tx(mmio_base: u64) -> Self {
+        Self::with_profile(mmio_base, Profile::Sercom4Tx)
+    }
+
+    fn with_profile(mmio_base: u64, profile: Profile) -> Self {
         Self {
             mmio_base,
+            profile,
             control: 0,
             base: 0,
             writeback: 0,
@@ -160,7 +178,7 @@ impl SamDmacByte {
                             "SAM DMAC reset requires disabled controller".into(),
                         ));
                     }
-                    *self = Self::new(self.mmio_base);
+                    *self = Self::with_profile(self.mmio_base, self.profile);
                 } else {
                     if requested & !0x0f02 != 0 {
                         return Err(SimulationError::NotImplemented(
@@ -176,6 +194,11 @@ impl SamDmacByte {
                 }
             }
             0x10 => {
+                if self.profile == Profile::Sercom4Tx && requested != 0 {
+                    return Err(SimulationError::NotImplemented(
+                        "SERCOM4 TX profile excludes software/event trigger injection".into(),
+                    ));
+                }
                 for (i, c) in self.channels.iter_mut().enumerate() {
                     if requested & (1 << i) != 0 && c.control & ENABLE != 0 {
                         c.pending = true;
@@ -210,9 +233,29 @@ impl SamDmacByte {
                                 *c = Channel::default();
                             }
                         } else {
-                            let new = (c.control & !mask) | requested;
-                            if new & !ENABLE != 0 {
+                            let mut new = (c.control & !mask) | requested;
+                            if self.profile == Profile::SoftwareBlock && new & !ENABLE != 0 {
                                 return Err(SimulationError::NotImplemented("sam_dmac_byte: only software BLOCK/single-beat trigger configuration".into()));
+                            }
+                            if self.profile == Profile::Sercom4Tx {
+                                // TRIGSRC is enable-protected; TRIGACT is not
+                                // (DS60001507F p393). Disabled partial setup is
+                                // permitted, but an enabled channel must select
+                                // exactly SERCOM4 TX/BURST/SINGLE.
+                                if c.control & ENABLE != 0 {
+                                    new = (new & !0xff00) | (c.control & 0xff00);
+                                }
+                                let source = (new >> 8) & 0xff;
+                                let action = (new >> 20) & 3;
+                                if new & !(ENABLE | 0xff00 | (3 << 20)) != 0
+                                    || !matches!(source, 0 | 0x0d)
+                                    || !matches!(action, 0 | 2)
+                                    || (new & ENABLE != 0 && new & !ENABLE != TX_TRIGGER)
+                                {
+                                    return Err(SimulationError::NotImplemented(
+                                        "SERCOM4 TX requires TX13/BURST/SINGLE without other channel modes".into(),
+                                    ));
+                                }
                             }
                             if new & ENABLE == 0 || c.control & ENABLE == 0 {
                                 c.pending = false;
@@ -306,17 +349,55 @@ impl SamDmacByte {
         let source = d.address(true);
         let destination = d.address(false);
         if !bus.admits_ram_only_dma_extent(source, 1)
-            || !bus.admits_ram_only_dma_extent(destination, 1)
+            || (self.profile == Profile::SoftwareBlock
+                && !bus.admits_ram_only_dma_extent(destination, 1))
         {
             self.refuse_memory(index);
             return;
         }
-        let transferred = bus
-            .read_u8(source)
-            .and_then(|value| bus.write_u8(destination, value));
-        if transferred.is_err() {
-            self.error(bus, index);
-            return;
+        if self.profile == Profile::Sercom4Tx {
+            if destination != SERCOM4_DATA || d.control & 0x0c00 != 0x0400 {
+                self.refuse(
+                    index,
+                    "SERCOM4 TX requires unit SRCINC and fixed canonical DATA destination",
+                );
+                return;
+            }
+            match bus.dma_tx_request(destination) {
+                Some(true) => {}
+                Some(false) => return, // No data read, count or writeback progress.
+                None => {
+                    self.refuse(index, "SERCOM4 TX endpoint is not admitted by the bus");
+                    return;
+                }
+            }
+            let value = match bus.read_u8(source) {
+                Ok(value) => value,
+                Err(_) => {
+                    self.error(bus, index);
+                    return;
+                }
+            };
+            match bus.try_dma_write_tx_u8(destination, value) {
+                Ok(true) => {}
+                Ok(false) => return, // Rechecked readiness is not a bus fault.
+                Err(SimulationError::NotImplemented(_)) => {
+                    self.refuse(index, "SERCOM4 TX endpoint lost bus admission");
+                    return;
+                }
+                Err(_) => {
+                    self.error(bus, index);
+                    return;
+                }
+            }
+        } else {
+            let transferred = bus
+                .read_u8(source)
+                .and_then(|value| bus.write_u8(destination, value));
+            if transferred.is_err() {
+                self.error(bus, index);
+                return;
+            }
         }
         // Only the successful byte write commits this beat's count.
         d.remaining -= 1;
@@ -340,7 +421,14 @@ impl SamDmacByte {
     }
 
     fn refuse_memory(&mut self, index: usize) {
-        self.refusal = Some("mapped targets other than primary RAM are not admitted");
+        self.refuse(
+            index,
+            "mapped targets other than primary RAM are not admitted",
+        );
+    }
+
+    fn refuse(&mut self, index: usize, reason: &'static str) {
+        self.refusal = Some(reason);
         self.channels[index].control &= !ENABLE;
         self.channels[index].pending = false;
     }
@@ -399,10 +487,10 @@ impl Peripheral for SamDmacByte {
     fn needs_bus_tick(&self) -> bool {
         self.refusal.is_none()
             && self.control & 0x102 == 0x102
-            && self
-                .channels
-                .iter()
-                .any(|c| c.control & ENABLE != 0 && (c.pending || c.descriptor.is_some()))
+            && self.channels.iter().any(|c| {
+                c.control & ENABLE != 0
+                    && (self.profile == Profile::Sercom4Tx || c.pending || c.descriptor.is_some())
+            })
     }
     fn tick_with_bus(&mut self, bus: &mut dyn Bus) {
         if !self.needs_bus_tick() {
@@ -410,7 +498,9 @@ impl Peripheral for SamDmacByte {
         }
         for i in 0..32 {
             let c = self.channels[i];
-            if c.control & ENABLE != 0 && (c.pending || c.descriptor.is_some()) {
+            if c.control & ENABLE != 0
+                && (self.profile == Profile::Sercom4Tx || c.pending || c.descriptor.is_some())
+            {
                 self.service(bus, i);
                 if self.refusal.is_some() {
                     break;
@@ -448,7 +538,11 @@ impl Peripheral for SamDmacByte {
         Some(self)
     }
     fn snapshot(&self) -> serde_json::Value {
-        serde_json::json!({"peripheral":"sam_dmac_byte", "refusal":self.refusal,
+        let name = match self.profile {
+            Profile::SoftwareBlock => "sam_dmac_byte",
+            Profile::Sercom4Tx => "sam_dmac_sercom4_tx_byte",
+        };
+        serde_json::json!({"peripheral":name, "refusal":self.refusal,
             "channels":self.channels.iter().map(|c| serde_json::json!({
                 "control":c.control,"flags":c.flags,"pending":c.pending,
                 "remaining":c.descriptor.map(|d|d.remaining)

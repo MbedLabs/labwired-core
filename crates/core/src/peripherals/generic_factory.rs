@@ -160,6 +160,7 @@ pub const MODEL_TYPES: &[&str] = &[
     "sam_sercom_usart",
     "sam_sercom_spi",
     "sam_dmac_byte",
+    "sam_dmac_sercom4_tx_byte",
     // Reserve the full name: never fuzzy-coerce an unqualified SAM DMAC to STM32.
     "sam_dmac",
     // ⚠️ Load-bearing. Without this entry the fuzzy `contains("spi")` heuristic
@@ -565,6 +566,24 @@ pub fn try_build(
             Box::new(crate::peripherals::sam::dmac_byte::SamDmacByte::new(
                 p_cfg.base_address,
             ))
+        }
+        "sam_dmac_sercom4_tx_byte" => {
+            if p_cfg.irq != Some(31) || p_cfg.base_address != 0x4100a000 {
+                anyhow::bail!("SERCOM4 TX byte profile requires SAMD51 base 0x4100a000 and IRQ31");
+            }
+            if !p_cfg.clock.as_ref().is_some_and(|clocks| {
+                clocks
+                    .as_slice()
+                    .iter()
+                    .any(|gate| gate.controller == "mclk" && gate.reg == "AHBMASK" && gate.bit == 9)
+            }) {
+                anyhow::bail!(
+                    "SERCOM4 TX byte profile requires explicit mclk AHBMASK bit9 binding"
+                );
+            }
+            Box::new(
+                crate::peripherals::sam::dmac_byte::SamDmacByte::new_sercom4_tx(p_cfg.base_address),
+            )
         }
         "sam_sercom_spi" => {
             let number = |key: &str| -> anyhow::Result<u64> {
