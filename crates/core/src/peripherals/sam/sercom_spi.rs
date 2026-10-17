@@ -289,7 +289,7 @@ impl Peripheral for SamSercomSpi {
     fn needs_legacy_walk(&self) -> bool {
         !self.sched_driven()
     }
-    fn event_is_clock_tick(&self) -> bool {
+    fn requires_clocked_tick(&self) -> bool {
         // A cancelled wake has no clocked work. Let on_event retire it even
         // if firmware gated the controller immediately after SWRST/disable.
         self.has_bus_work()
