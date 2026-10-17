@@ -777,10 +777,12 @@ fn test_from_config_attaches_adxl345_external_device_to_i2c() {
         flash: MemoryRange {
             base: 0x0800_0000,
             size: 64000,
+            cpu_writes: labwired_config::CpuWritePolicy::Allow,
         },
         ram: MemoryRange {
             base: 0x2000_0000,
             size: 20000,
+            cpu_writes: labwired_config::CpuWritePolicy::Allow,
         },
         peripherals: vec![PeripheralConfig {
             id: "i2c1".to_string(),
@@ -1576,10 +1578,12 @@ fn test_from_config_attaches_bmp280_to_esp32c3_i2c0() {
         flash: MemoryRange {
             base: 0x4200_0000,
             size: 4000000,
+            cpu_writes: labwired_config::CpuWritePolicy::Allow,
         },
         ram: MemoryRange {
             base: 0x3FC8_0000,
             size: 400000,
+            cpu_writes: labwired_config::CpuWritePolicy::Allow,
         },
         peripherals: vec![
             PeripheralConfig {
@@ -1736,10 +1740,12 @@ fn test_from_config_attaches_mlx90640_to_esp32c3_i2c0_and_reads_eeprom() {
         flash: MemoryRange {
             base: 0x4200_0000,
             size: 4000000,
+            cpu_writes: labwired_config::CpuWritePolicy::Allow,
         },
         ram: MemoryRange {
             base: 0x3FC8_0000,
             size: 400000,
+            cpu_writes: labwired_config::CpuWritePolicy::Allow,
         },
         peripherals: vec![
             PeripheralConfig {
@@ -3348,10 +3354,12 @@ fn chip_with_i2c_and_uart() -> labwired_config::ChipDescriptor {
         flash: MemoryRange {
             base: 0x0800_0000,
             size: 64000,
+            cpu_writes: labwired_config::CpuWritePolicy::Allow,
         },
         ram: MemoryRange {
             base: 0x2000_0000,
             size: 20000,
+            cpu_writes: labwired_config::CpuWritePolicy::Allow,
         },
         peripherals: vec![
             PeripheralConfig {

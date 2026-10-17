@@ -1796,10 +1796,12 @@ mod tests {
             flash: labwired_config::MemoryRange {
                 base: 0x0800_0000,
                 size: 125 * 1024,
+                cpu_writes: labwired_config::CpuWritePolicy::Allow,
             },
             ram: labwired_config::MemoryRange {
                 base: 0x2000_0000,
                 size: 32000,
+                cpu_writes: labwired_config::CpuWritePolicy::Allow,
             },
             peripherals: vec![labwired_config::PeripheralConfig {
                 id: "gpioa".to_string(),
@@ -1869,10 +1871,12 @@ mod tests {
             flash: labwired_config::MemoryRange {
                 base: 0x0800_0000,
                 size: 125 * 1024,
+                cpu_writes: labwired_config::CpuWritePolicy::Allow,
             },
             ram: labwired_config::MemoryRange {
                 base: 0x2000_0000,
                 size: 32000,
+                cpu_writes: labwired_config::CpuWritePolicy::Allow,
             },
             peripherals: vec![labwired_config::PeripheralConfig {
                 id: "gpiob".to_string(),
@@ -1956,10 +1960,12 @@ mod tests {
             flash: labwired_config::MemoryRange {
                 base: 0x0000_0000,
                 size: 256 * 1024,
+                cpu_writes: labwired_config::CpuWritePolicy::Allow,
             },
             ram: labwired_config::MemoryRange {
                 base: 0x2000_0000,
                 size: 32 * 1024,
+                cpu_writes: labwired_config::CpuWritePolicy::Allow,
             },
             peripherals: vec![labwired_config::PeripheralConfig {
                 id: "porta".to_string(),
@@ -2043,10 +2049,12 @@ mod tests {
             flash: labwired_config::MemoryRange {
                 base: 0x0800_0000,
                 size: 125 * 1024,
+                cpu_writes: labwired_config::CpuWritePolicy::Allow,
             },
             ram: labwired_config::MemoryRange {
                 base: 0x2000_0000,
                 size: 32000,
+                cpu_writes: labwired_config::CpuWritePolicy::Allow,
             },
             peripherals: vec![labwired_config::PeripheralConfig {
                 id: "gpiob".to_string(),
