@@ -1449,6 +1449,33 @@ impl crate::Bus for SystemBus {
         self.find_peripheral_index(addr).is_some()
     }
 
+    fn admits_ram_only_dma_extent(&self, start: u64, length: u64) -> bool {
+        let contains = |base: u64, size: usize, address: u64| {
+            address
+                .checked_sub(base)
+                .is_some_and(|offset| offset < size as u64)
+        };
+        (0..length).all(|offset| {
+            let Some(address) = start.checked_add(offset) else {
+                return false;
+            };
+            // Routing windows remain present while a bus-assisted model is
+            // swapped out. Reject aliases and overlapping MMIO before RAM.
+            if self.has_mmio_window(self.resolve_ns_alias(address)) {
+                return false;
+            }
+            if contains(self.ram.base_addr, self.ram.data.len(), address) {
+                return true;
+            }
+            !contains(self.flash.base_addr, self.flash.data.len(), address)
+                && !(self.flash_boot_alias && address < self.flash.data.len() as u64)
+                && !self
+                    .extra_mem
+                    .iter()
+                    .any(|memory| contains(memory.base_addr, memory.data.len(), address))
+        })
+    }
+
     /// Hand the CPU-owned pull-up-disable switch to every pin port, each
     /// change bracketed for push capture (a pulled input that nothing outside
     /// holds moves, and so does a `gpio_net` member's own drive).

@@ -2552,6 +2552,15 @@ pub trait Bus {
         false
     }
 
+    /// Admit an extent for a RAM-only DMA profile without reaching through
+    /// the bus's concrete type. Mapped targets must be primary RAM, never
+    /// MMIO (including aliases), flash or extra mappings. Unmapped addresses
+    /// may be admitted so the actual read/write reports the transfer fault;
+    /// this is not a promise that the access will succeed. Default refusal.
+    fn admits_ram_only_dma_extent(&self, _start: u64, _length: u64) -> bool {
+        false
+    }
+
     /// A CPU-owned switch that disables every internal pull-up of the chip's
     /// pin ports (AVR `MCUCR.PUD`, ATmega328P datasheet §14.4.1). The CPU
     /// calls it when the bit changes; the bus hands it to each port
