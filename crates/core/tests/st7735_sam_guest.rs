@@ -634,3 +634,155 @@ fn st7735_guest_executes_captured_codal_commands_with_exact_palette_and_lut_nega
         }
     }
 }
+
+#[test]
+fn st7735_guest_gm00_all_address_orientations_and_wrong_mv_negative() {
+    // ST7735R v0.2 section 9.11.2: GM00 memory is 132x162. These are
+    // independently tabulated address windows and physical row-major indices,
+    // NOT generated with the model's orientation/mirroring helpers.
+    // Each window targets fixed physical columns 11..12, rows 7..10.
+    let vectors = [
+        (
+            0x00,
+            [0, 11, 0, 12],
+            [0, 7, 0, 10],
+            [1, 2, 3, 4, 5, 6, 7, 8],
+        ),
+        (
+            0x40,
+            [0, 119, 0, 120],
+            [0, 7, 0, 10],
+            [2, 1, 4, 3, 6, 5, 8, 7],
+        ),
+        (
+            0x80,
+            [0, 11, 0, 12],
+            [0, 151, 0, 154],
+            [7, 8, 5, 6, 3, 4, 1, 2],
+        ),
+        (
+            0xc0,
+            [0, 119, 0, 120],
+            [0, 151, 0, 154],
+            [8, 7, 6, 5, 4, 3, 2, 1],
+        ),
+        (
+            0x20,
+            [0, 7, 0, 10],
+            [0, 11, 0, 12],
+            [1, 5, 2, 6, 3, 7, 4, 8],
+        ),
+        (
+            0x60,
+            [0, 7, 0, 10],
+            [0, 119, 0, 120],
+            [5, 1, 6, 2, 7, 3, 8, 4],
+        ),
+        (
+            0xa0,
+            [0, 151, 0, 154],
+            [0, 11, 0, 12],
+            [4, 8, 3, 7, 2, 6, 1, 5],
+        ),
+        (
+            0xe0,
+            [0, 151, 0, 154],
+            [0, 119, 0, 120],
+            [8, 4, 7, 3, 6, 2, 5, 1],
+        ),
+    ];
+    // Literal expanded RGB666 colours for the unchanged captured palette.
+    let colours: [[u8; 3]; 8] = [
+        [255, 0, 0],
+        [0, 255, 0],
+        [0, 0, 255],
+        [255, 255, 0],
+        [255, 0, 255],
+        [0, 255, 255],
+        [255, 255, 255],
+        [16, 52, 85],
+    ];
+    let trace: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/st7735-codal-host-trace.json")).unwrap();
+    let captured = &trace["cases"][1];
+    assert_eq!(captured["width"], 4);
+    assert_eq!(captured["height"], 2);
+    for (madctl, columns, rows, indices) in vectors {
+        let expected: Vec<u8> = indices
+            .iter()
+            .flat_map(|&index| colours[index - 1])
+            .collect();
+        for legacy in [false, true] {
+            for wrong_mv in [false, true] {
+                if wrong_mv && madctl != 0x20 {
+                    continue;
+                }
+                // The original driver produced the palette and packed pixels.
+                // MADCTL/windows are authored protocol inputs, not a capture of
+                // that driver's rotated execution or deployed module settings.
+                let mut commands = captured["commands"].as_array().unwrap().clone();
+                assert_eq!(commands[0]["opcode"], 0x2a);
+                assert_eq!(commands[1]["opcode"], 0x2b);
+                commands[0]["data"] = serde_json::json!(columns);
+                commands[1]["data"] = serde_json::json!(rows);
+                commands.insert(
+                    0,
+                    serde_json::json!({
+                        "opcode": 0x36,
+                        "data": [if wrong_mv { 0 } else { madctl }],
+                    }),
+                );
+                let commands = serde_json::Value::Array(commands);
+                let mut machine = Machine::new(
+                    CortexM::new(),
+                    board_with_window(
+                        legacy,
+                        false,
+                        GlassWindow {
+                            col_offset: 11,
+                            row_offset: 7,
+                            cols: 2,
+                            rows: 4,
+                        },
+                    ),
+                );
+                machine
+                    .load_firmware(&guest_with_driver_trace(
+                        Wiring::Correct,
+                        None,
+                        None,
+                        Some(&commands),
+                        false,
+                    ))
+                    .unwrap();
+                for _ in 0..50000 {
+                    machine.step().unwrap();
+                    if machine.bus.read_u32(0x20000000).unwrap() == MARKER {
+                        break;
+                    }
+                }
+                assert_eq!(
+                    machine.bus.read_u32(0x20000000).unwrap(),
+                    MARKER,
+                    "MADCTL={madctl:#04x}, legacy={legacy}, wrong_mv={wrong_mv}"
+                );
+                let frame = artifact(&machine.bus);
+                if wrong_mv {
+                    // Removing MV, without transposing the address windows,
+                    // paints outside this fixed crop. Completion is still real.
+                    assert_eq!(frame.meta["known_pixels"], 0);
+                    assert_eq!(frame.meta["unknown_pixels"], 8);
+                    assert!(frame.bytes.is_none());
+                } else {
+                    assert_eq!(frame.meta["known_pixels"], 8);
+                    assert_eq!(frame.meta["unknown_pixels"], 0);
+                    assert_eq!(
+                        frame.bytes.as_deref(),
+                        Some(expected.as_slice()),
+                        "MADCTL={madctl:#04x}, legacy={legacy}"
+                    );
+                }
+            }
+        }
+    }
+}
