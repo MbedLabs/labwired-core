@@ -1,4 +1,5 @@
 use super::*;
+use crate::bus::CpuWritePolicy;
 use crate::{DmaRequest, Machine, SimulationConfig};
 use std::collections::HashMap;
 
@@ -3212,7 +3213,7 @@ fn str_fast_path_obeys_ram_policy() {
         "SystemBus::new() must provide RAM for this test"
     );
     let ram_addr = bus.ram.base_addr as u32;
-    bus.memory_policy.ram = crate::bus::CpuWritePolicy::Fault;
+    bus.memory_policy.ram = CpuWritePolicy::Fault;
     // str r0, [r1]  (Thumb-16 0x6008)
     assert!(bus.flash.write_u16(0x100, 0x6008));
     cpu.r0 = 0xAB;
@@ -3261,21 +3262,30 @@ fn t16_fast_decoder_defers_every_store_shape_under_ram_policy() {
     assert!(!bus.ram.data.is_empty());
     let ram_addr = bus.ram.base_addr as u32;
     // str r0,[r1]; strb r0,[r1]; strh r0,[r1]; str r0,[sp];
-    // str r0,[r1,r2]; strb r0,[r1,r2]; strh r0,[r1,r2]
-    let cases: [u16; 7] = [0x6008, 0x7008, 0x8008, 0x9000, 0x5008, 0x5408, 0x5208];
-    for op in cases {
+    // str r0,[r1,r0]; strb r0,[r1,r0]; strh r0,[r1,r0]
+    // The register forms encode Rm = 0, and r0 = 0xAB, so their target is
+    // ram_addr + 0xAB; the immediate forms target ram_addr.
+    let cases: [(u16, u32); 7] = [
+        (0x6008, 0),
+        (0x7008, 0),
+        (0x8008, 0),
+        (0x9000, 0),
+        (0x5008, 0xAB),
+        (0x5408, 0xAB),
+        (0x5208, 0xAB),
+    ];
+    for (op, target) in cases {
         let mut cpu = CortexM::new();
-        bus.memory_policy.ram = crate::bus::CpuWritePolicy::Fault;
+        bus.memory_policy.ram = CpuWritePolicy::Fault;
         cpu.r0 = 0xAB;
         cpu.r1 = ram_addr;
-        cpu.r2 = 0;
         cpu.sp = ram_addr;
         let pc = cpu.pc;
         let fast = cpu.execute_t16_fast_op(&mut bus, decode_thumb_16(op));
         assert!(!fast, "op {op:#06x} must defer, not commit");
         assert_eq!(cpu.pc, pc, "op {op:#06x} must not retire");
         assert_eq!(
-            bus.ram.read_u32(u64::from(ram_addr)),
+            bus.ram.read_u32(u64::from(ram_addr.wrapping_add(target))),
             Some(0),
             "op {op:#06x} committed to RAM"
         );
@@ -3511,7 +3521,7 @@ fn store_spin_refuses_under_ram_policy() {
     }
 
     let (mut cpu, mut bus) = fixture();
-    bus.memory_policy.ram = crate::bus::CpuWritePolicy::Fault;
+    bus.memory_policy.ram = CpuWritePolicy::Fault;
     assert_eq!(
         cpu.run_t16_store_spin(&mut bus, 40),
         0,
@@ -3571,7 +3581,7 @@ fn ram_fast_coalescer_refuses_under_ram_policy() {
     assert_eq!(bus.ram.read_u32(RAM), Some(10));
 
     let (mut cpu, mut bus) = fixture();
-    bus.memory_policy.ram = crate::bus::CpuWritePolicy::Fault;
+    bus.memory_policy.ram = CpuWritePolicy::Fault;
     assert_eq!(
         cpu.run_t16_ram_fast(&mut bus, 40, true),
         0,

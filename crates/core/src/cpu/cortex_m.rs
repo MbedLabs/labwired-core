@@ -918,6 +918,8 @@ impl CortexM {
             let addr = self
                 .read_reg(store_rn)
                 .wrapping_add(u32::from(store_imm) << 2);
+            // A non-Allow RAM policy must not commit through the closed-form
+            // recurrence: refuse the fold and defer to the gated slow path.
             if bus.ram_cpu_writes_blocked(u64::from(addr)) {
                 return executed;
             }
@@ -1026,6 +1028,8 @@ impl CortexM {
         }
 
         let addr = self.sp.wrapping_add(store_imm);
+        // A non-Allow RAM policy must not commit through the closed-form
+        // recurrence: refuse the fold and defer to the gated slow path.
         if bus.ram_cpu_writes_blocked(u64::from(addr)) {
             return 0;
         }
