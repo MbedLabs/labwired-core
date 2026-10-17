@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Rebuild the fault-verdict fixture ELFs. Needs arm-none-eabi-gcc.
 # The ELFs are committed so CI needs no cross toolchain.
+# Committed ELFs are CI inputs, not rebuild outputs. A different
+# arm-none-eabi-gcc than the one that built a committed ELF will churn its
+# bytes; only `fault-readonly-flash.elf` is expected to churn after the
+# kind-6 restructure (old kinds are line-stable, see fault_fixture.c).
 set -euo pipefail
 cd "$(dirname "$0")"
 build() {

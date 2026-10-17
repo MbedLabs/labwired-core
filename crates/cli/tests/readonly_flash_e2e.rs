@@ -88,6 +88,8 @@ fn store_to_read_only_flash_is_named_in_the_verdict() {
     );
     assert_eq!(v["kind"], "bus_fault");
     assert_eq!(v["fault_address"], "0x08001000");
+    assert_eq!(v["precise"], true);
+    assert_eq!(v["fault_address_source"], "BFAR");
 }
 
 #[test]
@@ -98,4 +100,5 @@ fn result_json_carries_the_memory_policy_block() {
     assert_eq!(mp["flash"]["violations"], 1);
     assert_eq!(mp["flash"]["first"]["addr"], 0x0800_1000u64);
     assert_eq!(mp["ram"]["mode"], "allow");
+    assert_eq!(mp["ram"]["violations"], 0);
 }
