@@ -11,7 +11,7 @@ const ENABLE: u32 = 2;
 const TERR: u8 = 1;
 const TCMPL: u8 = 2;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 struct Descriptor {
     control: u16,
     remaining: u16,
@@ -66,7 +66,7 @@ impl Descriptor {
     }
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 struct Channel {
     control: u32,
     interrupt_enable: u8,
@@ -75,6 +75,7 @@ struct Channel {
     descriptor: Option<Descriptor>,
 }
 
+#[derive(Debug)]
 pub struct SamDmacByte {
     mmio_base: u64,
     control: u16,
