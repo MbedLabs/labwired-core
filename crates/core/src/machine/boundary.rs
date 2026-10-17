@@ -184,15 +184,28 @@ impl<C: Cpu> Machine<C> {
                                 sec.secondary_execution_state()
                                     != crate::SecondaryExecutionState::ResetHeld
                             });
+                        // A parked secondary that wakes in this step (its
+                        // interrupt arrived) runs from the next cycle on: end
+                        // the window so the next one locksteps it. Left in this
+                        // loop, which steps a secondary only while it is
+                        // parked, it sat unstepped for the rest of the window,
+                        // and the result depended on where an `advance` call
+                        // happened to end.
+                        let mut secondary_woke = false;
                         if let Some(sec) = self.cpu_secondary.as_mut() {
                             if sec.is_parked_idle() || secondary_released {
+                                let was_parked = sec.is_parked_idle();
                                 sec.step(&mut self.bus, &self.observers, &self.config)?;
                                 secondary_steps += retired;
+                                secondary_woke = was_parked && !sec.is_parked_idle();
                             }
                         }
                         self.tick_peripherals_at_boundary();
                         #[cfg(feature = "event-scheduler")]
                         self.drain_scheduler_events();
+                        if secondary_woke {
+                            break;
+                        }
                         if defer_ended || self.check_secondary_defer() {
                             break;
                         }

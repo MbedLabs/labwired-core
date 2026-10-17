@@ -7167,7 +7167,8 @@ boards:
     # records, CCOUNT and machine cycles with the skip on and off). Ran: core
     # lib (event-scheduler), esp32s3_smp_yield_latency,
     # esp32s3_irq_cache_differential, esp32s3_walk_differential, xtensa_exec,
-    # xtensa_lx7. ACK, NOT A CAPTURE.
+    # xtensa_lx7. ACK, NOT A CAPTURE. Confirmed by the maintainer (Andrii
+    # Shylenko, 2026-10-17).
     # 2026-10-17, follow-up to #1396: poll_loop.rs records the bytes a proven
     # iteration reads and can catch a deferred loop up (the machine runs the
     # primary alone beside a secondary in such a loop). No register, reset
