@@ -62,10 +62,6 @@ impl SimulationObserver for Trace {
             self.record("accept", u32::from(value));
         } else if address == u64::from(PORT + 0x18) && value & 0x80 != 0 {
             self.record("cs-store", u32::from(value));
-        } else if address == u64::from(MARK + 0x10) && value != 0 {
-            self.record("pause-start", u32::from(value));
-        } else if address == u64::from(MARK + 0x14) && value != 0 {
-            self.record("pause-end", u32::from(value));
         }
     }
     fn on_step_start(&self, pc: u32, _opcode: u32) {
@@ -366,6 +362,8 @@ fn cpu_tx_driver_separates_dma_wire_txc_cs_and_real_callback_with_premature_muta
                 let mut complete_seen = false;
                 let mut txc_seen = false;
                 let mut gap = false;
+                let mut pause_started = false;
+                let mut pause_ended = false;
                 for step in 0..20000 {
                     *trace.step.lock().unwrap() = step;
                     machine.step().unwrap();
@@ -406,6 +404,20 @@ fn cpu_tx_driver_separates_dma_wire_txc_cs_and_real_callback_with_premature_muta
                     if !txc_seen && spi_flags & 2 != 0 {
                         trace.record("txc", u32::from(spi_flags));
                         txc_seen = true;
+                    }
+                    // RAM word stores do not publish bus on_memory_write on
+                    // this path. Observe the CPU-written witnesses read-only,
+                    // just as count/flags above; do not inject or infer them
+                    // from an anticipated guest PC or elapsed host time.
+                    let start = machine.bus.read_u32(u64::from(MARK + 0x10)).unwrap();
+                    let end = machine.bus.read_u32(u64::from(MARK + 0x14)).unwrap();
+                    if !pause_started && start != 0 {
+                        trace.record("pause-start", start);
+                        pause_started = true;
+                    }
+                    if !pause_ended && end != 0 {
+                        trace.record("pause-end", end);
+                        pause_ended = true;
                     }
                 }
                 let events = trace.events.lock().unwrap().clone();
