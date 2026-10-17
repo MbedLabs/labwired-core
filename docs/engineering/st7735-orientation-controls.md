@@ -1,10 +1,29 @@
-# ST7735 GM00 address orientations — qualification pending
+# ST7735 GM00 address orientations — authored guest qualified
 
 This test-only P3 follow-up extends the
 [captured-command SAM controls](st7735-codal-sam-binding.md). It changes no
 production model, panel descriptor, consumer pin, capture or performance floor.
-The seven-test target has not yet been executed at this source; no passing guest
-result or production-panel qualification is claimed.
+All seven guest tests passed in both feature configurations. This qualifies
+authored GM00 controller-memory controls, not a production panel.
+
+## Landed qualification — 2026-10-07
+
+[PR168](https://github.com/CrispStrobe/labwired-core/pull/168) merged as
+`02f6abafb432a3ee3e9461c1c0d3ad3e2b44e094`, from reviewed source
+`3c52bd9a4d271041de71610292940c1fff58bae3`. The tested merge checkout
+`c2e3683bbbd99fd60b1d7000db03bb26a90fd7b3` and landed main have identical
+tree `a23646d415f18ccd7495b8cfa3934e85a3a22629`.
+All 20 enabled checks passed; four declared full/warm/image jobs skipped.
+
+[Core CI37639536439](https://github.com/CrispStrobe/labwired-core/actions/runs/37639536439)
+executed seven tests, zero failed/ignored/filtered in both the
+[feature-off retry](https://github.com/CrispStrobe/labwired-core/actions/runs/37639536439/job/112869497757)
+and [feature-on scheduler job](https://github.com/CrispStrobe/labwired-core/actions/runs/37639536439/job/112869500273).
+The original feature-off attempt never acquired a runner and executed no tests;
+its infrastructure failure remains recorded. One targeted retry passed without
+source or workflow changes. The
+[live original CODAL trace](https://github.com/CrispStrobe/labwired-core/actions/runs/37639536493)
+also passed. No new benchmark, panel binding or consumer adoption is claimed.
 
 ## Independent address vectors
 

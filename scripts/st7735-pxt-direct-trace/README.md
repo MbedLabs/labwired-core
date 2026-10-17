@@ -67,9 +67,10 @@ padding, including even full frames and supported partial dimensions. Do not
 silently transpose, repack or strip padding from the original source path.
 
 The workflow is intended to produce only the capture JSON and exact downloaded
-Microsoft license. It does not upload binaries or restricted firmware. Wait for
-the current orientation qualification before opening the next source PR; require
-the actual capture/mutant and all enabled exact-head checks before landing.
+Microsoft license. It does not upload binaries or restricted firmware.
+The prerequisite [authored orientation guest](../../docs/engineering/st7735-orientation-controls.md)
+landed in PR168; it does not qualify this separate direct-renderer capture.
+Require the actual capture/mutant and all enabled exact-head checks before landing.
 
 ## Referenced source and notice
 
