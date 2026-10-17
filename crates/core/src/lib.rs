@@ -2570,6 +2570,20 @@ pub trait Bus {
         false
     }
 
+    /// Byte TX readiness after bus routing/clock admission. Unsupported
+    /// endpoints return None; supported but blocked endpoints return false.
+    fn dma_tx_request(&self, _addr: u64) -> Option<bool> {
+        None
+    }
+
+    /// Accept one TX byte through the bus's normal MMIO bookkeeping. False
+    /// means not ready, not a successful beat. Default explicit refusal.
+    fn try_dma_write_tx_u8(&mut self, _addr: u64, _value: u8) -> SimResult<bool> {
+        Err(SimulationError::NotImplemented(
+            "bus has no admitted byte TX DMA endpoint".into(),
+        ))
+    }
+
     /// Admit an extent for a RAM-only DMA profile without reaching through
     /// the bus's concrete type. Mapped targets must be primary RAM, never
     /// MMIO (including aliases), flash or extra mappings. Unmapped addresses

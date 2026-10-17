@@ -188,6 +188,156 @@ fn dma_tx_endpoint_reports_acceptance_not_generic_store_success() {
     assert_eq!(seen.lock().unwrap().bytes, vec![0x31]);
 }
 
+#[test]
+fn dma_tx_bus_acceptance_preserves_gates_observers_irqs_and_pump() {
+    #[derive(Debug, Default)]
+    struct Writes(Mutex<Vec<(u64, u8, u8)>>);
+    impl labwired_core::SimulationObserver for Writes {
+        fn on_memory_write(&self, addr: u64, old: u8, new: u8) {
+            self.0.lock().unwrap().push((addr, old, new));
+        }
+    }
+    for legacy in [true, false] {
+        for interval in [1, 64, 1024] {
+            if interval > 1 && (legacy || !event_scheduler_enabled()) {
+                continue;
+            }
+            let (mut bus, seen) = board_with_drive(legacy);
+            let (cpu, _) = labwired_core::system::cortex_m::configure_cortex_m(&mut bus);
+            bus.config.peripheral_tick_interval = interval;
+            let mut machine = Machine::new(cpu, bus);
+            machine.config.peripheral_tick_interval = interval;
+            let mut bytes = vec![0u8; 0x100];
+            bytes[..4].copy_from_slice(&0x20004000u32.to_le_bytes());
+            bytes[4..8].copy_from_slice(&0x4101u32.to_le_bytes());
+            bytes.extend(0xb672u16.to_le_bytes()); // Mask CPU delivery, not DMA requests.
+            bytes.extend(0xe7feu16.to_le_bytes()); // Owned idle CPU, no DMA programming.
+            let mut image = ProgramImage::new(0x4101, Arch::Arm);
+            image.add_segment(0x4000, bytes);
+            machine.load_firmware(&image).unwrap();
+            machine.step().unwrap();
+            enable(&mut machine.bus);
+            machine.bus.write_u8(SPI + 0x16, 3).unwrap();
+            for _ in 0..10 {
+                machine.step().unwrap();
+            }
+            assert!(split_pending(&machine.bus)[0]);
+            let writes = Arc::new(Writes::default());
+            machine.bus.add_observer(writes.clone());
+            // Explicit host bus controls: these are not CPU-driven DMA guests.
+            for gate in [MCLK, GCLK] {
+                machine.bus.write_u32(gate, 0).unwrap();
+                let before = writes.0.lock().unwrap().len();
+                assert_eq!(machine.bus.dma_tx_request(SPI + 0x28), Some(false));
+                assert!(!machine.bus.try_dma_write_tx_u8(SPI + 0x28, 0x99).unwrap());
+                assert_eq!(writes.0.lock().unwrap().len(), before);
+                machine
+                    .bus
+                    .write_u32(gate, if gate == MCLK { 1 } else { 1 << 6 })
+                    .unwrap();
+            }
+            assert_eq!(machine.bus.dma_tx_request(SPI + 0x28), Some(true));
+            let before = writes.0.lock().unwrap().len();
+            assert!(machine.bus.try_dma_write_tx_u8(SPI + 0x28, 0x31).unwrap());
+            assert_eq!(writes.0.lock().unwrap().len(), before + 1);
+            assert_eq!(
+                writes.0.lock().unwrap().last().copied(),
+                Some((SPI + 0x28, 0, 0x31))
+            );
+            assert!(!split_pending(&machine.bus)[0]);
+            let before = writes.0.lock().unwrap().len();
+            assert!(!machine.bus.try_dma_write_tx_u8(SPI + 0x28, 0x32).unwrap());
+            assert_eq!(writes.0.lock().unwrap().len(), before);
+            // CPU stores retain their old successful/dropped behavior and notification.
+            machine.bus.write_u8(SPI + 0x28, 0x55).unwrap();
+            assert_eq!(writes.0.lock().unwrap().len(), before + 1);
+            for gate in [MCLK, GCLK] {
+                machine.bus.write_u32(gate, 0).unwrap();
+                let before = writes.0.lock().unwrap().len();
+                assert!(!machine.bus.try_dma_write_tx_u8(SPI + 0x28, 0x99).unwrap());
+                assert_eq!(writes.0.lock().unwrap().len(), before);
+                for _ in 0..100 {
+                    machine.step().unwrap();
+                }
+                assert!(seen.lock().unwrap().bytes.is_empty());
+                machine
+                    .bus
+                    .write_u32(gate, if gate == MCLK { 1 } else { 1 << 6 })
+                    .unwrap();
+            }
+            for _ in 0..100 {
+                machine.step().unwrap();
+            }
+            assert_eq!(seen.lock().unwrap().bytes, [0x31]);
+            assert!(split_pending(&machine.bus)[1]);
+            let before = writes.0.lock().unwrap().len();
+            assert!(machine.bus.try_dma_write_tx_u8(SPI + 0x28, 0x32).unwrap());
+            assert_eq!(writes.0.lock().unwrap().len(), before + 1);
+            assert_eq!(
+                writes.0.lock().unwrap().last().copied(),
+                Some((SPI + 0x28, 0x31 ^ 0x5a, 0x32))
+            );
+            assert!(!split_pending(&machine.bus)[0]);
+            assert!(!split_pending(&machine.bus)[1]);
+            // Observer sampling must not consume the previous RX byte.
+            assert_eq!(machine.bus.read_u8(SPI + 0x28).unwrap(), 0x31 ^ 0x5a);
+            machine.bus.write_u32(SPI, 1).unwrap();
+            machine.bus.write_u32(MCLK, 0).unwrap();
+            let before = writes.0.lock().unwrap().len();
+            assert!(!machine.bus.try_dma_write_tx_u8(SPI + 0x28, 0x99).unwrap());
+            assert_eq!(writes.0.lock().unwrap().len(), before);
+            for _ in 0..100 {
+                machine.step().unwrap();
+            }
+            assert_eq!(seen.lock().unwrap().bytes, [0x31]);
+            assert!(machine.sched.is_empty());
+            machine.bus.ns_alias_offset = Some(0u64.wrapping_sub(0x10000000));
+            for addr in [
+                SPI + 0x29,
+                SPI + 0x18,
+                0x41000000,
+                0x53000028,
+                0x60000000,
+                0x20000000,
+                0x100,
+            ] {
+                let before = writes.0.lock().unwrap().len();
+                assert_eq!(machine.bus.dma_tx_request(addr), None);
+                assert!(machine.bus.try_dma_write_tx_u8(addr, 0x99).is_err());
+                assert_eq!(writes.0.lock().unwrap().len(), before);
+            }
+            let before = writes.0.lock().unwrap().len();
+            machine
+                .bus
+                .extra_mem
+                .push(labwired_core::memory::LinearMemory::new(1, SPI + 0x28));
+            assert_eq!(machine.bus.dma_tx_request(SPI + 0x28), None);
+            assert!(machine.bus.try_dma_write_tx_u8(SPI + 0x28, 0x99).is_err());
+            assert_eq!(machine.bus.extra_mem.last().unwrap().data, [0]);
+            machine.bus.extra_mem.pop();
+            let old_ram = machine.bus.ram.base_addr;
+            machine.bus.ram.base_addr = SPI + 0x28;
+            let first_ram = machine.bus.ram.data[0];
+            assert_eq!(machine.bus.dma_tx_request(SPI + 0x28), None);
+            assert!(machine.bus.try_dma_write_tx_u8(SPI + 0x28, 0x99).is_err());
+            assert_eq!(machine.bus.ram.data[0], first_ram);
+            machine.bus.ram.base_addr = old_ram;
+            let old_flash = machine.bus.flash.base_addr;
+            machine.bus.flash.base_addr = SPI + 0x28;
+            let first_flash = machine.bus.flash.data[0];
+            assert_eq!(machine.bus.dma_tx_request(SPI + 0x28), None);
+            assert!(machine.bus.try_dma_write_tx_u8(SPI + 0x28, 0x99).is_err());
+            assert_eq!(machine.bus.flash.data[0], first_flash);
+            machine.bus.flash.base_addr = old_flash;
+            assert_eq!(writes.0.lock().unwrap().len(), before);
+            assert_eq!(machine.cpu.active_exception, 0);
+            assert_eq!(machine.bus.read_u32(0xe000ed28).unwrap(), 0);
+            assert_eq!(machine.bus.read_u32(0xe000ed2c).unwrap(), 0);
+            println!("SAM_TX_BUS legacy={legacy} interval={interval} accepted=2 observed=1 reset_dropped=1 blocked=6 refused=10 irq_cleared=true");
+        }
+    }
+}
+
 fn split_pending(bus: &SystemBus) -> [bool; 4] {
     use std::sync::atomic::Ordering;
     let nvic = bus.nvic.as_ref().unwrap();
