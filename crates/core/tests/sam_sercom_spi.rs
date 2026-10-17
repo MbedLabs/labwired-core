@@ -4,8 +4,10 @@
 use labwired_config::{ChipDescriptor, SystemManifest};
 use labwired_core::{
     bus::SystemBus,
+    cpu::cortex_m::CortexM,
+    memory::ProgramImage,
     peripherals::spi::{SpiDevice, SpiSampling},
-    Bus,
+    Arch, Bus, Machine,
 };
 use std::sync::{Arc, Mutex};
 
@@ -197,4 +199,85 @@ fn reset_cancels_inflight_and_preserves_attachment_and_edges_are_rejected() {
     bus.write(SPI + 0x28, 0x73).unwrap();
     settle(&mut bus);
     assert_eq!(seen.lock().unwrap().bytes, [0x73]);
+}
+
+/// Small independently authored Thumb guest: MMIO setup, DATA writes, TXC
+/// polling, then an SRAM completion marker. Only code/vector bytes are loaded;
+/// the host does not configure the controller or complete a guest transfer.
+fn polling_guest(correct_mux: bool) -> ProgramImage {
+    let mut ops = Vec::<u16>::new();
+    let mut literals = Vec::<(usize, u8, u32)>::new();
+    let load = |ops: &mut Vec<u16>, literals: &mut Vec<(usize, u8, u32)>, rt, value| {
+        literals.push((ops.len(), rt, value));
+        ops.push(0);
+    };
+    let stores = [
+        (MCLK, 1, false),
+        (GCLK, 1 << 6, false),
+        (PORT + 0x36, if correct_mux { 0x20 } else { 0x30 }, true),
+        (PORT + 0x37, 0x20, true),
+        (PORT + 0x4d, 1, true),
+        (PORT + 0x4f, 1, true),
+        (PORT, (1 << 7) | (1 << 5), false),
+        (SPI, MASTER, false),
+        (SPI + 4, 1 << 17, false),
+        (SPI + 0x0c, 1, true),
+        (SPI, MASTER | 2, false),
+        (SPI + 0x28, 0x51, true),
+        (PORT + 0x18, 1 << 5, false),
+        (SPI + 0x28, 0x42, true),
+        (0x20000000, 0xcafebabe, false),
+    ];
+    for (addr, value, byte) in stores {
+        load(&mut ops, &mut literals, 0, addr as u32);
+        load(&mut ops, &mut literals, 1, value);
+        ops.push(if byte { 0x7001 } else { 0x6001 }); // STRB/STR r1,[r0]
+        if addr == SPI + 0x28 {
+            load(&mut ops, &mut literals, 0, (SPI + 0x18) as u32);
+            // LDRB r1,[r0]; MOVS r2,#2; TST r1,r2; BEQ -10 (poll TXC).
+            ops.extend([0x7801, 0x2202, 0x4211, 0xd0fb]);
+        }
+    }
+    ops.push(0xe7fe); // firmware parks after completion
+    if ops.len() & 1 != 0 {
+        ops.push(0xbf00);
+    }
+    let mut code: Vec<u8> = ops.iter().flat_map(|op| op.to_le_bytes()).collect();
+    for (index, rt, value) in literals {
+        let pc = ((index * 2 + 4) & !3) as u32;
+        let delta = code.len() as u32 - pc;
+        assert_eq!(delta & 3, 0);
+        assert!(delta <= 1020);
+        let op = 0x4800 | (u16::from(rt) << 8) | (delta / 4) as u16;
+        code[index * 2..index * 2 + 2].copy_from_slice(&op.to_le_bytes());
+        code.extend(value.to_le_bytes());
+    }
+    let mut application = vec![0u8; 0x100];
+    application[0..4].copy_from_slice(&0x20004000u32.to_le_bytes());
+    application[4..8].copy_from_slice(&0x4101u32.to_le_bytes());
+    application.extend(code);
+    let mut image = ProgramImage::new(0x4101, Arch::Arm);
+    image.add_segment(0x4000, application);
+    image
+}
+
+#[test]
+fn cortex_m_guest_polls_real_spi_completion_and_wrong_mux_cannot_complete() {
+    for correct_mux in [true, false] {
+        let (bus, seen) = board();
+        let mut machine = Machine::new(CortexM::new(), bus);
+        machine.load_firmware(&polling_guest(correct_mux)).unwrap();
+        for _ in 0..2000 {
+            machine.step().unwrap();
+        }
+        let marker = machine.bus.read_u32(0x20000000).unwrap();
+        if correct_mux {
+            assert_eq!(marker, 0xcafebabe);
+            assert_eq!(seen.lock().unwrap().bytes, [0x51, 0x42]);
+            assert_eq!(seen.lock().unwrap().dc, [false, true]);
+        } else {
+            assert_ne!(marker, 0xcafebabe);
+            assert!(seen.lock().unwrap().bytes.is_empty());
+        }
+    }
 }
