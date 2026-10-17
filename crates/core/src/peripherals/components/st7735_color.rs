@@ -260,10 +260,10 @@ mod tests {
     #[test]
     fn st7735_color_complete_lut_masks_reserved_bits_and_affects_future_only() {
         let mut decoder = ready(5);
-        decoder.push(0x00);
+        assert_eq!(decoder.push(0x00), None);
         let old_pixel = decoder.push(0x00);
         decoder.install_complete_lut(&[0xff; 128]);
-        decoder.push(0x00);
+        assert_eq!(decoder.push(0x00), None);
         assert_eq!(decoder.push(0x00), Some(DecodedPixel::Rgb666([63; 3])));
         let table = lut();
         assert_eq!(
@@ -316,7 +316,7 @@ mod tests {
             for prefix in 0..group {
                 let mut decoder = ready(depth);
                 for _ in 0..prefix {
-                    decoder.push(0xff);
+                    let _ = decoder.push(0xff);
                 }
                 decoder.discard_partial();
                 let mut fresh = ready(depth);
@@ -330,7 +330,7 @@ mod tests {
     #[test]
     fn st7735_color_software_reset_retains_format_and_lut_hardware_does_not() {
         let mut decoder = ready(3);
-        decoder.push(0xff);
+        assert_eq!(decoder.push(0xff), None);
         decoder.software_reset();
         assert_eq!(decoder.format(), SerialFormat::Rgb444);
         assert_eq!(decoder.push(0x12), None);
@@ -349,7 +349,7 @@ mod tests {
     #[test]
     fn st7735_color_colmod_change_discards_partial_reserved_depth_rejects_unchanged() {
         let mut decoder = ready(3);
-        decoder.push(0xff);
+        assert_eq!(decoder.push(0xff), None);
         assert!(decoder.set_colmod(0x65));
         assert_eq!(decoder.format(), SerialFormat::Rgb565);
         assert_eq!(decoder.push(0x12), None);

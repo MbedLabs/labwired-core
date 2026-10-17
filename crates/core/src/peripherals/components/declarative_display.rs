@@ -2406,6 +2406,23 @@ mod tests {
     }
 
     #[test]
+    fn display_command_default_cs_boundary_still_discards_incomplete_parameters() {
+        let mut display = long_parameter_display(128).unwrap();
+        assert_eq!(display.spec.cs_select, DisplayCsSelect::ClosesStream);
+        display.command_byte(0x2d);
+        for _ in 0..127 {
+            display.data_byte(0xa5);
+        }
+        display.cs_release();
+        display.cs_select();
+        display.set_dc_level(true);
+        display.transfer(0x5a);
+        assert_eq!(display.vars["last_param"], 0);
+        assert_eq!(display.framing, Framing::Idle);
+        assert_eq!(display.param_want, 0);
+    }
+
+    #[test]
     fn display_command_interruption_cannot_commit_stale_128_byte_payload() {
         let mut display = long_parameter_display(128).unwrap();
         display.command_byte(0x2d);
