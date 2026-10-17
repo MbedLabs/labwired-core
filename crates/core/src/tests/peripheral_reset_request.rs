@@ -31,8 +31,34 @@ mod peripheral_reset_request_tests {
             std::mem::take(&mut self.latch)
         }
 
+        fn latched_reset_cause(&self) -> Option<crate::PeripheralResetCause> {
+            self.latch.then_some(crate::PeripheralResetCause::Watchdog)
+        }
+
         fn reset_request_capable(&self) -> bool {
             true
+        }
+    }
+
+    /// Records the cause the machine publishes after it drains a request.
+    /// The test holds the same `Arc` the peripheral writes, so the assertion
+    /// does not downcast the bus device. `Peripheral` requires `Debug + Send`.
+    #[derive(Debug)]
+    struct CauseListener {
+        seen: std::sync::Arc<std::sync::Mutex<Option<crate::PeripheralResetCause>>>,
+    }
+
+    impl Peripheral for CauseListener {
+        fn read(&self, _offset: u64) -> SimResult<u8> {
+            Ok(0)
+        }
+
+        fn write(&mut self, _offset: u64, _value: u8) -> SimResult<()> {
+            Ok(())
+        }
+
+        fn on_peripheral_reset(&mut self, cause: crate::PeripheralResetCause) {
+            *self.seen.lock().expect("cause lock") = Some(cause);
         }
     }
 
@@ -53,6 +79,16 @@ mod peripheral_reset_request_tests {
             0x100,
             None,
             Box::new(ResetOnWrite::default()),
+        );
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        bus.add_peripheral(
+            "cause_listener",
+            PERIPH_BASE + 0x100,
+            0x100,
+            None,
+            Box::new(CauseListener {
+                seen: std::sync::Arc::clone(&seen),
+            }),
         );
         let mut m = Machine::new(cpu, bus);
 
@@ -82,6 +118,10 @@ mod peripheral_reset_request_tests {
             m.cpu.get_register(13),
             MSP,
             "SP must reload from vector[0] after a peripheral reset request"
+        );
+        assert_eq!(
+            *seen.lock().expect("cause lock"),
+            Some(crate::PeripheralResetCause::Watchdog)
         );
     }
 }

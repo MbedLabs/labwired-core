@@ -41,6 +41,13 @@ const DEFAULT_SCAN_EVERY_POLLS: u64 = 64;
 /// Candidates probed per `scan` call. A 1 MiB RAM holds 262,144 candidates, so
 /// one poll cannot sweep it; the cursor resumes where the last poll stopped.
 const SCAN_CANDIDATES_PER_POLL: u32 = 4096;
+/// Ranges this size or smaller are real SRAM and are scanned on every poll.
+/// A 1 MiB RAM still uses the resumable cursor (see the sweep test).
+const BOUNDED_SCAN_RANGE: u64 = 256 * 1024;
+/// Above this, the window is memory-mapped flash (K32W QSPI is 4 MiB), not a
+/// place a control block is published. Walking it after a miss during `_DoInit`
+/// does not return to SRAM inside a normal test budget.
+const SKIP_SCAN_RANGE_ABOVE: u64 = 1024 * 1024;
 
 /// Final-state RTT diagnostics, surfaced in `result.json`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -161,6 +168,12 @@ impl SeggerRtt {
         (self.polls - 1) % self.scan_every_polls == 0
     }
 
+    fn has_bounded_scan_range(&self) -> bool {
+        self.scan_ranges
+            .iter()
+            .any(|&(_, size)| (16u64..=BOUNDED_SCAN_RANGE).contains(&size))
+    }
+
     /// True when the 16-byte RTT ID sits at `addr`. Bails on the first
     /// mismatching byte, so a full no-hit sweep costs one read per candidate
     /// rather than sixteen.
@@ -180,18 +193,17 @@ impl SeggerRtt {
             .any(|&(base, size)| addr >= base && addr.saturating_add(len) <= base + size)
     }
 
-    /// Bounded magic sweep over the configured ranges. It resumes from
-    /// `scan_cursor` and probes at most `SCAN_CANDIDATES_PER_POLL` candidates
-    /// per call, so a 1 MiB RAM is swept across polls instead of restarting —
-    /// and re-reading — from the first range base every time.
+    /// Resumable magic sweep. Ranges above [`SKIP_SCAN_RANGE_ABOVE`] are not
+    /// candidates. The cursor resumes inside the ranges that remain, so a
+    /// 1 MiB SRAM is still spread across polls.
     fn scan(&mut self, bus: &dyn Bus) -> Option<u32> {
-        let n = self.scan_ranges.len();
-        if n == 0 {
+        if self.scan_ranges.is_empty() {
             self.scan_cursor = (0, 0);
             return None;
         }
         let mut budget = SCAN_CANDIDATES_PER_POLL;
         let (mut range_idx, mut offset) = self.scan_cursor;
+        let n = self.scan_ranges.len();
         if range_idx >= n {
             range_idx = 0;
             offset = 0;
@@ -199,6 +211,12 @@ impl SeggerRtt {
         let mut skipped = 0usize;
         while skipped < n {
             let (base, size) = self.scan_ranges[range_idx];
+            if !(16u64..=SKIP_SCAN_RANGE_ABOVE).contains(&size) {
+                range_idx = (range_idx + 1) % n;
+                offset = 0;
+                skipped += 1;
+                continue;
+            }
             if offset + 16 > size {
                 range_idx = (range_idx + 1) % n;
                 offset = 0;
@@ -211,13 +229,12 @@ impl SeggerRtt {
                 return None;
             }
             if Self::magic_at(bus, base + offset) {
-                self.scan_cursor = (range_idx, offset + 4);
+                self.scan_cursor = (0, 0);
                 return Some((base + offset) as u32);
             }
             offset += 4;
             budget -= 1;
         }
-        // Every range is smaller than the ID: nothing can ever match.
         self.scan_cursor = (0, 0);
         None
     }
@@ -451,7 +468,10 @@ impl Peripheral for SeggerRtt {
             // `_DoInit` within `poll_every_cycles`; only the RAM sweep is
             // throttled, because a full sweep already spans polls via the
             // cursor and probing more often only burns reads.
-            if self.control_block.is_none() && !self.scan_due() {
+            // A bounded SRAM range is swept every poll. The 64-poll throttle
+            // is only for a scan that has nothing but huge windows: those are
+            // skipped, so the throttle would otherwise never look again.
+            if self.control_block.is_none() && !self.scan_due() && !self.has_bounded_scan_range() {
                 return;
             }
             self.discover(bus);
