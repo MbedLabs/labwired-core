@@ -151,7 +151,7 @@ exact ordered UART bytes and all guest counters:
 
 ```sh
 cargo test -p labwired-core --features event-scheduler --test microbit_v2_uarte_stack_guest -- --nocapture
-cargo test -p labwired-core --no-default-features --test microbit_v2_uarte_stack_guest -- --nocapture
+LABWIRED_UARTE_STACK_INTERVALS=1 cargo test -p labwired-core --no-default-features --test microbit_v2_uarte_stack_guest -- --nocapture
 ```
 
 The model controls separately require that early capture publishes no bytes,

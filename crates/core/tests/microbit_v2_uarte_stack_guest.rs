@@ -50,12 +50,13 @@ fn compiled_guest_retains_serial_after_return_and_stack_reuse() {
     }
     println!("MICROBIT_UARTE_STACK_GUEST_SHA256={hash}");
 
-    // The feature-off walk requires the conservative single-cycle boundary.
-    // Scheduler capture additionally admits this UART-only guest at interval 64.
-    let intervals: &[u32] = if cfg!(feature = "event-scheduler") {
-        &[1, 64]
-    } else {
-        &[1]
+    // Keep the feature selection in CI, rather than adding a conditional-
+    // compilation site. The feature-off walk uses interval 1; the scheduler
+    // additionally exercises 64. Refuse empty or unrecognised test selections.
+    let intervals: &[u32] = match std::env::var("LABWIRED_UARTE_STACK_INTERVALS").as_deref() {
+        Ok("1") => &[1],
+        Ok("1,64") | Err(std::env::VarError::NotPresent) => &[1, 64],
+        other => panic!("invalid UARTE guest interval selection: {other:?}"),
     };
     for &interval in intervals {
         let system = root.join("configs/systems/microbit-v2.yaml");
