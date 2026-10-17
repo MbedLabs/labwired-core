@@ -248,6 +248,7 @@ impl SystemBus {
     #[inline]
     pub fn set_current_cycle(&mut self, cycle: u64) {
         self.current_cycle = cycle;
+        self.memory_policy.cycle = cycle;
         self.cycle_clock.publish(cycle);
         if let Some(fabric) = self.irq_fabric.armv7.as_mut() {
             fabric.synchronize(cycle, self.cpu_hz);

@@ -5951,18 +5951,33 @@ fn cpu_store_to_fault_flash_faults_and_records() {
     bus.flash = LinearMemory::new_erased(64 * 1024, 0x0800_0000);
     bus.ram = LinearMemory::new(16 * 1024, 0x2000_0000);
     bus.memory_policy.flash = crate::bus::CpuWritePolicy::Fault;
+    bus.memory_policy.cycle = 42;
     bus.memory_policy.note_pc(0x0800_006C);
     let err = bus.write_u8(0x0800_1000, 0xAB).unwrap_err();
     assert!(matches!(
         err,
         crate::SimulationError::MemoryViolation(0x0800_1000)
     ));
+    let first = bus
+        .memory_policy
+        .first_flash
+        .as_ref()
+        .expect("first violation recorded");
+    assert_eq!(first.cycle, 42);
+    assert_eq!(first.pc, Some(0x0800_006C));
     assert_eq!(bus.memory_policy.violations_flash, 1);
     // The byte was NOT committed (flash is erased-filled 0xFF).
     assert_eq!(bus.flash.read_u8(0x0800_1000), Some(0xFF));
     // Both wider widths gate too.
     assert!(bus.write_u16(0x0800_1002, 0x1234).is_err());
     assert!(bus.write_u32(0x0800_1004, 0x1234_5678).is_err());
+}
+
+#[test]
+fn set_current_cycle_mirrors_into_memory_policy() {
+    let mut bus = SystemBus::new();
+    bus.set_current_cycle(1234);
+    assert_eq!(bus.memory_policy.cycle, 1234);
 }
 
 #[test]

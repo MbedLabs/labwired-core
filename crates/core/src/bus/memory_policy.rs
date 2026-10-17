@@ -46,8 +46,6 @@ pub struct MemoryPolicyLayout {
 }
 
 /// Live policy state carried by [`crate::bus::SystemBus`].
-// TODO(Task 4/5/6): remove once the gate is wired
-#[allow(dead_code)]
 #[derive(Debug, Default)]
 pub struct MemoryPolicyState {
     pub flash: CpuWritePolicy,
@@ -62,8 +60,6 @@ pub struct MemoryPolicyState {
     pub cycle: u64,
 }
 
-// TODO(Task 4/5/6): remove once the gate is wired
-#[allow(dead_code)]
 impl MemoryPolicyState {
     /// The policies a chip declares — used by `from_config` and unit tests.
     pub fn for_chip(chip: &labwired_config::ChipDescriptor) -> Self {
@@ -210,8 +206,6 @@ impl MemoryPolicyState {
     }
 }
 
-// TODO(Task 4/5/6): remove once the gate is wired
-#[allow(dead_code)]
 impl crate::bus::SystemBus {
     /// Policy gate for one CPU store. See [`MemoryPolicyState::gate`].
     #[inline]

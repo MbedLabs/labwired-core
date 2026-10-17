@@ -157,6 +157,9 @@ impl<C: Cpu> Machine<C> {
                             });
                         if let Some(sec) = self.cpu_secondary.as_mut() {
                             if sec.is_parked_idle() || secondary_released {
+                                if self.bus.memory_policy.active() {
+                                    self.bus.memory_policy.note_pc(sec.get_pc());
+                                }
                                 sec.step(&mut self.bus, &self.observers, &self.config)?;
                                 secondary_steps += retired;
                             }
@@ -188,6 +191,9 @@ impl<C: Cpu> Machine<C> {
                 let executed = if parked_secondary && self.rtc_cntl_index.is_some() {
                     let mut n = 0u32;
                     for _ in 0..count {
+                        if self.bus.memory_policy.active() {
+                            self.bus.memory_policy.note_pc(self.cpu.get_pc());
+                        }
                         self.cpu
                             .step(&mut self.bus, &self.observers, &self.config)?;
                         n += 1;
@@ -273,6 +279,9 @@ impl<C: Cpu> Machine<C> {
                             if ff > 0 {
                                 sec.fast_forward_idle_cycles(ff);
                             }
+                            if self.bus.memory_policy.active() {
+                                self.bus.memory_policy.note_pc(sec.get_pc());
+                            }
                             sec.step(&mut self.bus, &self.observers, &self.config)?;
                             secondary_steps = executed;
                         }
@@ -336,9 +345,16 @@ impl<C: Cpu> Machine<C> {
             });
         }
 
+        if self.bus.memory_policy.active() {
+            self.bus.memory_policy.note_pc(self.cpu.get_pc());
+        }
         self.cpu
             .step(&mut self.bus, &self.observers, &self.config)?;
         self.release_secondary_cpu_if_requested();
+        if self.bus.memory_policy.active() {
+            let pc = self.cpu_secondary.as_ref().unwrap().get_pc();
+            self.bus.memory_policy.note_pc(pc);
+        }
         if let Err(error) =
             self.cpu_secondary
                 .as_mut()
