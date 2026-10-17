@@ -69,7 +69,7 @@ class ReaderControls(unittest.TestCase):
                'LABWIRED_TIMER_FIXTURE_DIR': '/manufactured/fixture',
                'LABWIRED_TIMER_SOURCE_DIR': '/manufactured/samd',
                'LABWIRED_TIMER_CORE_DIR': '/manufactured/core',
-               'QUALIFICATION_HEAD': head, 'GITHUB_REPOSITORY': 'CrispStrobe/labwired-core',
+               'QUALIFICATION_HEAD': head, 'GITHUB_REPOSITORY': 'w1ne/labwired-core',
                'GITHUB_EVENT_NAME': 'pull_request', 'GITHUB_RUN_ID': '123',
                'GITHUB_RUN_ATTEMPT': '1'}
         if mode == 'repository': env['GITHUB_REPOSITORY'] = 'other/repository'

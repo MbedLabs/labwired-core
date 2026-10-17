@@ -104,7 +104,7 @@ def main():
     parents = git('show', '-s', '--format=%P', 'HEAD').split()
     require(re.fullmatch('[0-9a-f]{40}', head) and len(parents) == 2 and parents[1] == head,
             'actual qualification merge/head binding')
-    require(os.environ['GITHUB_REPOSITORY'] == 'CrispStrobe/labwired-core'
+    require(os.environ['GITHUB_REPOSITORY'] in ('w1ne/labwired-core', 'CrispStrobe/labwired-core')
             and os.environ['GITHUB_EVENT_NAME'] == 'pull_request', 'official qualification context')
     run, attempt = int(os.environ['GITHUB_RUN_ID']), int(os.environ['GITHUB_RUN_ATTEMPT'])
     require(run > 0 and attempt > 0, 'official run identity')
