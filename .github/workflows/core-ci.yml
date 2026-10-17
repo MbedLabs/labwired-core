@@ -743,6 +743,14 @@ jobs:
           -p labwired-core --no-default-features --test microbit_v2_uarte_stack_guest
           -- --nocapture
 
+      # The workspace shards exercise SPI with event-scheduler. Keep its
+      # reference/MMIO/guest cancellation tests nonvacuous without the feature,
+      # too; lib-only feature-off tests do not reach integration targets.
+      # Keep diagnostics visible: nonvacuous enumeration redirects Cargo JSON,
+      # including compiler errors, into its temporary artifact inventory.
+      - name: Compile TX completion guest with rendered diagnostics (FEATURE-OFF)
+        run: cargo test -p labwired-core --test sam_dmac_tx_completion --no-run
+
       - name: SAM SPI controller and guest (FEATURE-OFF)
         run: >
           scripts/ci/cargo-test-nonvacuous.sh
@@ -1333,6 +1341,9 @@ jobs:
       # Reuse this job's compiled feature set, and run the feature-off reference
       # in pr-feature-off. Bounded prototype pixels/controls, not native Arcade
       # or actual module/timing qualification.
+      - name: Compile TX completion guest with rendered diagnostics (FEATURE-ON)
+        run: cargo test -p labwired-core --features event-scheduler --test sam_dmac_tx_completion --no-run
+
       - name: SAM split IRQ and ST7735 controller-memory guests (FEATURE-ON)
         run: >
           scripts/ci/cargo-test-nonvacuous.sh

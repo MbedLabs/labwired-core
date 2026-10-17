@@ -296,7 +296,7 @@ fn guest(mode: &str) -> (ProgramImage, u32) {
     callback.op(0x4770); // Actual callback return to the BLX caller.
     let mut image = ProgramImage::new(0x4201, Arch::Arm);
     image.add_segment(0x4000, bytes);
-    image.add_segment(CALLBACK, callback.0);
+    image.add_segment(u64::from(CALLBACK), callback.0);
     (image, return_pc)
 }
 
