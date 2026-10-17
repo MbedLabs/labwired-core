@@ -91,7 +91,13 @@ pub(crate) struct PollPlan {
     slopes: [i8; 16],
     /// Iterations that are proven steady (`u64::MAX`: no compare ever flips).
     steady_iters: u64,
+    /// Every byte range the iteration read (its code and its loads), with
+    /// the bytes the proof saw. A deferred loop is valid while they hold.
+    reads: Vec<(u32, Vec<u8>)>,
 }
+
+/// Most distinct byte ranges one proven iteration may read.
+const MAX_READ_RANGES: usize = 8;
 
 #[derive(Clone, Copy, Debug)]
 enum CmpKind {
@@ -187,10 +193,42 @@ impl Compare {
 /// anything outside the CPU.
 struct ProbeBus<'a> {
     inner: &'a dyn Bus,
+    /// Every read, as `(addr, size, value)`, when recording.
+    log: Option<std::cell::RefCell<Vec<(u32, u8, u32)>>>,
+    /// Reads served from these byte ranges instead of `inner` (a deferred
+    /// loop catching up sees the memory its proof saw).
+    snapshot: &'a [(u32, Vec<u8>)],
 }
 
-impl ProbeBus<'_> {
+impl<'a> ProbeBus<'a> {
+    fn new(inner: &'a dyn Bus) -> Self {
+        Self {
+            inner,
+            log: None,
+            snapshot: &[],
+        }
+    }
+
     fn plain_read(&self, addr: u64, size: usize) -> SimResult<u32> {
+        for (base, bytes) in self.snapshot {
+            let base = u64::from(*base);
+            if addr >= base && addr + size as u64 <= base + bytes.len() as u64 {
+                let off = (addr - base) as usize;
+                let mut v = 0u32;
+                for (i, b) in bytes[off..off + size].iter().enumerate() {
+                    v |= u32::from(*b) << (8 * i);
+                }
+                return Ok(v);
+            }
+        }
+        let v = self.plain_read_live(addr, size)?;
+        if let Some(log) = &self.log {
+            log.borrow_mut().push((addr as u32, size as u8, v));
+        }
+        Ok(v)
+    }
+
+    fn plain_read_live(&self, addr: u64, size: usize) -> SimResult<u32> {
         let (start, end, slice) = self
             .inner
             .fetch_slice(addr)
@@ -305,6 +343,32 @@ impl Taint {
     }
 }
 
+/// The probe's reads as merged byte ranges. `None` when there are too many
+/// to check cheaply, or two reads of one byte disagree.
+fn merge_reads(mut log: Vec<(u32, u8, u32)>) -> Option<Vec<(u32, Vec<u8>)>> {
+    log.sort_unstable_by_key(|r| r.0);
+    let mut out: Vec<(u32, Vec<u8>)> = Vec::new();
+    for (addr, size, value) in log {
+        let bytes: Vec<u8> = (0..size).map(|i| (value >> (8 * i)) as u8).collect();
+        if let Some((base, have)) = out.last_mut() {
+            let end = base.wrapping_add(have.len() as u32);
+            if addr <= end {
+                for (i, b) in bytes.iter().enumerate() {
+                    let at = (addr - *base) as usize + i;
+                    match have.get(at) {
+                        Some(old) if old != b => return None,
+                        Some(_) => {}
+                        None => have.push(*b),
+                    }
+                }
+                continue;
+            }
+        }
+        out.push((addr, bytes));
+    }
+    (out.len() <= MAX_READ_RANGES).then_some(out)
+}
+
 impl XtensaLx7 {
     /// Called by `RSR CCOUNT` with its PC and the value it read.
     #[inline]
@@ -408,6 +472,11 @@ impl XtensaLx7 {
     fn probe_decode(&self, bus: &ProbeBus<'_>, pc: u32) -> SimResult<(u32, xtensa::Instruction)> {
         let entry = &self.decode_cache[(pc as usize >> 1) & DECODE_CACHE_MASK];
         if entry.generation == self.cur_decode_gen && entry.tag == pc {
+            // A recording probe logs the code bytes too, when they are plain
+            // memory (a store can reach them); flash-mapped code is read-only.
+            if bus.log.is_some() {
+                let _ = bus.plain_read(u64::from(pc), entry.len as usize);
+            }
             return Ok((entry.len, entry.ins));
         }
         let b0 = bus.read_u8(u64::from(pc))?;
@@ -464,7 +533,8 @@ impl XtensaLx7 {
         let start_pc = self.pc;
         let start_ps = self.ps.as_raw();
         let start_br = self.br;
-        let mut probe_bus = ProbeBus { inner: bus };
+        let mut probe_bus = ProbeBus::new(bus);
+        probe_bus.log = Some(std::cell::RefCell::new(Vec::new()));
         // A fetch the probe cannot serve from plain memory refuses the skip;
         // the real step then runs that instruction and reports its own error.
         let anchor_dst = match self.probe_decode(&probe_bus, anchor_pc) {
@@ -573,13 +643,126 @@ impl XtensaLx7 {
                 steady_iters = steady_iters.min(k.div_ceil(u64::from(period)));
             }
         }
+        let reads = merge_reads(probe_bus.log.take()?.into_inner())?;
         Some(PollPlan {
             period,
             end_phys,
             window_base: start_wb,
             slopes: taint.slopes,
             steady_iters,
+            reads,
         })
+    }
+
+    /// See [`crate::Cpu::poll_loop_watch`].
+    pub(super) fn poll_watch(&self, out: &mut Vec<(u64, u64)>) {
+        if let Some(plan) = self.poll_plan.as_ref() {
+            out.extend(plan.reads.iter().map(|(base, bytes)| {
+                let lo = u64::from(*base);
+                (lo, lo + bytes.len() as u64)
+            }));
+        }
+    }
+
+    /// See [`crate::Cpu::poll_loop_defer_changed`].
+    pub(super) fn poll_defer_changed(&self, bus: &dyn Bus) -> bool {
+        let Some(plan) = self.poll_plan.as_ref() else {
+            return true;
+        };
+        for (base, bytes) in &plan.reads {
+            let Some((start, end, slice)) = bus.fetch_slice(u64::from(*base)) else {
+                return true;
+            };
+            let lo = u64::from(*base);
+            let hi = lo + bytes.len() as u64;
+            if lo < start || hi > end {
+                return true;
+            }
+            let off = (lo - start) as usize;
+            if slice.get(off..off + bytes.len()) != Some(bytes.as_slice()) {
+                return true;
+            }
+        }
+        if !self.ps.excm() {
+            if let Some(level) = self.pending_irq_level(bus) {
+                if level > self.ps.intlevel() {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// See [`crate::Cpu::poll_loop_catch_up`]: whole iterations as
+    /// [`Self::apply_poll_loop_skip`], then the rest of the next one
+    /// instruction by instruction, as the probe runs it, on the memory the
+    /// proof read. That partial iteration is a prefix of a steady one (the
+    /// deferral never outlives the plan's budget), so it takes the proven
+    /// path; the machine ends a deferral before the CCOMPARE0 edge, so no
+    /// timer interrupt is due inside it, and before any other interrupt
+    /// becomes deliverable.
+    pub(super) fn poll_catch_up(&mut self, bus: &dyn Bus, cycles: u64) -> bool {
+        let Some(plan) = self.poll_plan.as_ref() else {
+            return false;
+        };
+        let period = u64::from(plan.period);
+        if cycles / period > plan.steady_iters {
+            return false;
+        }
+        let reads = plan.reads.clone();
+        let whole = cycles - cycles % period;
+        if whole > 0 {
+            if !self.apply_poll_loop_skip(whole) {
+                return false;
+            }
+        } else {
+            self.poll_plan = None;
+        }
+        let mut probe_bus = ProbeBus::new(bus);
+        probe_bus.snapshot = &reads;
+        for _ in 0..cycles % period {
+            let before = self.sr.read(CCOUNT);
+            let after = before.wrapping_add(1);
+            self.sr.write(CCOUNT, after);
+            debug_assert!(
+                !(self.sr.ccompare0_armed() && {
+                    let cc0 = self.sr.read(CCOMPARE0);
+                    before < cc0 && after >= cc0
+                }),
+                "a deferred poll loop caught up across its CCOMPARE0 edge"
+            );
+            let pc = self.pc;
+            // Code the decode cache no longer holds and plain memory cannot
+            // serve (flash-mapped) is read through the bus, as a step reads it.
+            let decoded = self.probe_decode(&probe_bus, pc).or_else(|_| {
+                let b0 = bus.read_u8(u64::from(pc))?;
+                let len = xtensa_length::instruction_length(b0);
+                let ins = if len == 2 {
+                    xtensa_narrow::decode_narrow(bus.read_u16(u64::from(pc))?)
+                } else {
+                    xtensa::decode(bus.read_u32(u64::from(pc))?)
+                };
+                Ok::<_, SimulationError>((len, ins))
+            });
+            let Ok((len, ins)) = decoded else {
+                debug_assert!(false, "deferred poll loop: fetch failed at {pc:#x}");
+                return false;
+            };
+            self.branched = false;
+            let fall_through = pc.wrapping_add(len);
+            if self.execute_hot(ins, &mut probe_bus, len).is_err() {
+                debug_assert!(false, "deferred poll loop: step failed at {pc:#x}");
+                return false;
+            }
+            let lcount = self.sr.read(LCOUNT);
+            let lend = self.sr.read(LEND);
+            if lcount > 0 && self.pc == lend && fall_through == lend && !self.branched {
+                self.sr.write(LCOUNT, lcount - 1);
+                self.pc = self.sr.read(LBEG);
+            }
+        }
+        self.bus_irq_memo = None;
+        true
     }
 
     /// Taint transfer for one instruction, before it runs. `Err` refuses.

@@ -1552,26 +1552,20 @@ external_devices:
     );
 }
 
-/// Wiring guard for the ESP32-C3 behavioral I²C: a chip yaml declaring
-/// `i2c0` as `esp32c3_i2c` plus a system manifest declaring a BMP280 on
-/// `connection: "i2c0"` must attach that slave to the behavioral controller
-/// AND let a register-driven write-then-read transaction reach it. This is
-/// the path the MLX90640 will use (different device type, same wiring).
-#[test]
-fn test_from_config_attaches_bmp280_to_esp32c3_i2c0() {
-    use labwired_config::{
-        Arch, ChipDescriptor, ExternalDevice, MemoryRange, PeripheralConfig, SystemManifest,
-    };
-    use std::collections::{BTreeMap, HashMap};
+/// The ESP32-C3 wiring both external-I²C attach tests share: an `esp32c3_i2c`
+/// i2c0 at 0x6001_3000 plus the GPIO matrix block, on a minimal RISC-V chip.
+fn esp32c3_i2c0_chip(name: &str) -> ChipDescriptor {
+    use labwired_config::{Arch, MemoryRange, PeripheralConfig};
+    use std::collections::HashMap;
 
-    let chip = ChipDescriptor {
+    ChipDescriptor {
         schema_version: "1.0".to_string(),
         reset_vector_offset: 0,
         flash_boot_alias: true,
         atomic_register_aliases: labwired_config::AtomicAliasFlavour::None,
         ns_alias_offset: None,
         memory_regions: Vec::new(),
-        name: "esp32c3-i2c-test".to_string(),
+        name: name.to_string(),
         cpu_hz: 0,
         arch: Arch::RiscV,
         core: None,
@@ -1613,26 +1607,33 @@ fn test_from_config_attaches_bmp280_to_esp32c3_i2c0() {
         gpio_input_thresholds: None,
         supply_monitor: None,
         include: None,
-    };
+    }
+}
 
-    let mut config = HashMap::new();
-    config.insert(
-        "i2c_address".to_string(),
-        serde_yaml::Value::Number(0x76.into()),
-    );
-    let manifest = SystemManifest {
+/// The attach manifest both external-I²C tests share: an external device on
+/// `connection: "i2c0"` and the arduino-style SDA=GPIO4 / SCL=GPIO5 route.
+/// (Named apart from the `manifest_with_external_device` error-path helper.)
+fn esp32c3_i2c0_manifest(
+    id: &str,
+    ty: &str,
+    config: std::collections::HashMap<String, serde_yaml::Value>,
+) -> SystemManifest {
+    use labwired_config::ExternalDevice;
+    use std::collections::{BTreeMap, HashMap};
+
+    SystemManifest {
         parts: Vec::new(),
         cosim_models: Vec::new(),
         motor_models: Vec::new(),
         walk_deleted: Some(false),
         schema_version: "1.0".to_string(),
-        name: "esp32c3-bmp280-test".to_string(),
+        name: format!("esp32c3-{ty}-test"),
         chip: "../chips/esp32c3.yaml".to_string(),
         cpu_hz: None,
         memory_overrides: HashMap::new(),
         external_devices: vec![ExternalDevice {
-            id: "bmp280".to_string(),
-            r#type: "bmp280".to_string(),
+            id: id.to_string(),
+            r#type: ty.to_string(),
             connection: "i2c0".to_string(),
             channel: None,
             route: BTreeMap::from([
@@ -1645,12 +1646,13 @@ fn test_from_config_attaches_bmp280_to_esp32c3_i2c0() {
         debug_uart: None,
         wifi_ap: None,
         peripherals: Vec::new(),
-    };
+    }
+}
 
-    let mut bus = SystemBus::from_config(&chip, &manifest).unwrap();
-    // `Wire.begin(4, 5)`-equivalent GPIO-matrix setup: both output and
-    // input paths must select the manifest's physical pads before the
-    // attached BMP280 can answer.
+/// `Wire.begin(4, 5)`-equivalent GPIO-matrix setup: both output and input
+/// paths must select the manifest's physical pads before an attached device
+/// can answer.
+fn gpio_matrix_wire_begin(bus: &mut SystemBus) {
     bus.write_u32(0x6000_4000 + 0x24, (1 << 4) | (1 << 5))
         .unwrap();
     bus.write_u32(0x6000_4000 + 0x554 + 4 * 4, 54).unwrap();
@@ -1659,6 +1661,15 @@ fn test_from_config_attaches_bmp280_to_esp32c3_i2c0() {
         .unwrap();
     bus.write_u32(0x6000_4000 + 0x154 + 53 * 4, (1 << 6) | 5)
         .unwrap();
+}
+
+/// Wire the pads, downcast the registered `i2c0` to the behavioral C3
+/// controller and pin it off the scheduler. These tests drive the bit engine
+/// directly via `tick_elapsed` (the legacy walk path) with no Machine event
+/// loop, so the direct drive must advance the engine (byte-identical to the
+/// scheduler path, which a Machine drives via `drain_scheduler_events`).
+fn drive_c3_i2c(bus: &mut SystemBus) -> &mut crate::peripherals::esp32c3::i2c::Esp32c3I2c {
+    gpio_matrix_wire_begin(bus);
     let i2c_idx = bus
         .find_peripheral_index_by_name("i2c0")
         .expect("i2c0 must be registered");
@@ -1666,11 +1677,40 @@ fn test_from_config_attaches_bmp280_to_esp32c3_i2c0() {
     let i2c = any
         .downcast_mut::<crate::peripherals::esp32c3::i2c::Esp32c3I2c>()
         .expect("i2c0 must be the behavioral Esp32c3I2c controller");
-    // This test drives the bit engine directly via `tick_elapsed` (the
-    // legacy walk path) with no Machine event loop; pin it off the scheduler
-    // so the direct drive advances the engine (byte-identical to the
-    // scheduler path, which a Machine drives via `drain_scheduler_events`).
     i2c.force_legacy_walk();
+    i2c
+}
+
+/// Clock the command list bit-by-bit over simulated cycles to completion.
+fn run_c3_i2c_to_completion(i2c: &mut crate::peripherals::esp32c3::i2c::Esp32c3I2c) {
+    for _ in 0..1_000_000 {
+        if !i2c.engine_active() {
+            break;
+        }
+        i2c.tick_elapsed(64);
+    }
+    assert!(!i2c.engine_active(), "C3 I2C bit engine must complete");
+}
+
+/// Wiring guard for the ESP32-C3 behavioral I²C: a chip yaml declaring
+/// `i2c0` as `esp32c3_i2c` plus a system manifest declaring a BMP280 on
+/// `connection: "i2c0"` must attach that slave to the behavioral controller
+/// AND let a register-driven write-then-read transaction reach it. This is
+/// the path the MLX90640 will use (different device type, same wiring).
+#[test]
+fn test_from_config_attaches_bmp280_to_esp32c3_i2c0() {
+    use std::collections::HashMap;
+
+    let chip = esp32c3_i2c0_chip("esp32c3-i2c-test");
+    let mut config = HashMap::new();
+    config.insert(
+        "i2c_address".to_string(),
+        serde_yaml::Value::Number(0x76.into()),
+    );
+    let manifest = esp32c3_i2c0_manifest("bmp280", "bmp280", config);
+
+    let mut bus = SystemBus::from_config(&chip, &manifest).unwrap();
+    let i2c = drive_c3_i2c(&mut bus);
 
     // Drive the canonical register-pointer read of the BMP280 chip-id
     // (0xD0 → 0x58), exactly as C3 firmware would, through the controller's
@@ -1687,15 +1727,7 @@ fn test_from_config_attaches_bmp280_to_esp32c3_i2c0() {
     i2c.write_u32(0x1C, 0xED).unwrap(); // addr+R
     i2c.write_u32(0x04, 1 << 5).unwrap(); // TRANS_START
 
-    // The C3 controller now clocks the command list bit-by-bit over
-    // simulated cycles; run the engine to completion.
-    for _ in 0..1_000_000 {
-        if !i2c.engine_active() {
-            break;
-        }
-        i2c.tick_elapsed(64);
-    }
-    assert!(!i2c.engine_active(), "C3 I2C bit engine must complete");
+    run_c3_i2c_to_completion(i2c);
 
     // Address must have matched (no NACK at bit 10) and the chip-id byte
     // must round-trip out of the RX FIFO.
@@ -1721,62 +1753,9 @@ fn test_from_config_attaches_bmp280_to_esp32c3_i2c0() {
 /// real bus-attached controller.
 #[test]
 fn test_from_config_attaches_mlx90640_to_esp32c3_i2c0_and_reads_eeprom() {
-    use labwired_config::{
-        Arch, ChipDescriptor, ExternalDevice, MemoryRange, PeripheralConfig, SystemManifest,
-    };
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::HashMap;
 
-    let chip = ChipDescriptor {
-        schema_version: "1.0".to_string(),
-        reset_vector_offset: 0,
-        flash_boot_alias: true,
-        atomic_register_aliases: labwired_config::AtomicAliasFlavour::None,
-        ns_alias_offset: None,
-        memory_regions: Vec::new(),
-        name: "esp32c3-mlx-test".to_string(),
-        cpu_hz: 0,
-        arch: Arch::RiscV,
-        core: None,
-        flash: MemoryRange {
-            base: 0x4200_0000,
-            size: 4000000,
-            cpu_writes: labwired_config::CpuWritePolicy::Allow,
-        },
-        ram: MemoryRange {
-            base: 0x3FC8_0000,
-            size: 400000,
-            cpu_writes: labwired_config::CpuWritePolicy::Allow,
-        },
-        peripherals: vec![
-            PeripheralConfig {
-                id: "i2c0".to_string(),
-                r#type: "esp32c3_i2c".to_string(),
-                base_address: 0x6001_3000,
-                size: Some("4KB".to_string()),
-                irq: None,
-                irq_controller: None,
-                config: HashMap::new(),
-                clock: None,
-            },
-            PeripheralConfig {
-                id: "gpio".to_string(),
-                r#type: "esp32c3_gpio".to_string(),
-                base_address: 0x6000_4000,
-                size: Some("4KB".to_string()),
-                irq: None,
-                irq_controller: None,
-                config: HashMap::new(),
-                clock: None,
-            },
-        ],
-        pins: Default::default(),
-        analog_pins: Default::default(),
-        io_voltage_v: None,
-        gpio_input_thresholds: None,
-        supply_monitor: None,
-        include: None,
-    };
-
+    let chip = esp32c3_i2c0_chip("esp32c3-mlx-test");
     let mut config = HashMap::new();
     config.insert(
         "i2c_address".to_string(),
@@ -1786,52 +1765,10 @@ fn test_from_config_attaches_mlx90640_to_esp32c3_i2c0_and_reads_eeprom() {
         "ambient_c".to_string(),
         serde_yaml::Value::Number(25.0.into()),
     );
-    let manifest = SystemManifest {
-        parts: Vec::new(),
-        cosim_models: Vec::new(),
-        motor_models: Vec::new(),
-        walk_deleted: Some(false),
-        schema_version: "1.0".to_string(),
-        name: "esp32c3-mlx90640-test".to_string(),
-        chip: "../chips/esp32c3.yaml".to_string(),
-        cpu_hz: None,
-        memory_overrides: HashMap::new(),
-        external_devices: vec![ExternalDevice {
-            id: "thermal_cam".to_string(),
-            r#type: "mlx90640".to_string(),
-            connection: "i2c0".to_string(),
-            channel: None,
-            route: BTreeMap::from([
-                ("sda".to_string(), "GPIO4".to_string()),
-                ("scl".to_string(), "GPIO5".to_string()),
-            ]),
-            config,
-        }],
-        board_io: Vec::new(),
-        debug_uart: None,
-        wifi_ap: None,
-        peripherals: Vec::new(),
-    };
+    let manifest = esp32c3_i2c0_manifest("thermal_cam", "mlx90640", config);
 
     let mut bus = SystemBus::from_config(&chip, &manifest).unwrap();
-    bus.write_u32(0x6000_4000 + 0x24, (1 << 4) | (1 << 5))
-        .unwrap();
-    bus.write_u32(0x6000_4000 + 0x554 + 4 * 4, 54).unwrap();
-    bus.write_u32(0x6000_4000 + 0x554 + 5 * 4, 53).unwrap();
-    bus.write_u32(0x6000_4000 + 0x154 + 54 * 4, (1 << 6) | 4)
-        .unwrap();
-    bus.write_u32(0x6000_4000 + 0x154 + 53 * 4, (1 << 6) | 5)
-        .unwrap();
-    let i2c_idx = bus
-        .find_peripheral_index_by_name("i2c0")
-        .expect("i2c0 must be registered");
-    let any = bus.peripherals[i2c_idx].dev.as_any_mut().unwrap();
-    let i2c = any
-        .downcast_mut::<crate::peripherals::esp32c3::i2c::Esp32c3I2c>()
-        .expect("i2c0 must be the behavioral Esp32c3I2c controller");
-    // Direct `tick_elapsed` drive (legacy walk path), no Machine event loop:
-    // pin off the scheduler so the direct drive advances the engine.
-    i2c.force_legacy_walk();
+    let i2c = drive_c3_i2c(&mut bus);
 
     // 16-bit-addressed read of EEPROM word 0x2430: write the 2-byte big-
     // endian register address (0x24, 0x30), repeated-start, read 2 bytes
@@ -1848,15 +1785,7 @@ fn test_from_config_attaches_mlx90640_to_esp32c3_i2c0_and_reads_eeprom() {
     i2c.write_u32(0x1C, 0x67).unwrap(); // addr+R (0x33<<1 | 1)
     i2c.write_u32(0x04, 1 << 5).unwrap(); // TRANS_START
 
-    // The C3 controller now clocks the command list bit-by-bit over
-    // simulated cycles; run the engine to completion.
-    for _ in 0..1_000_000 {
-        if !i2c.engine_active() {
-            break;
-        }
-        i2c.tick_elapsed(64);
-    }
-    assert!(!i2c.engine_active(), "C3 I2C bit engine must complete");
+    run_c3_i2c_to_completion(i2c);
 
     let int_raw = i2c.read_u32(0x20).unwrap();
     assert_eq!(
@@ -3554,6 +3483,72 @@ fn test_system_bus_memory_observer() {
 }
 
 #[test]
+fn test_wide_ram_store_observation_is_explicit_and_exact() {
+    use std::sync::{Arc, Mutex};
+    #[derive(Debug)]
+    struct Observer(Arc<Mutex<Vec<(u64, u8, u8)>>>);
+    impl crate::SimulationObserver for Observer {
+        fn on_step_end(&self, _: u32, _: &[u32]) {}
+        fn on_memory_write(&self, addr: u64, old: u8, new: u8) {
+            self.0.lock().unwrap().push((addr, old, new));
+        }
+    }
+    let writes = Arc::new(Mutex::new(Vec::new()));
+    let mut bus = SystemBus::new();
+    bus.add_observer(Arc::new(Observer(writes.clone())));
+    let addr = bus.ram.base_addr;
+    assert!(!bus.config.observe_wide_ram_stores);
+    bus.write_u16(addr, 0x2211).unwrap();
+    bus.write_u32(addr + 4, 0x44332211).unwrap();
+    assert!(writes.lock().unwrap().is_empty());
+    bus.config.observe_wide_ram_stores = true;
+    bus.write_u16(addr, 0xbbaa).unwrap();
+    bus.write_u32(addr + 4, 0x88776655).unwrap();
+    assert_eq!(
+        *writes.lock().unwrap(),
+        vec![
+            (addr, 0x11, 0xaa),
+            (addr + 1, 0x22, 0xbb),
+            (addr + 4, 0x11, 0x55),
+            (addr + 5, 0x22, 0x66),
+            (addr + 6, 0x33, 0x77),
+            (addr + 7, 0x44, 0x88),
+        ]
+    );
+    assert_eq!(bus.ram.read_u16(addr), Some(0xbbaa));
+    assert_eq!(bus.ram.read_u32(addr + 4), Some(0x88776655));
+    writes.lock().unwrap().clear();
+    // Same-valued stores are committed stores too.
+    bus.write_u16(addr, 0xbbaa).unwrap();
+    bus.write_u32(addr + 4, 0x88776655).unwrap();
+    assert_eq!(writes.lock().unwrap().len(), 6);
+    assert!(writes
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|(_, old, new)| old == new));
+    writes.lock().unwrap().clear();
+    let last = addr + bus.ram.data.len() as u64 - 1;
+    assert!(bus.write_u16(last, 0xffff).is_err());
+    assert!(bus.write_u32(last, 0xffffffff).is_err());
+    // Existing byte fallback commits the in-range byte before the next byte
+    // faults. Report those real byte writes, never a fabricated wide commit.
+    assert_eq!(
+        *writes.lock().unwrap(),
+        vec![(last, 0, 0xff), (last, 0xff, 0xff)]
+    );
+    writes.lock().unwrap().clear();
+    // Flash keeps its existing behavior even with RAM tracing enabled.
+    bus.write_u16(bus.flash.base_addr, 0x1234).unwrap();
+    bus.write_u32(bus.flash.base_addr + 4, 0x56789abc).unwrap();
+    assert!(writes.lock().unwrap().is_empty());
+    bus.config.observe_wide_ram_stores = false;
+    bus.write_u16(addr, 0).unwrap();
+    bus.write_u32(addr + 4, 0).unwrap();
+    assert!(writes.lock().unwrap().is_empty());
+}
+
+#[test]
 fn test_flash_boot_alias_read_and_write() {
     let mut bus = SystemBus {
         flash: LinearMemory::new_erased(256, 0x0800_0000),
@@ -3602,6 +3597,7 @@ fn test_flash_boot_alias_read_and_write() {
         pending_schedule: Vec::new(),
         freerunning_timer_poll_mmio: std::cell::Cell::new(0),
         side_effecting_mmio: std::cell::Cell::new(0),
+        batch_stop: Default::default(),
         memory_reads: std::cell::Cell::new(0),
         memory_writes: std::cell::Cell::new(0),
         peripheral_accesses: std::cell::Cell::new(0),
@@ -3725,6 +3721,7 @@ fn h5_flash_bus(gate: bool) -> SystemBus {
         pending_schedule: Vec::new(),
         freerunning_timer_poll_mmio: std::cell::Cell::new(0),
         side_effecting_mmio: std::cell::Cell::new(0),
+        batch_stop: Default::default(),
         memory_reads: std::cell::Cell::new(0),
         memory_writes: std::cell::Cell::new(0),
         peripheral_accesses: std::cell::Cell::new(0),
@@ -4001,6 +3998,7 @@ fn h5_rww_bus(gate: bool) -> SystemBus {
         pending_schedule: Vec::new(),
         freerunning_timer_poll_mmio: std::cell::Cell::new(0),
         side_effecting_mmio: std::cell::Cell::new(0),
+        batch_stop: Default::default(),
         memory_reads: std::cell::Cell::new(0),
         memory_writes: std::cell::Cell::new(0),
         peripheral_accesses: std::cell::Cell::new(0),
@@ -4273,6 +4271,7 @@ fn test_peripheral_range_index_lookup() {
         pending_schedule: Vec::new(),
         freerunning_timer_poll_mmio: std::cell::Cell::new(0),
         side_effecting_mmio: std::cell::Cell::new(0),
+        batch_stop: Default::default(),
         memory_reads: std::cell::Cell::new(0),
         memory_writes: std::cell::Cell::new(0),
         peripheral_accesses: std::cell::Cell::new(0),
@@ -4401,6 +4400,7 @@ fn test_dma_tick_executes_copy_and_raises_irq() {
         pending_schedule: Vec::new(),
         freerunning_timer_poll_mmio: std::cell::Cell::new(0),
         side_effecting_mmio: std::cell::Cell::new(0),
+        batch_stop: Default::default(),
         memory_reads: std::cell::Cell::new(0),
         memory_writes: std::cell::Cell::new(0),
         peripheral_accesses: std::cell::Cell::new(0),

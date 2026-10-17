@@ -730,6 +730,35 @@ jobs:
       - name: Unit tests (labwired-core, FEATURE-OFF)
         run: cargo test -p labwired-core --lib
 
+      - name: ARM C compiler for the UARTE stack-lifetime guest (FEATURE-OFF)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi
+
+      - name: UARTE stack-lifetime guest (FEATURE-OFF)
+        env:
+          LABWIRED_UARTE_STACK_INTERVALS: "1"
+        run: >
+          scripts/ci/cargo-test-nonvacuous.sh
+          -p labwired-core --no-default-features --test microbit_v2_uarte_stack_guest
+          -- --nocapture
+
+      # The workspace shards exercise SPI with event-scheduler. Keep its
+      # reference/MMIO/guest cancellation tests nonvacuous without the feature,
+      # too; lib-only feature-off tests do not reach integration targets.
+      # Keep diagnostics visible: nonvacuous enumeration redirects Cargo JSON,
+      # including compiler errors, into its temporary artifact inventory.
+      - name: Compile TX completion guest with rendered diagnostics (FEATURE-OFF)
+        run: cargo test -p labwired-core --test sam_dmac_tx_completion --no-run
+
+      - name: SAM SPI controller and guest (FEATURE-OFF)
+        run: >
+          scripts/ci/cargo-test-nonvacuous.sh
+          -p labwired-core --test sam_sercom_spi --test st7735_sam_guest --test sam_dmac_byte
+          --test sam_dmac_sercom4_tx
+          --test sam_dmac_tx_completion
+          -- --nocapture
+
       # AVR sim-smoke golden — cheap (~ms), no PlatformIO. Pins Arduino Nano
       # UART+D13 behavior on every PR so the twin cannot regress silently.
       - name: AVR Nano golden survival
@@ -1308,6 +1337,20 @@ jobs:
       # refuse rather than fake it — the wrapper is the second lock, and it also
       # catches the emptying this step could still suffer silently: a per-item
       # `#[cfg]` or a deleted test leaving a binary with nothing in it.
+      # A real authored blocking-SPI guest, not a host transfer substitute.
+      # Reuse this job's compiled feature set, and run the feature-off reference
+      # in pr-feature-off. Bounded prototype pixels/controls, not native Arcade
+      # or actual module/timing qualification.
+      - name: Compile TX completion guest with rendered diagnostics (FEATURE-ON)
+        run: cargo test -p labwired-core --features event-scheduler --test sam_dmac_tx_completion --no-run
+
+      - name: SAM split IRQ and ST7735 controller-memory guests (FEATURE-ON)
+        run: >
+          scripts/ci/cargo-test-nonvacuous.sh
+          -p labwired-core --features event-scheduler
+          --test sam_sercom_spi --test st7735_sam_guest --test sam_dmac_byte
+          --test sam_dmac_sercom4_tx --test sam_dmac_tx_completion -- --nocapture
+
       - name: Scheduler-only fidelity lanes (walk≡scheduler timing gates)
         run: >
           scripts/ci/cargo-test-nonvacuous.sh

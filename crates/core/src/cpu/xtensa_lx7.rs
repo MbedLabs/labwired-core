@@ -2961,6 +2961,18 @@ impl Cpu for XtensaLx7 {
         self.apply_poll_loop_skip(cycles)
     }
 
+    fn poll_loop_defer_changed(&self, bus: &dyn Bus) -> bool {
+        self.poll_defer_changed(bus)
+    }
+
+    fn poll_loop_watch(&self, out: &mut Vec<(u64, u64)>) {
+        self.poll_watch(out)
+    }
+
+    fn poll_loop_catch_up(&mut self, bus: &dyn Bus, cycles: u64) -> bool {
+        self.poll_catch_up(bus, cycles)
+    }
+
     fn is_parked_idle(&self) -> bool {
         // Not halted: reset-hold still needs lockstep so PRO can release APP.
         self.waiti_parked && !self.halted

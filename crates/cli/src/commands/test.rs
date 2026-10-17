@@ -378,6 +378,8 @@ fn run_s3_rom_boot_no_elf(
         uart_injections,
         // Xtensa is never JIT-eligible (the JIT is RISC-V only).
         jit_eligible: false,
+        counter_metrics: false,
+        machine_metrics: false,
         arch: labwired_core::Arch::XtensaLx7,
         stack_paint,
         chip_mem,
@@ -690,6 +692,8 @@ fn run_c3_rom_boot_no_elf(
         uart_injections,
         // rom-boot is never JIT-eligible (it forces cycle-accurate stepping).
         jit_eligible: false,
+        counter_metrics: false,
+        machine_metrics: false,
         arch: labwired_core::Arch::RiscV,
         stack_paint,
         chip_mem,
@@ -1633,7 +1637,10 @@ pub(crate) fn run_test(
                 // flash-thunks, no forged s_cpu_up — APP_CPU runs call_start_cpu1.
                 let mut machine =
                     labwired_core::Machine::new(pro_cpu, esp_bus).with_secondary_cpu(app_cpu);
-                machine.add_observer(metrics.clone());
+                // Idle and CCOUNT poll-loop skips, as every other `test` path
+                // (opt out with LABWIRED_IDLE_FAST_FORWARD=0). No per-step
+                // observer: `counter_metrics` below.
+                apply_run_speed_opts(&mut machine);
                 if let Err(e) = machine.load_firmware(&program) {
                     return handle_load_error(
                         &args,
@@ -1746,8 +1753,12 @@ pub(crate) fn run_test(
                 stimuli: &stimuli,
                 uart_injections: &uart_injections,
                 // Xtensa (ESP32) path: never JIT-eligible (the RV32IMC JIT is
-                // RISC-V only), so keep the exact current observer-based metrics.
+                // RISC-V only). Metrics come from the machine's counters: a
+                // per-step observer would count the skipped iterations it
+                // never sees, and its presence costs every instruction.
                 jit_eligible: false,
+                counter_metrics: true,
+                machine_metrics: false,
                 arch: labwired_core::Arch::XtensaLx7,
                 stack_paint,
                 chip_mem,
@@ -1977,8 +1988,34 @@ pub(crate) fn run_test(
                     &machine,
                     program.arch,
                 );
-            if !jit_eligible {
+            // Cortex-M bare-ELF runs (the hosted labwired_run path for every
+            // STM32/nRF/RP/EFR board): metrics from the machine's counters
+            // instead of a per-step observer (which costs every instruction
+            // and disables the core's fast batch paths), and CPU windows
+            // planned at the bus's max-safe interval with exact boundaries
+            // (`Machine::exact_batch_boundaries`). The bus keeps interval 1,
+            // so peripherals pace their events exactly as before. Outputs are
+            // the same as the per-instruction run; only `cycles` in
+            // result.json changes, to the machine clock. Opt out with
+            // LABWIRED_HOSTED_FAST=0.
+            let hosted_fast = !jit_eligible
+                && program.arch == labwired_core::Arch::Arm
+                && std::env::var("LABWIRED_HOSTED_FAST").as_deref() != Ok("0");
+            if !jit_eligible && !hosted_fast {
                 machine.add_observer(metrics.clone());
+            }
+            if hosted_fast {
+                // Only where the per-cycle tick has no work of its own (no CAN
+                // tester or bridge, no GPIO device needing service): those are
+                // serviced per tick and would see the wide window.
+                let wide = machine.max_safe_tick_interval();
+                if wide > 1 && machine.bus.per_cycle_tick_is_trivial() {
+                    machine.config.peripheral_tick_interval = wide;
+                    machine.exact_batch_boundaries = true;
+                    eprintln!(
+                        "labwired-cli test: hosted fast path (exact windows up to {wide} cycles)"
+                    );
+                }
             }
             if itm_enabled {
                 machine.bus.attach_itm_output(Some(itm_tx.clone()), false);
@@ -2003,6 +2040,8 @@ pub(crate) fn run_test(
                 stimuli: &stimuli,
                 uart_injections: &uart_injections,
                 jit_eligible,
+                counter_metrics: false,
+                machine_metrics: hosted_fast,
                 arch: program.arch,
                 stack_paint,
                 chip_mem,

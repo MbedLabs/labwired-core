@@ -230,7 +230,19 @@ const YAML_DEVICES_BASELINE: usize = 90;
 /// is a declarative `camera`/frame-source primitive (window + format registers
 /// in, `DvpSensor` out), after which the SCCB map moves to YAML and this file
 /// goes.
-const RUST_DEVICES_BASELINE: usize = 27;
+///
+/// 27 → 28: `st7735_color.rs`, the ST7735 serial colour display. It is the
+/// controller-MEMORY half of the panel — RGB666 expansion and the RGBSET LUT,
+/// a per-pixel validity map, write-driven reset/backlight and the artifact
+/// policy that withholds bytes while any visible pixel is unknown — and it is
+/// deliberately NOT a catalogue device: the GM/crop module identity is still
+/// unqualified, so the prototype descriptor lives in the test fixtures and no
+/// production board wires it. The declarative display primitive cannot yet
+/// express controller-memory validity (its serial-colour extension publishes
+/// the metadata but the codec is what computes it). The port path is a
+/// `known_pixels`/codec primitive on the declarative display, after which the
+/// colour pipeline moves to the descriptor and this file goes.
+const RUST_DEVICES_BASELINE: usize = 28;
 
 /// Files in `components/` that are NOT a device model, with the reason. Listed
 /// here rather than pattern-matched so every exemption is a line someone wrote

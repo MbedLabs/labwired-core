@@ -37,6 +37,16 @@ pub(crate) struct TestExecutionContext<'a, C: labwired_core::Cpu> {
     // forces the JIT's correctness gate shut), so the loop mirrors the machine's
     // own counters into `metrics` before each cycle-sensitive check.
     pub jit_eligible: bool,
+    /// `cycles` / `instructions` come from the machine's counters (as on the
+    /// JIT-eligible path), not a per-step observer, and a step is a machine
+    /// cycle, retired or skipped by idle fast-forward, so the loop observes on
+    /// the same cycles as a run without any skip. Set on the classic-ESP32
+    /// path, where one instruction is one cycle.
+    pub counter_metrics: bool,
+    /// `cycles` / `instructions` come from the machine's counters, not a
+    /// per-step observer, while a step stays one retired instruction (so
+    /// `max_steps` means what it did). Set on the Cortex-M bare-ELF path.
+    pub machine_metrics: bool,
     // Architecture of the loaded image (paint is ARM-only in P0).
     pub arch: labwired_core::Arch,
     // Script + env kill switch for main-stack paint.
@@ -738,7 +748,7 @@ pub(crate) fn execute_test_loop<C: labwired_core::Cpu>(
         // count (accumulated from `step_batch` return values); `total_cycles`
         // is the machine's canonical cycle counter. No-op for the non-eligible
         // path, where `metrics` IS the live step observer.
-        if ctx.jit_eligible {
+        if ctx.jit_eligible || ctx.counter_metrics || ctx.machine_metrics {
             ctx.metrics.set_cycles(ctx.machine.total_cycles);
             ctx.metrics.set_instructions(step);
         }
@@ -865,6 +875,7 @@ pub(crate) fn execute_test_loop<C: labwired_core::Cpu>(
             let chunk = remaining.min(JIT_RUN_CHUNK);
             (u64::from(chunk), chunk)
         } else if idle_ff_wide_observation
+            && !ctx.counter_metrics
             && assertions_first_passed_at.is_none()
             && ctx
                 .machine
@@ -927,6 +938,7 @@ pub(crate) fn execute_test_loop<C: labwired_core::Cpu>(
         // back, so the firmware's next instruction sees the model's answer to
         // the levels it had just driven. Without models this is the plain
         // `Machine::advance` the loop always issued.
+        let poll_skipped_before = ctx.machine.poll_loop_cycles_skipped;
         let advanced = match cosim.as_mut() {
             Some(session) => session.advance(ctx.machine, request),
             None => ctx
@@ -959,7 +971,26 @@ pub(crate) fn execute_test_loop<C: labwired_core::Cpu>(
             }
         };
 
-        step += report.primary_steps;
+        // On the counter-metrics path a step is a machine cycle, retired or
+        // skipped (one instruction is one cycle on that core). Fuel counts
+        // both, so every call ends on the same cycle as a run without any
+        // skip, and so do the checks between calls: assertions, settling,
+        // `max_steps`. The wide-fuel arm above is off there for that reason.
+        // A skipped poll-loop iteration is instructions the core would have
+        // retired, so it counts as steps and `max_steps` stops where it does
+        // without the skip. (Cortex-M retires one per cycle; on the
+        // counter-metrics path idle cycles, poll skips included, already
+        // count.)
+        let poll_skipped = ctx
+            .machine
+            .poll_loop_cycles_skipped
+            .saturating_sub(poll_skipped_before);
+        step += report.primary_steps
+            + if ctx.counter_metrics {
+                report.idle_cycles
+            } else {
+                poll_skipped
+            };
         steps_executed = step;
         // Statistical PC sampling: one histogram hit every
         // PC_SAMPLE_EVERY retired primary steps, using the post-batch
@@ -1187,7 +1218,7 @@ pub(crate) fn execute_test_loop<C: labwired_core::Cpu>(
     // before the LAST batch, so capture that batch's retired cycles/instructions
     // here — `result.json` (`cycles`/`instructions`) and `stop_reason_details`
     // read `metrics` below and must report the true totals.
-    if ctx.jit_eligible {
+    if ctx.jit_eligible || ctx.counter_metrics || ctx.machine_metrics {
         ctx.metrics.set_cycles(ctx.machine.total_cycles);
         ctx.metrics.set_instructions(steps_executed);
     }
@@ -1215,7 +1246,11 @@ pub(crate) fn execute_test_loop<C: labwired_core::Cpu>(
     if ctx.machine.idle_fast_forward_cycles_skipped > 0 {
         eprintln!(
             "labwired-cli test: idle_ff skipped {} of {} device cycles ({} interpreted)",
-            ctx.machine.idle_fast_forward_cycles_skipped, ctx.machine.total_cycles, steps_executed
+            ctx.machine.idle_fast_forward_cycles_skipped,
+            ctx.machine.total_cycles,
+            ctx.machine
+                .total_cycles
+                .saturating_sub(ctx.machine.idle_fast_forward_cycles_skipped)
         );
     }
 

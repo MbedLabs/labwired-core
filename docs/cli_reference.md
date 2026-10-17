@@ -53,8 +53,23 @@ labwired test --script <YAML> [OVERRIDES]
 - `--max-cycles <N>`: Override cycle limit.
 - `--max-uart-bytes <N>`: Override UART output limit.
 - `--no-progress <N>`: Fail if PC doesn't change for N steps (detects hangs).
+- `--coverage`: Collect firmware coverage (lines, branches, functions, with counts) from the unmodified ELF; writes `coverage.info` (LCOV), `coverage.cobertura.xml` and `coverage.json`. See [Firmware coverage](howto/firmware-coverage.md).
 - `--no-uart-stdout`: Disable echoing UART output to the console.
 - `--max-vcd-bytes <N>`: Limit the size of the generated VCD file.
+
+### `coverage merge`
+
+Merge firmware-coverage LCOV files (from `test --coverage`, gcov, llvm-cov) into one report and list every branch the tests never took. Worked example and CI setup: [Firmware coverage](howto/firmware-coverage.md).
+
+**Options:**
+- `<INPUT>...`: LCOV files, or directories searched recursively for `*.info` (earlier merge results are skipped).
+- `-o, --output <PATH>`: Merged LCOV tracefile.
+- `--cobertura <PATH>`: Cobertura XML for GitLab / Jenkins / Azure DevOps.
+- `--source-root <DIR>`: Cobertura `<source>` (repeatable, default `.`).
+- `--json-out <PATH>`: Summary, per-file numbers and uncovered branches as JSON.
+- `--fail-under-lines <PCT>`, `--fail-under-branches <PCT>`: Exit code 1 below the threshold.
+
+`labwired coverage` with no subcommand prints the ESP32-S3 register-model coverage matrix (`--svd`, `--json-out`).
 
 ### `asset`
 Utilities for managing LabWired assets (SVD import, Code Generation, etc.).

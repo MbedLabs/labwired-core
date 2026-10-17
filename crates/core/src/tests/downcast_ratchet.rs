@@ -157,17 +157,17 @@ use std::path::{Path, PathBuf};
 /// and resolving both by name through one `is_spi` check retired the two
 /// separate `as_any()` type tests the SPI2-only lookup carried.
 ///
-/// 197 → 198 / 197 → 198: the Cortex-M JIT gate asks the concrete `SystemBus`
-/// whether a non-default RAM `cpu_writes` policy is in force
-/// (`ram_cpu_writes_gated`). Compiled blocks write `bus.ram.data` directly,
-/// so they must refuse while the interpreter's store gate owns RAM stores —
-/// the same reach the RISC-V JIT gate already pays. It is one downcast on the
-/// per-batch gate check (`jit_gate_allows`), not a per-instruction path. A
-/// `Bus` capability method would retire both JIT-gate reaches at once; until
-/// then this ceiling records the second one rather than leaving it uncounted.
-const MAX_AS_ANY: usize = 198;
+/// 194 → 195: the Cortex-M JIT gate asks the concrete `SystemBus` whether a
+/// non-default RAM `cpu_writes` policy is in force (`ram_cpu_writes_gated`).
+/// Compiled blocks write `bus.ram.data` directly, so they must refuse while
+/// the interpreter's store gate owns RAM stores — the same reach the RISC-V
+/// JIT gate already pays. It is one downcast on the per-batch gate check
+/// (`jit_gate_allows`), not a per-instruction path. A `Bus` capability method
+/// would retire both JIT-gate reaches at once; until then this ceiling records
+/// the second one rather than leaving it uncounted.
+const MAX_AS_ANY: usize = 195;
 // GPIO schedule migration removes four concrete sensor downcasts.
-const MAX_DOWNCAST_REF: usize = 198;
+const MAX_DOWNCAST_REF: usize = 195;
 
 /// The MUTABLE half of the same reach, counted from the day it started being
 /// counted. Until then the scan matched only `as_any()` and `downcast_ref`,
@@ -228,8 +228,8 @@ const MAX_DOWNCAST_REF: usize = 198;
 // 338 → 337 (`downcast_mut` only): the ESP32-S3 I²C controller attaches slaves
 // through `Peripheral::i2c_slave_host` (it also hosts GPIO-matrix twins), so
 // `attach_i2c_slave_with_route` lost its `Esp32s3I2c` arm.
-const MAX_AS_ANY_MUT: usize = 272;
-const MAX_DOWNCAST_MUT: usize = 337;
+const MAX_AS_ANY_MUT: usize = 271;
+const MAX_DOWNCAST_MUT: usize = 336;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

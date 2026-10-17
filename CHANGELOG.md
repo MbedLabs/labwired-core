@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- Firmware branch coverage that counts every conditional branch, measured on
+  the unmodified ELF (`docs/howto/firmware-coverage.md`,
+  `examples/coverage-brake-ecu`). The branch list comes from decoding the ELF
+  (Thumb `B<cond>`/`CBZ`/`CBNZ`, RISC-V `B*`/`C.BEQZ`/`C.BNEZ`; function
+  symbols, `$t`/`$x`/`$d` mapping symbols and DWARF line sequences, so
+  assembly with line info is included), so branches no test reached count
+  against coverage (`BRDA:…,-`) instead of disappearing. The decoder was
+  checked against llvm-objdump on all 81 committed ELFs with line info:
+  18,195 of 18,195 two-outcome branches, no extras, no wrong targets
+  (`crates/loader/tests/branch_sites_fixtures.rs`). Lines and functions now
+  carry hit and call counts.
+- `labwired coverage merge`: merge LCOV files from many runs (and from
+  gcov/llvm-cov host tests), list every branch the tests never took with the
+  tests that ran its line, write LCOV / Cobertura / JSON, and fail CI with
+  `--fail-under-lines` / `--fail-under-branches`. Same counts as `lcov -a`
+  once its per-test records are summed. `labwired test --coverage` also writes
+  `coverage.cobertura.xml` (valid against `coverage-04.dtd`) and names each
+  run's `TN:` after its script.
+- STM32 DMA arbitration, F4 stream FIFOs, transfer errors, DMAMUX
+  generators and synchronisation, GDMA descriptor errors. Each STM32 DMA
+  controller (F1/L4/G0 `dma`, F4/F7 `stm32f4_dma`, H5/U5 `gpdma`) moves one
+  item per arbitration slot, to the channel or stream with the highest
+  software priority (`CCR.PL`, `SxCR.PL`, `CCR.PRIO`) and then the lowest
+  number; a request that loses the slot stays latched. An item that faults
+  on the bus sets `TEIF` (GPDMA `DTEF`) and disables the channel or stream
+  (bus plumbing: the bus tells the issuing controller,
+  `Peripheral::dma_transfer_error`). F4 streams model the 16-byte FIFO
+  (`DMDIS`, `FTH`, live `FS`, `PBURST` / `MBURST` INCR4/8/16, packing when
+  `PSIZE` ≠ `MSIZE`, `FEIF` for a forbidden `FTH` / `MBURST` / `MSIZE`
+  combination, an overrun or an underrun, `FEIE`), force `MSIZE` = `PSIZE`
+  and no bursts in direct mode, flush a P2M FIFO when `EN` is cleared (`EN`
+  reads 1 until the stream stops, `TCIF` set), and run memory-to-memory
+  through the FIFO (new `DmaDirection::Load` / `Store` items,
+  `Peripheral::dma_load_data`). The G0 DMAMUX request generators
+  (`RGxCR`) and synchronisation (`CxCR.SE`, `SYNC_ID`, `SPOL`, `NBREQ`,
+  `EGE`, `CSR` / `RGSR` overruns) take EXTI lines 0..15 (the G0 EXTI now
+  answers `exti_line_source`) and the channel events `dmamux_evt0..3`. The
+  ESP32-C3 / C6 GP-SPI2 GDMA path raises `IN_DSCR_ERR` / `OUT_DSCR_ERR`
+  (owner check, a descriptor, buffer or next link outside internal SRAM),
+  `IN_DSCR_EMPTY`, and `OUT_EOF` only for a `suc_eof` descriptor. New
+  end-to-end net test `env-spi-f4-dma.yaml` (F401 master: two streams
+  complete by priority, then SPI1 through the FIFOs in INCR4 bursts, against
+  the G071 DMA slave). Behaviour change: an F4 memory-to-memory transfer now
+  takes its FIFO drains as extra slots, and an F4 stream disabled by
+  software sets `TCIF` as on silicon.
 - OV3660 JPEG output. With `PIXFORMAT_JPEG` the `ov3660` part streams real
   baseline JPEG frames (YCbCr 4:2:2, quantised by `COMPRESSION_CTRL07`)
   instead of no frames, sized so `esp32-camera` finds SOI and EOI the way it
@@ -46,6 +91,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (GPIO32..36, GPIO39); the rest are byte-identical.
 
 ### Performance
+- Cortex-M skips fixed-point poll loops: a loop that waits for a RAM word only
+  an interrupt changes (`HAL_Delay`, Arduino `delay()`, a `b .` park). At a
+  loop head the core runs one iteration on a read-only view of plain memory;
+  it is refused on any store, device access, pending or changed exception, or
+  if it does not come back to the head in the state it left. The machine
+  then skips whole iterations up to the next interrupt or event deadline, and
+  the CLI counts them as steps, so `max_steps` stops where it did. Outputs are
+  identical to a run with no skip (`LABWIRED_IDLE_FAST_FORWARD=0`). STM32
+  Arduino blink labs: H563 24x, U545 10x, G474 7x, F401 4x less CPU.
+- `labwired test` on a Cortex-M bare ELF (the hosted `labwired_run` path for
+  STM32, RP2040, nRF and EFR32 boards) takes `cycles`/`instructions` from the
+  machine's counters instead of a per-step observer. Where the bus's per-cycle
+  tick has no work of its own (no CAN tester or bridge, no GPIO device needing
+  service) it also plans CPU windows at the bus's max-safe interval with exact
+  boundaries (`Machine::exact_batch_boundaries`): each batch ends after an
+  instruction that touches a device, windows already end at scheduler and
+  interrupt deadlines, every boundary ticks, and the bus keeps interval 1 so
+  peripherals pace events as before. UART, GPIO edges, final CPU state and
+  stop reason are identical with `LABWIRED_HOSTED_FAST=0`; result.json
+  `cycles` becomes the machine clock (the observer over-counted Cortex-M
+  cycles up to 10x) and `instructions` now counts exception-entry steps.
+  STM32 and RP2040 labs run 1.5-5x faster.
+- `labwired snapshot capture --profile arduino-esp32` (the hosted
+  `labwired_run` path for a classic ESP32 without watches, stimuli or
+  acceptance) advances in chunks with the idle and CCOUNT poll-loop skips
+  instead of one instruction per call. A step is still a machine cycle, so
+  `--steps`, `--progress-every` and the captured state land on the same
+  cycle. `LABWIRED_IDLE_FAST_FORWARD=0` and `--trace-out` keep single steps.
+  The four-servo lab: 10 s simulated in 1.3 s (was ~110 s).
+- `labwired test` on a classic ESP32 (the hosted `labwired_run` /
+  `labwired_verify` path, including the `arduino-esp32` profile with loopTask
+  on PRO_CPU) runs the idle and CCOUNT poll-loop skips, as every other test
+  path already did (`LABWIRED_IDLE_FAST_FORWARD=0` opts out). Metrics come
+  from the machine's counters instead of a per-step observer, and a step is a
+  machine cycle, retired or skipped, so every advance call, assertion check,
+  settle window and `max_steps` lands on the same cycle as a run with no
+  skip. result.json is unchanged except `metrics.pc_samples` and
+  `metrics.peripheral_accesses`, which count retired work. The four-servo lab
+  (d26Wk2eXNiFS): 10 s simulated in 1.4 s, was ~450 s.
+- A dual-core machine no longer runs in lockstep while the secondary core
+  busy-waits on CCOUNT and the primary is busy. The secondary's proven poll
+  loop is deferred: the primary runs alone, and the secondary catches up
+  when the deferral ends (before its CCOMPARE0 edge, when a byte its loop
+  reads changes, when an interrupt it takes becomes pending, or at the end of
+  the advance). Servo edge stamps are identical to a run without any skip.
+  The four-servo lab's native browser-path harness goes from 3.75x to 5.4x
+  real time.
+- Beside a deferred secondary, the primary runs as one CPU batch instead of
+  one instruction per tick, on a bus whose per-cycle tick does nothing. The
+  batch ends right after the instruction that touches a device or stores
+  into a byte the deferred loop reads (`bus::BatchStop`). Servo edge stamps
+  are unchanged; the four-servo lab's native harness goes from 5.3x to 8.7x.
 - Idle fast-forward also skips a proven CCOUNT busy-wait, on any core. A
   core in a loop that only reads CCOUNT, computes with it and compares it
   (`while (ESP.getCycleCount() - t0 < n) {}`, a servo pulse loop) counts as
@@ -57,6 +154,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a run without any skip. The four-servo trajectory lab (two cores, loopTask
   on APP_CPU) goes from 0.03x to 2.0x real time in WASM (Node, 12 s).
 ### Fixed
+- A WAITI-parked secondary core that an interrupt wakes in the middle of a
+  quantum-1 window runs from the next cycle. The window stepped a secondary
+  only while it was parked, so after a mid-window wake it sat unstepped
+  until the window ended, and a dual-core run depended on where `advance`
+  calls ended (with idle fast-forward on or off). On the four-servo ESP32
+  lab the APP_CPU lost 776 cycles at its boot wake; every servo edge now
+  lands 776 cycles earlier, the same for every call size.
 - Idle fast-forward on a dual-core machine waits until BOTH cores are idle.
   It skipped on the primary's WAITI alone, so an ESP32 sketch whose
   `loopTask` runs on APP_CPU got about 1 % of the machine's cycles: a
@@ -283,7 +387,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Every new exchange is checked for the same results and wire history
     with the nodes swapped and with 37 ns rounds.
 
+### Changed
+- Firmware coverage paths: LCOV `SF:`, Cobertura `filename` and the JSON's
+  new `path` field carry the source's directory (`src/main.c`, not
+  `main.c`), relative to the build directory most of the line table comes
+  from; files of other compilation units (a registry crate, a vendor SDK)
+  keep their absolute path. Update `genhtml --prefix` / editor path
+  mappings that relied on bare names. The JSON's `file` keeps the bare name.
+- The coverage JSON's `branches` lists every conditional branch in the ELF
+  (unreached ones with `reached: false`), so UIs see more entries and a
+  lower, honest branch percentage.
+- `Session::restore` gives a coverage report equal to a straight run to the
+  snapshot; the browser playground keeps accumulating across a rewind, as
+  before.
+
 ### Fixed
+- Firmware coverage branch numbers were wrong on every ISA but Thumb: the
+  fall-through address came from a Thumb-only instruction-length rule, so a
+  RISC-V run reported ~200 "branch sites" for firmware with 19. The observer
+  now records `(from, to)` step counts with no ISA assumption.
+- Branch coverage counted unconditional jumps, calls and returns as
+  half-covered branches, and dropped branches the run never reached.
+- Coverage source files are keyed by their path with directory
+  (`src/main.c`), not the bare name: two `main.c` files no longer merge, and
+  branch data is no longer lost when the compiler records the source with a
+  directory (a clang build of `src/brake_ecu.c` produced LCOV with no `BRDA`
+  at all).
+- `Session::restore` replayed the run into the coverage observer on top of
+  the counts it already had. The playground's restore no longer records the
+  rewind as a jump, and on dual-core chips the two cores' instructions no
+  longer chain into made-up jumps (new `SimulationObserver::on_core_switch`).
+- Line-table sequences of functions the linker discarded (relocated to
+  address 0) no longer count as statements or claim the live code that sits
+  at low addresses; a sequence starting where another ends is found.
+- Plain C function names were passed through the C++ demangler (`f` became
+  `float`, `d` became `double`).
 - ESP32-S3 LCD_CAM `CAM_CTRL1`: `CAM_START` is bit 29 and `CAM_RESET` bit 30
   (with `CAM_AFIFO_RESET` at 31), per the SVD. They were modelled swapped, so
   the camera driver's start was read as a reset pulse and capture never ran.

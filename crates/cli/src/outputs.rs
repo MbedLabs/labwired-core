@@ -219,9 +219,22 @@ pub(crate) fn write_outputs<C: labwired_core::Cpu>(
                         let report = labwired_cli::pc_coverage_report::CoverageReport::from_run(
                             &symbols, cov,
                         );
+                        // TN: carries the test's name (the script's file
+                        // stem) so `labwired coverage merge` can say which
+                        // test ran each line.
+                        let test_name = args
+                            .script
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .unwrap_or_default();
                         let info_path = output_dir.join("coverage.info");
-                        if let Err(e) = std::fs::write(&info_path, report.to_lcov()) {
+                        if let Err(e) = std::fs::write(&info_path, report.to_lcov_named(&test_name))
+                        {
                             error!("Failed to write coverage.info: {}", e);
+                        }
+                        let cobertura_path = output_dir.join("coverage.cobertura.xml");
+                        if let Err(e) = std::fs::write(&cobertura_path, report.to_cobertura()) {
+                            error!("Failed to write coverage.cobertura.xml: {}", e);
                         }
                         let cov_json_path = output_dir.join("coverage.json");
                         match std::fs::File::create(&cov_json_path) {
@@ -233,14 +246,23 @@ pub(crate) fn write_outputs<C: labwired_core::Cpu>(
                             Err(e) => error!("Failed to create coverage.json: {}", e),
                         }
                         info!(
-                            "Coverage: {}/{} statements ({:.1}%), {}/{} branches ({:.1}%)",
+                            "Coverage: {}/{} lines ({:.1}%), {}/{} branches ({:.1}%), {}/{} functions ({:.1}%)",
                             report.covered_statements,
                             report.total_statements,
                             report.statement_percent(),
                             report.covered_branches,
                             report.total_branches,
-                            report.branch_percent()
+                            report.branch_percent(),
+                            report.covered_functions,
+                            report.total_functions,
+                            report.function_percent()
                         );
+                        if report.branch_isa.is_none() {
+                            info!(
+                                "Coverage: branch coverage is not available for this \
+                                 instruction set (Thumb and RISC-V are supported)"
+                            );
+                        }
                         coverage_summary = Some(labwired_cli::manifest::CoverageSummary {
                             statements_total: report.total_statements,
                             statements_covered: report.covered_statements,

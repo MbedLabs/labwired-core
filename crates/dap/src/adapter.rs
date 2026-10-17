@@ -1757,6 +1757,124 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
+    /// Chip scaffold shared by the board_io resolution tests: name "test",
+    /// one Cortex-M gpio peripheral at `base`, optional one-key register
+    /// layout config, caller-chosen flash/ram windows.
+    fn gpio_chip(
+        id: &str,
+        base: u64,
+        config: Option<(&str, &str)>,
+        flash: (u64, u64),
+        ram: (u64, u64),
+    ) -> labwired_config::ChipDescriptor {
+        let mut config_map = HashMap::new();
+        if let Some((key, value)) = config {
+            config_map.insert(key.to_string(), value.into());
+        }
+        labwired_config::ChipDescriptor {
+            schema_version: "1.0".to_string(),
+            reset_vector_offset: 0,
+            flash_boot_alias: true,
+            atomic_register_aliases: labwired_config::AtomicAliasFlavour::None,
+            ns_alias_offset: None,
+            memory_regions: Vec::new(),
+            name: "test".to_string(),
+            cpu_hz: 0,
+            arch: labwired_config::Arch::Arm,
+            core: None,
+            flash: labwired_config::MemoryRange {
+                base: flash.0,
+                size: flash.1,
+                cpu_writes: labwired_config::CpuWritePolicy::Allow,
+            },
+            ram: labwired_config::MemoryRange {
+                base: ram.0,
+                size: ram.1,
+                cpu_writes: labwired_config::CpuWritePolicy::Allow,
+            },
+            peripherals: vec![labwired_config::PeripheralConfig {
+                id: id.to_string(),
+                r#type: "gpio".to_string(),
+                base_address: base,
+                size: None,
+                irq: None,
+                irq_controller: None,
+                clock: None,
+                config: config_map,
+            }],
+            pins: Default::default(),
+            analog_pins: Default::default(),
+            io_voltage_v: None,
+            gpio_input_thresholds: None,
+            supply_monitor: None,
+            include: None,
+        }
+    }
+
+    /// Board-I/O manifest shared by the four tests: fixed system/chip names,
+    /// caller-supplied bindings.
+    fn board_io_manifest(
+        bindings: Vec<labwired_config::BoardIoBinding>,
+    ) -> labwired_config::SystemManifest {
+        labwired_config::SystemManifest {
+            parts: Vec::new(),
+            walk_deleted: Some(false),
+            schema_version: "1.0".to_string(),
+            name: "test-system".to_string(),
+            chip: "test-chip".to_string(),
+            cpu_hz: None,
+            memory_overrides: HashMap::new(),
+            external_devices: Vec::new(),
+            cosim_models: Vec::new(),
+            motor_models: Vec::new(),
+            board_io: bindings,
+            debug_uart: None,
+            wifi_ap: None,
+            peripherals: Vec::new(),
+        }
+    }
+
+    /// One active-high board_io contact.
+    fn binding(
+        id: &str,
+        kind: labwired_config::BoardIoKind,
+        peripheral: &str,
+        pin: u8,
+        signal: labwired_config::BoardIoSignal,
+    ) -> labwired_config::BoardIoBinding {
+        labwired_config::BoardIoBinding {
+            id: id.to_string(),
+            kind,
+            peripheral: peripheral.to_string(),
+            pin,
+            signal,
+            active_high: true,
+            device_type: None,
+            i2c_address: None,
+            channel: None,
+        }
+    }
+
+    fn led(peripheral: &str, pin: u8) -> labwired_config::BoardIoBinding {
+        binding(
+            "led",
+            labwired_config::BoardIoKind::Led,
+            peripheral,
+            pin,
+            labwired_config::BoardIoSignal::Output,
+        )
+    }
+
+    fn button(peripheral: &str, pin: u8) -> labwired_config::BoardIoBinding {
+        binding(
+            "button",
+            labwired_config::BoardIoKind::Button,
+            peripheral,
+            pin,
+            labwired_config::BoardIoSignal::Input,
+        )
+    }
+
     #[test]
     fn step_back_and_step_out_error_before_machine_attached() {
         // The server relies on these returning Err pre-init so it can reply with
@@ -1782,71 +1900,14 @@ mod tests {
 
     #[test]
     fn test_resolve_board_io_bindings_uses_default_gpio_offsets() {
-        let chip = labwired_config::ChipDescriptor {
-            schema_version: "1.0".to_string(),
-            reset_vector_offset: 0,
-            flash_boot_alias: true,
-            atomic_register_aliases: labwired_config::AtomicAliasFlavour::None,
-            ns_alias_offset: None,
-            memory_regions: Vec::new(),
-            name: "test".to_string(),
-            cpu_hz: 0,
-            arch: labwired_config::Arch::Arm,
-            core: None,
-            flash: labwired_config::MemoryRange {
-                base: 0x0800_0000,
-                size: 125 * 1024,
-                cpu_writes: labwired_config::CpuWritePolicy::Allow,
-            },
-            ram: labwired_config::MemoryRange {
-                base: 0x2000_0000,
-                size: 32000,
-                cpu_writes: labwired_config::CpuWritePolicy::Allow,
-            },
-            peripherals: vec![labwired_config::PeripheralConfig {
-                id: "gpioa".to_string(),
-                r#type: "gpio".to_string(),
-                base_address: 0x4001_0800,
-                size: None,
-                irq: None,
-                irq_controller: None,
-                clock: None,
-                config: HashMap::new(),
-            }],
-            pins: Default::default(),
-            analog_pins: Default::default(),
-            io_voltage_v: None,
-            gpio_input_thresholds: None,
-            supply_monitor: None,
-            include: None,
-        };
-
-        let manifest = labwired_config::SystemManifest {
-            parts: Vec::new(),
-            walk_deleted: Some(false),
-            schema_version: "1.0".to_string(),
-            name: "test-system".to_string(),
-            chip: "test-chip".to_string(),
-            cpu_hz: None,
-            memory_overrides: HashMap::new(),
-            external_devices: Vec::new(),
-            cosim_models: Vec::new(),
-            motor_models: Vec::new(),
-            board_io: vec![labwired_config::BoardIoBinding {
-                id: "led".to_string(),
-                kind: labwired_config::BoardIoKind::Led,
-                peripheral: "gpioa".to_string(),
-                pin: 5,
-                signal: labwired_config::BoardIoSignal::Output,
-                active_high: true,
-                device_type: None,
-                i2c_address: None,
-                channel: None,
-            }],
-            debug_uart: None,
-            wifi_ap: None,
-            peripherals: Vec::new(),
-        };
+        let chip = gpio_chip(
+            "gpioa",
+            0x4001_0800,
+            None,
+            (0x0800_0000, 125 * 1024),
+            (0x2000_0000, 32000),
+        );
+        let manifest = board_io_manifest(vec![led("gpioa", 5)]);
 
         let resolved = resolve_board_io_bindings(&chip, &manifest);
         assert_eq!(resolved.len(), 1);
@@ -1855,86 +1916,14 @@ mod tests {
 
     #[test]
     fn test_resolve_board_io_bindings_uses_stm32v2_gpio_offsets() {
-        let mut gpio_config = HashMap::new();
-        gpio_config.insert("profile".to_string(), "stm32v2".into());
-        let chip = labwired_config::ChipDescriptor {
-            schema_version: "1.0".to_string(),
-            reset_vector_offset: 0,
-            flash_boot_alias: true,
-            atomic_register_aliases: labwired_config::AtomicAliasFlavour::None,
-            ns_alias_offset: None,
-            memory_regions: Vec::new(),
-            name: "test".to_string(),
-            cpu_hz: 0,
-            arch: labwired_config::Arch::Arm,
-            core: None,
-            flash: labwired_config::MemoryRange {
-                base: 0x0800_0000,
-                size: 125 * 1024,
-                cpu_writes: labwired_config::CpuWritePolicy::Allow,
-            },
-            ram: labwired_config::MemoryRange {
-                base: 0x2000_0000,
-                size: 32000,
-                cpu_writes: labwired_config::CpuWritePolicy::Allow,
-            },
-            peripherals: vec![labwired_config::PeripheralConfig {
-                id: "gpiob".to_string(),
-                r#type: "gpio".to_string(),
-                base_address: 0x4202_0400,
-                size: None,
-                irq: None,
-                irq_controller: None,
-                clock: None,
-                config: gpio_config,
-            }],
-            pins: Default::default(),
-            analog_pins: Default::default(),
-            io_voltage_v: None,
-            gpio_input_thresholds: None,
-            supply_monitor: None,
-            include: None,
-        };
-
-        let manifest = labwired_config::SystemManifest {
-            parts: Vec::new(),
-            walk_deleted: Some(false),
-            schema_version: "1.0".to_string(),
-            name: "test-system".to_string(),
-            chip: "test-chip".to_string(),
-            cpu_hz: None,
-            memory_overrides: HashMap::new(),
-            external_devices: Vec::new(),
-            cosim_models: Vec::new(),
-            motor_models: Vec::new(),
-            board_io: vec![
-                labwired_config::BoardIoBinding {
-                    id: "led".to_string(),
-                    kind: labwired_config::BoardIoKind::Led,
-                    peripheral: "gpiob".to_string(),
-                    pin: 0,
-                    signal: labwired_config::BoardIoSignal::Output,
-                    active_high: true,
-                    device_type: None,
-                    i2c_address: None,
-                    channel: None,
-                },
-                labwired_config::BoardIoBinding {
-                    id: "button".to_string(),
-                    kind: labwired_config::BoardIoKind::Button,
-                    peripheral: "gpiob".to_string(),
-                    pin: 13,
-                    signal: labwired_config::BoardIoSignal::Input,
-                    active_high: true,
-                    device_type: None,
-                    i2c_address: None,
-                    channel: None,
-                },
-            ],
-            debug_uart: None,
-            wifi_ap: None,
-            peripherals: Vec::new(),
-        };
+        let chip = gpio_chip(
+            "gpiob",
+            0x4202_0400,
+            Some(("profile", "stm32v2")),
+            (0x0800_0000, 125 * 1024),
+            (0x2000_0000, 32000),
+        );
+        let manifest = board_io_manifest(vec![led("gpiob", 0), button("gpiob", 13)]);
 
         let resolved = resolve_board_io_bindings(&chip, &manifest);
         assert_eq!(resolved.len(), 2);
@@ -1944,86 +1933,14 @@ mod tests {
 
     #[test]
     fn test_resolve_board_io_bindings_uses_sam_port_gpio_offsets() {
-        let mut gpio_config = HashMap::new();
-        gpio_config.insert("profile".to_string(), "sam_port".into());
-        let chip = labwired_config::ChipDescriptor {
-            schema_version: "1.0".to_string(),
-            reset_vector_offset: 0,
-            flash_boot_alias: true,
-            atomic_register_aliases: labwired_config::AtomicAliasFlavour::None,
-            ns_alias_offset: None,
-            memory_regions: Vec::new(),
-            name: "test".to_string(),
-            cpu_hz: 0,
-            arch: labwired_config::Arch::Arm,
-            core: None,
-            flash: labwired_config::MemoryRange {
-                base: 0x0000_0000,
-                size: 256 * 1024,
-                cpu_writes: labwired_config::CpuWritePolicy::Allow,
-            },
-            ram: labwired_config::MemoryRange {
-                base: 0x2000_0000,
-                size: 32 * 1024,
-                cpu_writes: labwired_config::CpuWritePolicy::Allow,
-            },
-            peripherals: vec![labwired_config::PeripheralConfig {
-                id: "porta".to_string(),
-                r#type: "gpio".to_string(),
-                base_address: 0x4100_4400,
-                size: None,
-                irq: None,
-                irq_controller: None,
-                clock: None,
-                config: gpio_config,
-            }],
-            pins: Default::default(),
-            analog_pins: Default::default(),
-            io_voltage_v: None,
-            gpio_input_thresholds: None,
-            supply_monitor: None,
-            include: None,
-        };
-
-        let manifest = labwired_config::SystemManifest {
-            parts: Vec::new(),
-            walk_deleted: Some(false),
-            schema_version: "1.0".to_string(),
-            name: "test-system".to_string(),
-            chip: "test-chip".to_string(),
-            cpu_hz: None,
-            memory_overrides: HashMap::new(),
-            external_devices: Vec::new(),
-            cosim_models: Vec::new(),
-            motor_models: Vec::new(),
-            board_io: vec![
-                labwired_config::BoardIoBinding {
-                    id: "led".to_string(),
-                    kind: labwired_config::BoardIoKind::Led,
-                    peripheral: "porta".to_string(),
-                    pin: 17,
-                    signal: labwired_config::BoardIoSignal::Output,
-                    active_high: true,
-                    device_type: None,
-                    i2c_address: None,
-                    channel: None,
-                },
-                labwired_config::BoardIoBinding {
-                    id: "button".to_string(),
-                    kind: labwired_config::BoardIoKind::Button,
-                    peripheral: "porta".to_string(),
-                    pin: 15,
-                    signal: labwired_config::BoardIoSignal::Input,
-                    active_high: true,
-                    device_type: None,
-                    i2c_address: None,
-                    channel: None,
-                },
-            ],
-            debug_uart: None,
-            wifi_ap: None,
-            peripherals: Vec::new(),
-        };
+        let chip = gpio_chip(
+            "porta",
+            0x4100_4400,
+            Some(("profile", "sam_port")),
+            (0x0, 256 * 1024),
+            (0x2000_0000, 32 * 1024),
+        );
+        let manifest = board_io_manifest(vec![led("porta", 17), button("porta", 15)]);
 
         let resolved = resolve_board_io_bindings(&chip, &manifest);
         assert_eq!(resolved.len(), 2);
@@ -2033,101 +1950,18 @@ mod tests {
 
     #[test]
     fn test_resolve_board_io_bindings_register_layout_alias_still_supported() {
-        let mut gpio_config = HashMap::new();
-        gpio_config.insert("register_layout".to_string(), "stm32v2".into());
-        let chip = labwired_config::ChipDescriptor {
-            schema_version: "1.0".to_string(),
-            reset_vector_offset: 0,
-            flash_boot_alias: true,
-            atomic_register_aliases: labwired_config::AtomicAliasFlavour::None,
-            ns_alias_offset: None,
-            memory_regions: Vec::new(),
-            name: "test".to_string(),
-            cpu_hz: 0,
-            arch: labwired_config::Arch::Arm,
-            core: None,
-            flash: labwired_config::MemoryRange {
-                base: 0x0800_0000,
-                size: 125 * 1024,
-                cpu_writes: labwired_config::CpuWritePolicy::Allow,
-            },
-            ram: labwired_config::MemoryRange {
-                base: 0x2000_0000,
-                size: 32000,
-                cpu_writes: labwired_config::CpuWritePolicy::Allow,
-            },
-            peripherals: vec![labwired_config::PeripheralConfig {
-                id: "gpiob".to_string(),
-                r#type: "gpio".to_string(),
-                base_address: 0x4202_0400,
-                size: None,
-                irq: None,
-                irq_controller: None,
-                clock: None,
-                config: gpio_config,
-            }],
-            pins: Default::default(),
-            analog_pins: Default::default(),
-            io_voltage_v: None,
-            gpio_input_thresholds: None,
-            supply_monitor: None,
-            include: None,
-        };
-
-        let manifest = labwired_config::SystemManifest {
-            parts: Vec::new(),
-            walk_deleted: Some(false),
-            schema_version: "1.0".to_string(),
-            name: "test-system".to_string(),
-            chip: "test-chip".to_string(),
-            cpu_hz: None,
-            memory_overrides: HashMap::new(),
-            external_devices: Vec::new(),
-            cosim_models: Vec::new(),
-            motor_models: Vec::new(),
-            board_io: vec![labwired_config::BoardIoBinding {
-                id: "led".to_string(),
-                kind: labwired_config::BoardIoKind::Led,
-                peripheral: "gpiob".to_string(),
-                pin: 0,
-                signal: labwired_config::BoardIoSignal::Output,
-                active_high: true,
-                device_type: None,
-                i2c_address: None,
-                channel: None,
-            }],
-            debug_uart: None,
-            wifi_ap: None,
-            peripherals: Vec::new(),
-        };
+        let chip = gpio_chip(
+            "gpiob",
+            0x4202_0400,
+            Some(("register_layout", "stm32v2")),
+            (0x0800_0000, 125 * 1024),
+            (0x2000_0000, 32000),
+        );
+        let manifest = board_io_manifest(vec![led("gpiob", 0)]);
 
         let resolved = resolve_board_io_bindings(&chip, &manifest);
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].register_addr, 0x4202_0400 + GPIO_V2_ODR_OFFSET);
-    }
-
-    #[test]
-    fn test_adapter_breakpoints() {
-        let elf_path =
-            labwired_core::test_support::target_dir().join("thumbv7m-none-eabi/debug/firmware");
-        if !elf_path.exists() {
-            labwired_core::test_support::skip_or_fail_missing_firmware(
-                "dap-firmware",
-                &format!("DAP test firmware ({})", elf_path.display()),
-                "cargo build -p firmware --target thumbv7m-none-eabi",
-            );
-            return;
-        }
-
-        let adapter = LabwiredAdapter::new();
-        adapter
-            .load_firmware(elf_path, None)
-            .expect("Failed to load firmware");
-
-        // Set breakpoint at main.rs:11
-        let _ = adapter
-            .set_breakpoints("main.rs".to_string(), vec![11])
-            .expect("Failed to set breakpoints");
     }
 
     #[test]

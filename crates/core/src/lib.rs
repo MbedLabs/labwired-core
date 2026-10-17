@@ -103,6 +103,15 @@ pub enum DmaDirection {
     Read,
     Write,
     Copy,
+    /// A DMA FIFO filling from its source port: read `transform.src_width`
+    /// bytes at `src_addr` (one access when aligned) and hand the value,
+    /// little-endian, back to the DMA that issued the item
+    /// ([`Peripheral::dma_load_data`]). `addr` is unused.
+    Load,
+    /// A DMA FIFO draining to its destination port: write the low
+    /// `transform.dst_width` bytes of the value at `addr` (one access when
+    /// aligned). `src_addr` is unused.
+    Store(u32),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -248,6 +257,11 @@ pub trait SimulationObserver: std::fmt::Debug + Send + Sync {
     fn on_step_end(&self, _cycles: u32, _registers: &[u32]) {}
     fn on_memory_write(&self, _addr: u64, _old: u8, _new: u8) {}
     fn on_peripheral_tick(&self, _name: &str, _cycles: u32) {}
+    /// The machine is about to step CPU core `core` (0 = the primary). Sent
+    /// only by multi-core machines, before a different core steps and again
+    /// when the primary resumes, so an observer that links one instruction to
+    /// the next can keep one chain per core.
+    fn on_core_switch(&self, _core: usize) {}
 }
 
 /// Offset of the standardized PC slot from the end of an `on_step_end`
@@ -357,7 +371,11 @@ where
     // lazily-advanced peripheral is not pinned to the batch-start cycle for
     // the whole window. Same gate and same rationale as the hand-written
     // `CortexM::step_batch` / `RiscV::step_batch` twins — see either.
-    let live_step = u64::from(config.peripheral_tick_interval > 1);
+    // An armed batch stop (`Bus::batch_stop_armed`) runs at quantum 1 with
+    // the per-cycle tick and drain deferred to its end, so the bus clock must
+    // stay live per instruction as at a larger interval.
+    let stop_armed = bus.batch_stop_armed();
+    let live_step = u64::from(config.peripheral_tick_interval > 1 || stop_armed);
     // A core whose step cycles are clock time (AVR) retires instructions of
     // different lengths, so "one bump per instruction" would drift from the
     // cycle count the poll reference samples at. For that core the clock is
@@ -396,6 +414,9 @@ where
         if config.idle_fast_forward_enabled
             && (cpu.idle_fast_forward_budget(bus).is_some() || cpu.poll_loop_anchor_ready())
         {
+            return Ok(i + 1);
+        }
+        if stop_armed && bus.batch_stop_hit() {
             return Ok(i + 1);
         }
         // A world's net pad changed drive: end the batch on this instruction
@@ -661,6 +682,28 @@ pub trait Cpu: Send {
         false
     }
 
+    /// While the machine defers this core's proven poll loop (the plan the
+    /// last [`Self::poll_loop_skip_budget`] proved, not yet applied): has
+    /// anything the deferred iterations depend on changed? True when a word
+    /// the loop loads no longer holds the value the proof read, or when an
+    /// interrupt the core would take is now pending. Default `true`: a core
+    /// that cannot defer never stays deferred.
+    fn poll_loop_defer_changed(&self, _bus: &dyn Bus) -> bool {
+        true
+    }
+
+    /// The byte ranges `[lo, hi)` the deferred loop's proof read; a store
+    /// into one may change it. Default: none.
+    fn poll_loop_watch(&self, _out: &mut Vec<(u64, u64)>) {}
+
+    /// End a deferral: leave the core exactly where running `cycles` cycles
+    /// of the proven loop from its anchor would leave it, with the memory and
+    /// interrupt state the proof saw. `cycles` is at most the proven budget.
+    /// `false`, having changed nothing, when there is no plan.
+    fn poll_loop_catch_up(&mut self, _bus: &dyn Bus, _cycles: u64) -> bool {
+        false
+    }
+
     /// Is the cycle count this core charges per step real clock time?
     ///
     /// True for an AVR: its step takes the datasheet's 1–4 clock cycles, and
@@ -893,6 +936,15 @@ impl Cpu for Box<dyn Cpu> {
     fn fast_forward_poll_loop(&mut self, cycles: u64) -> bool {
         (**self).fast_forward_poll_loop(cycles)
     }
+    fn poll_loop_defer_changed(&self, bus: &dyn Bus) -> bool {
+        (**self).poll_loop_defer_changed(bus)
+    }
+    fn poll_loop_watch(&self, out: &mut Vec<(u64, u64)>) {
+        (**self).poll_loop_watch(out)
+    }
+    fn poll_loop_catch_up(&mut self, bus: &dyn Bus, cycles: u64) -> bool {
+        (**self).poll_loop_catch_up(bus, cycles)
+    }
     fn secondary_execution_state(&self) -> SecondaryExecutionState {
         (**self).secondary_execution_state()
     }
@@ -928,6 +980,30 @@ pub enum MmioAccessClass {
 pub trait Peripheral: std::fmt::Debug + Send {
     fn read(&self, offset: u64) -> SimResult<u8>;
     fn write(&mut self, offset: u64, value: u8) -> SimResult<()>;
+
+    /// Controller-local byte TX DMA request. `None` refuses this endpoint;
+    /// `Some(false)` is a supported endpoint that is not ready. This does not
+    /// grant bus access: the bus must separately enforce clocks and routing.
+    /// DMA requests are independent of CPU interrupt-enable bits.
+    fn dma_tx_request(&self, _offset: u64) -> Option<bool> {
+        None
+    }
+
+    /// Refresh bus-sourced transport control inputs before an admitted TX beat.
+    /// This is not a tick: implementations must not advance time, drain bytes
+    /// or commit DMA progress. The bus calls this only after clock/readiness
+    /// admission, before the byte acceptance and its observer notification.
+    fn prepare_dma_tx(&mut self, _bus: &mut dyn Bus) {}
+
+    /// Atomically accept one TX byte, or return `false` without changing
+    /// state when not ready. Unsupported endpoints refuse explicitly.
+    /// A successful ordinary register store is not an acceptance certificate.
+    /// The bus remains responsible for gating, observers and scheduler wakes.
+    fn try_dma_write_tx_u8(&mut self, _offset: u64, _value: u8) -> SimResult<bool> {
+        Err(SimulationError::NotImplemented(
+            "peripheral has no byte TX DMA endpoint".into(),
+        ))
+    }
     fn read_u16(&self, offset: u64) -> SimResult<u16> {
         let b0 = self.read(offset)? as u16;
         let b1 = self.read(offset + 1)? as u16;
@@ -967,6 +1043,39 @@ pub trait Peripheral: std::fmt::Debug + Send {
     fn peek(&self, _offset: u64) -> Option<u8> {
         None
     }
+    /// Latched CPU-reset request raised by this peripheral, e.g. a watchdog
+    /// time-out with reset enabled. Returns `true` once per event and clears
+    /// the latch. The machine drains it at a clean instruction boundary and
+    /// reboots the CPU through the existing reset path (see
+    /// `Machine::advance`). Default: no reset requests.
+    ///
+    /// Read [`Self::latched_reset_cause`] before this call. It is `None` once
+    /// the latch has been taken.
+    fn take_reset_request(&mut self) -> bool {
+        false
+    }
+
+    /// Why [`Self::take_reset_request`] would return `true` right now.
+    /// `None` when nothing is latched, or when the peripheral does not name a
+    /// cause (the CPU still reboots; no reset-cause flag is recorded).
+    fn latched_reset_cause(&self) -> Option<PeripheralResetCause> {
+        None
+    }
+
+    /// A peripheral's reset request was drained and the CPU is about to
+    /// reboot. Sticky cause registers (RESETCAUSE and its equivalents) record
+    /// `cause` here. Called after the requesting peripheral has cleared its
+    /// own latch. Default: ignore.
+    fn on_peripheral_reset(&mut self, _cause: PeripheralResetCause) {}
+
+    /// `true` if this peripheral can ever return `true` from
+    /// [`Self::take_reset_request`]. The machine caches the bus indices of
+    /// such peripherals once at construction, so peripherals that never
+    /// request a reset add nothing to the per-instruction drain.
+    fn reset_request_capable(&self) -> bool {
+        false
+    }
+
     fn tick(&mut self) -> PeripheralTickResult {
         PeripheralTickResult::default()
     }
@@ -1361,6 +1470,33 @@ pub trait Peripheral: std::fmt::Debug + Send {
     /// with capture channels.
     fn timer_input_stage(&self) -> Option<crate::peripherals::timer::TimerInputStage> {
         None
+    }
+
+    /// Timer capability: the channel-OUTPUT wire (`CH1`..`CH4`), created on
+    /// first call, so the bus can route it onto GPIO pads. With `arm` the
+    /// timer also starts generating its outputs onto the wire (a pad was
+    /// bound); without it the wire exists but stays inert, so a timer no pad
+    /// can reach costs nothing. `None` for everything that is not a timer
+    /// with output channels.
+    fn timer_output_lines(
+        &mut self,
+        _arm: bool,
+    ) -> Option<std::sync::Arc<crate::peripherals::pad_lines::PadLines>> {
+        None
+    }
+
+    /// GPIO capability: bind pad `pin` CONDITIONALLY to `line` of a timer's
+    /// channel-output wire `cell` — live while the pad is an alternate-function
+    /// output and the timer drives that line (STM32 F1 fixed mapping). A port
+    /// whose register layout is not F1 refuses it and returns `false`.
+    fn bind_timer_output_pad(
+        &mut self,
+        _cell: &std::sync::Arc<crate::peripherals::pad_lines::PadLines>,
+        _pin: u8,
+        _line: usize,
+        _func: &'static str,
+    ) -> bool {
+        false
     }
 
     /// GPIO capability: bind pad `pin` to input `ti` of the timer at bus
@@ -1766,11 +1902,35 @@ pub trait Peripheral: std::fmt::Debug + Send {
     /// `SxCR.CHSEL`, L4 `CSELR`, G0/G4/WB `DMAMUX_CxCR.DMAREQ_ID`). Default:
     /// not a DMA controller, routes nothing.
     fn dma_route_request(&self, _request: &str, _out: &mut Vec<DmaRoute>) {}
+    /// Request multiplexer only: a request this peripheral routed to its
+    /// output `channel` (the 1-based [`DmaRoute::channel`] it answered with)
+    /// is about to be forwarded. `false` holds it back (STM32 DMAMUX request
+    /// synchronisation); the multiplexer then forwards it later as one of its
+    /// own `dma_signals` ([`Self::dma_mux_output`]). Default: forward.
+    fn dma_mux_forward(&mut self, _channel: u32) -> bool {
+        true
+    }
+    /// Request multiplexer only: the DMA channel one of this peripheral's
+    /// own `dma_signals` requests on (a request it held, or generated, and
+    /// now forwards). Default: `None` — the signal is an ordinary peripheral
+    /// request line ([`DMA_SIGNAL_TX`] / [`DMA_SIGNAL_RX`]).
+    fn dma_mux_output(&self, _signal: u32) -> Option<DmaRoute> {
+        None
+    }
     /// A peripheral-paced DMA item is about to access this peripheral at
     /// `offset`: `read` when the peripheral is the item's source (a receive),
     /// `remaining` the items the channel still has after this one (see
     /// [`DmaRequest::remaining`]). Default: ignored.
     fn dma_access_notice(&mut self, _offset: u64, _read: bool, _remaining: u32) {}
+    /// A [`DmaDirection::Load`] item this DMA controller issued has read
+    /// `value` (little-endian, `transform.src_width` bytes) from its source:
+    /// the data now enters the controller's FIFO. Default: not a FIFO DMA.
+    fn dma_load_data(&mut self, _item: &DmaRequest, _value: u32) {}
+    /// A DMA item this controller issued faulted on the bus (an unmapped
+    /// address: the bus error a DMA reports as a transfer error, STM32
+    /// `TEIF` / GPDMA `DTEF`). The bus calls it on the issuer right after
+    /// the failed access. Default: ignored.
+    fn dma_transfer_error(&mut self, _item: &DmaRequest) {}
     /// Espressif GDMA → GP-SPI: an OUT link bound to this controller pushed
     /// `bytes` into its transmit FIFO. Default: not a GDMA-coupled SPI.
     fn gdma_out_load(&mut self, _bytes: &[u8]) {}
@@ -1946,6 +2106,16 @@ pub trait Peripheral: std::fmt::Debug + Send {
         sched::EventResult::default()
     }
 
+    /// Opt in when service represents ONE clocked peripheral tick, rather
+    /// than an absolute deadline. Both walk and event delivery check the bus's
+    /// live clock gate. While gated, an event retries after one CPU cycle
+    /// without calling the model, so work freezes without losing its wake.
+    /// Deadline-driven models must not opt in: they need their own elapsed-time
+    /// accounting. Default preserves existing scheduler delivery semantics.
+    fn requires_clocked_tick(&self) -> bool {
+        false
+    }
+
     /// Phase 2B.1: synchronously notified when a subscribed clock domain
     /// changes rate. Implementations typically cancel in-flight events and
     /// reschedule at the new cadence. Default no-op.
@@ -1962,6 +2132,14 @@ pub trait Peripheral: std::fmt::Debug + Send {
     /// the scheduler to drive it. Default `false` preserves existing per-cycle
     /// tick behaviour.
     fn uses_scheduler(&self) -> bool {
+        false
+    }
+
+    /// Diagnostic capability: pin a model to its retained legacy reference.
+    /// Returns false when unsupported. Use only before execution, then call
+    /// `SystemBus::recompute_walk_deletable` and `refresh_peripheral_index`.
+    /// This avoids concrete-type reaches in differential harnesses.
+    fn force_legacy_walk(&mut self) -> bool {
         false
     }
 
@@ -2211,6 +2389,15 @@ pub trait Peripheral: std::fmt::Debug + Send {
         None
     }
 
+    /// Set the ambient (die) temperature an on-chip temperature sensor
+    /// reports, in °C. `true` when this peripheral has such a sensor and took
+    /// the value; `false` otherwise (the default). The bus fans one world
+    /// temperature out to every peripheral through
+    /// [`crate::bus::SystemBus::set_ambient_temperature_c`].
+    fn set_ambient_temperature_c(&mut self, _celsius: f64) -> bool {
+        false
+    }
+
     /// Hand the peripheral the machine's ONE universal bus trace, plus the name
     /// it should stamp events with. Called from the same registration choke
     /// points as [`Peripheral::attach_cycle_clock`] and
@@ -2386,6 +2573,29 @@ pub trait Bus {
     /// asks this before forwarding, instead of swallowing a refused access.
     /// Default `false`: a bus with no such windows.
     fn has_mmio_window(&self, _addr: u64) -> bool {
+        false
+    }
+
+    /// Byte TX readiness after bus routing/clock admission. Unsupported
+    /// endpoints return None; supported but blocked endpoints return false.
+    fn dma_tx_request(&self, _addr: u64) -> Option<bool> {
+        None
+    }
+
+    /// Accept one TX byte through the bus's normal MMIO bookkeeping. False
+    /// means not ready, not a successful beat. Default explicit refusal.
+    fn try_dma_write_tx_u8(&mut self, _addr: u64, _value: u8) -> SimResult<bool> {
+        Err(SimulationError::NotImplemented(
+            "bus has no admitted byte TX DMA endpoint".into(),
+        ))
+    }
+
+    /// Admit an extent for a RAM-only DMA profile without reaching through
+    /// the bus's concrete type. Mapped targets must be primary RAM, never
+    /// MMIO (including aliases), flash or extra mappings. Unmapped addresses
+    /// may be admitted so the actual read/write reports the transfer fault;
+    /// this is not a promise that the access will succeed. Default refusal.
+    fn admits_ram_only_dma_extent(&self, _start: u64, _length: u64) -> bool {
         false
     }
 
@@ -2718,6 +2928,25 @@ pub trait Bus {
     /// invalidate their cached pointer on any bus write that may touch
     /// the same range and on snapshot restore. See labwired-core#119
     /// (JIT roadmap Phase 1.2).
+    /// A machine-armed stop for the current CPU batch (see
+    /// `bus::BatchStop`). `step_batch` reads [`Self::batch_stop_armed`] once
+    /// and then, while armed, ends the batch after the instruction for which
+    /// [`Self::batch_stop_hit`] turns true. Default: never armed.
+    fn batch_stop_armed(&self) -> bool {
+        false
+    }
+
+    fn batch_stop_hit(&self) -> bool {
+        false
+    }
+
+    /// A read-only view of plain memory (RAM or flash) holding `addr`, as
+    /// `(start, end, bytes)`: reading it has no side effects and changes
+    /// nothing. Used by poll-loop proofs. Default: [`Self::fetch_slice`].
+    fn plain_memory_slice(&self, addr: u64) -> Option<(u64, u64, &[u8])> {
+        self.fetch_slice(addr)
+    }
+
     fn fetch_slice(&self, _pc: u64) -> Option<(u64, u64, &[u8])> {
         None
     }
@@ -2781,6 +3010,16 @@ pub trait DebugControl {
     // State Management
     fn snapshot(&self) -> snapshot::MachineSnapshot;
     fn restore(&mut self, snapshot: &snapshot::MachineSnapshot) -> SimResult<()>;
+}
+
+/// Why a peripheral asked the machine to reboot the CPU.
+///
+/// `Watchdog` and `System` match the K32W041 RESETCAUSE bits WDTRESET and
+/// SYSTEMRESET. Peripherals that only need the reboot leave the cause unset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeripheralResetCause {
+    Watchdog,
+    System,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2873,6 +3112,36 @@ pub struct Machine<C: Cpu> {
     pub poll_loop_cycles_skipped: u64,
     /// Windows that made up [`Self::poll_loop_cycles_skipped`].
     pub poll_loop_skips: u64,
+    /// Secondary-core cycles not interpreted because the core sat in a
+    /// proven poll loop while the primary ran ([`Self::secondary_defer`]).
+    pub poll_loop_cycles_deferred: u64,
+    /// Primary batches run beside a deferred secondary instead of one
+    /// instruction per tick (`Machine::run_primary_beside_quiet_secondary`).
+    pub primary_batches_beside_deferred: u64,
+    /// The secondary core's proven poll loop runs deferred: `(start, end)`
+    /// machine cycles. The core is not stepped from `start`; it holds the
+    /// state of its loop anchor at `start` and the plan its
+    /// [`Cpu::poll_loop_skip_budget`] proved. The primary runs alone, as
+    /// beside a parked core. The deferral ends at `end` (before the core's
+    /// CCOMPARE0 edge), when [`Cpu::poll_loop_defer_changed`] reports a
+    /// change (a word the loop reads, or a deliverable interrupt), and at
+    /// the end of every [`Machine::advance`]; then
+    /// [`Cpu::poll_loop_catch_up`] leaves the core where lockstep would.
+    pub(crate) secondary_defer: Option<(u64, u64)>,
+    /// Retained buffer for [`Cpu::poll_loop_watch`].
+    batch_watch_scratch: Vec<(u64, u64)>,
+    /// Plan CPU windows at `config.peripheral_tick_interval` (wide) while
+    /// keeping every boundary cycle-exact: each batch ends right after an
+    /// instruction that touches a device (`bus::BatchStop`), windows already
+    /// end at scheduler and interrupt deadlines, and every boundary ticks. So the tick, IRQ aggregation and
+    /// drain run on each cycle where interval 1 would see a change, and the
+    /// cycles in between, where it would see none, run as one batch.
+    ///
+    /// Pair it with `bus.config.peripheral_tick_interval = 1`: models such as
+    /// the UART pace their own events by the bus interval and quantise to it.
+    /// Off by default (the browser runs wide and quantised); `labwired test`
+    /// sets it for Cortex-M, where hosted runs must be cycle-exact.
+    pub exact_batch_boundaries: bool,
     pub config: SimulationConfig,
     /// Injectable host clock used by [`HostTimeMode::Realtime`] pacing.
     host_clock: Box<dyn host_time::HostClock + Send>,
@@ -2921,6 +3190,11 @@ pub struct Machine<C: Cpu> {
     /// reorders `bus.peripherals` after construction (appends are safe — they
     /// never move an existing index).
     nvmc_index: Option<usize>,
+    /// Bus indices of peripherals whose `reset_request_capable()` is true,
+    /// resolved once at construction. Empty on every chip that has no such
+    /// peripheral, so the boundary drain is a single `is_empty()` test.
+    /// Same fixed-set assumption as [`Self::scb_index`].
+    reset_request_indices: Vec<usize>,
     /// A SoftDevice emulated at API level (nrf-softdevice-hle), when the
     /// image is an application built for one. `None` on every other board:
     /// the advance boundary then pays one `Option` test.
@@ -3607,6 +3881,13 @@ impl<C: Cpu> Machine<C> {
                 .and_then(|a| a.downcast_ref::<crate::peripherals::scb::Scb>())
                 .is_some()
         });
+        let reset_request_indices: Vec<usize> = bus
+            .peripherals
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.dev.reset_request_capable())
+            .map(|(i, _)| i)
+            .collect();
         let nvmc_index = bus.peripherals.iter().position(|p| {
             p.dev
                 .as_any()
@@ -3657,6 +3938,11 @@ impl<C: Cpu> Machine<C> {
             idle_fast_forward_cycles_skipped: 0,
             poll_loop_cycles_skipped: 0,
             poll_loop_skips: 0,
+            poll_loop_cycles_deferred: 0,
+            primary_batches_beside_deferred: 0,
+            secondary_defer: None,
+            batch_watch_scratch: Vec::new(),
+            exact_batch_boundaries: false,
             config: SimulationConfig::default(),
             host_clock: Box::new(host_time::StdHostClock::new()),
             step_profile: StepProfile::default(),
@@ -3667,6 +3953,7 @@ impl<C: Cpu> Machine<C> {
             simctl_index,
             scb_index,
             nvmc_index,
+            reset_request_indices,
             sd_hle: None,
             boot_vtor: None,
             scheduler_bootstrapped: false,
@@ -3847,6 +4134,83 @@ impl<C: Cpu> Machine<C> {
         self.step_profile.legacy_tick_entries += legacy_tick_entries as u64;
     }
 
+    /// The secondary core's state as the window planner and the CPU window
+    /// see it: a deferred poll loop runs like a parked core.
+    pub(crate) fn secondary_plan_state(&self) -> Option<SecondaryExecutionState> {
+        if self.secondary_defer.is_some() {
+            return Some(SecondaryExecutionState::ParkedIdle);
+        }
+        self.cpu_secondary
+            .as_ref()
+            .map(|sec| sec.secondary_execution_state())
+    }
+
+    /// End the secondary's deferral with the core caught up to `through`:
+    /// its steps for the machine cycles before `through` ran on the state
+    /// the proof saw.
+    pub(crate) fn end_secondary_defer(&mut self, through: u64) {
+        let Some((start, _)) = self.secondary_defer.take() else {
+            return;
+        };
+        let cycles = through.saturating_sub(start);
+        if let Some(sec) = self.cpu_secondary.as_mut() {
+            let caught_up = sec.poll_loop_catch_up(&self.bus, cycles);
+            debug_assert!(caught_up, "a deferred poll loop must catch up");
+        }
+        self.poll_loop_cycles_deferred += cycles;
+    }
+
+    /// At a machine boundary (after the tick and the scheduler drain): end a
+    /// deferral that is due, with the core caught up to now.
+    pub(crate) fn check_secondary_defer(&mut self) -> bool {
+        let Some((_, end)) = self.secondary_defer else {
+            return false;
+        };
+        let changed = self.total_cycles >= end
+            || self
+                .cpu_secondary
+                .as_ref()
+                .is_none_or(|sec| sec.poll_loop_defer_changed(&self.bus));
+        if changed {
+            self.end_secondary_defer(self.total_cycles);
+        }
+        changed
+    }
+
+    /// Defer the secondary core's proven poll loop so the primary can run
+    /// alone (see [`Self::secondary_defer`]). Only on a quantum-1 bus, where
+    /// the primary-alone window checks the deferral after every instruction.
+    pub(crate) fn try_defer_secondary(&mut self, limit: u64) -> bool {
+        if self.secondary_defer.is_some()
+            || !self.config.idle_fast_forward_enabled
+            || self.config.peripheral_tick_interval.max(1) != 1
+            || self.logic_capture.poll_active()
+            || !self.breakpoints.is_empty()
+        {
+            return false;
+        }
+        let Some(sec) = self.cpu_secondary.as_mut() else {
+            return false;
+        };
+        if sec.secondary_execution_state() != SecondaryExecutionState::Active
+            || !sec.poll_loop_anchor_ready()
+        {
+            return false;
+        }
+        let edge = sec.parked_wake_deadline_cycles();
+        let Some((_, cycles)) = sec.poll_loop_skip_budget(&self.bus, limit) else {
+            return false;
+        };
+        // The step that raises CCOMPARE0 (the `edge`-th from now) runs live.
+        let len = edge.map_or(cycles, |edge| cycles.min(edge.saturating_sub(1)));
+        if len < 2 {
+            sec.poll_loop_catch_up(&self.bus, 0);
+            return false;
+        }
+        self.secondary_defer = Some((self.total_cycles, self.total_cycles + len));
+        true
+    }
+
     fn try_idle_fast_forward(&mut self, _max_steps: Option<u64>, _steps: u64) -> u64 {
         // POLLED logic capture disables the skip: a scheduler event inside the
         // skipped window could toggle a watched pad, and the per-cycle poll
@@ -3884,6 +4248,8 @@ impl<C: Cpu> Machine<C> {
             // which case the CPU must resume normally instead of skipping.
             self.drain_scheduler_events();
             self.service_resident_edges_at_boundary();
+            self.check_secondary_defer();
+            let deferred_end = self.secondary_defer.map(|(_, end)| end);
 
             // Two coalesce sources under the same idle-FF flag:
             // 1) Architectural WFI / wait-for-interrupt (existing).
@@ -3914,7 +4280,11 @@ impl<C: Cpu> Machine<C> {
             }
             let mut secondary_wake = None;
             let mut secondary_spin: Option<(u64, u64)> = None;
-            if let Some(sec) = self.cpu_secondary.as_mut() {
+            if let Some(end) = deferred_end {
+                // A deferred loop runs on through the skip; its deferral
+                // already ends before its own timer edge.
+                secondary_wake = Some(end - self.total_cycles);
+            } else if let Some(sec) = self.cpu_secondary.as_mut() {
                 match sec.secondary_execution_state() {
                     SecondaryExecutionState::Active => {
                         if !sec.poll_loop_anchor_ready() {
@@ -3939,11 +4309,28 @@ impl<C: Cpu> Machine<C> {
             let primary_spin = match wfi_budget {
                 Some(budget) if budget > 0 => None,
                 _ if self.cpu.poll_loop_anchor_ready() => {
-                    self.cpu.poll_loop_skip_budget(&self.bus, remaining)
+                    // The proof may only skip to the nearest deadline, so
+                    // hand it that limit: a window too short for a whole
+                    // iteration refuses before probing.
+                    let mut limit = remaining;
+                    let now = self.total_cycles;
+                    for deadline in [
+                        self.bus.next_cpu_interrupt_deadline_cycle(),
+                        self.bus.next_motor_service_deadline_cycle(),
+                        self.bus.next_resident_edge_deadline_cycle(),
+                        self.sched.next_event_deadline(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        limit = limit.min(deadline.saturating_sub(now));
+                    }
+                    self.cpu.poll_loop_skip_budget(&self.bus, limit)
                 }
                 _ => None,
             };
-            let spinning = primary_spin.is_some() || secondary_spin.is_some();
+            let spinning =
+                primary_spin.is_some() || secondary_spin.is_some() || deferred_end.is_some();
             let mut budget = match (wfi_budget, primary_spin) {
                 (Some(budget), _) if budget > 0 => budget,
                 (_, Some((_, cycles))) => cycles,
@@ -4042,7 +4429,11 @@ impl<C: Cpu> Machine<C> {
             } else {
                 self.cpu.fast_forward_idle_cycles(skipped as u64);
             }
-            if let Some(sec) = self.cpu_secondary.as_mut() {
+            if let Some(sec) = self
+                .cpu_secondary
+                .as_mut()
+                .filter(|_| deferred_end.is_none())
+            {
                 if secondary_spin.is_some() {
                     let applied = sec.fast_forward_poll_loop(skipped as u64);
                     debug_assert!(applied, "a proven poll-loop skip must apply");
@@ -4612,6 +5003,13 @@ impl<C: Cpu> Machine<C> {
             if idx >= self.bus.peripherals.len() {
                 continue;
             }
+            if self.bus.peripherals[idx].dev.requires_clocked_tick()
+                && !self.bus.is_peripheral_clocked(idx)
+            {
+                self.sched
+                    .schedule(now + 1, ev.peripheral_idx, ev.event_token);
+                continue;
+            }
             // Swap the peripheral out so we can pass `&mut self.bus` into
             // `on_event` without holding two simultaneous mutable borrows.
             // Same dance the bus uses for `tick_with_bus`, but the stub stand-in
@@ -4737,10 +5135,11 @@ impl<C: Cpu> Machine<C> {
                 }
             }
         }
-        if !result.dma_requests.is_empty() {
-            if let Err(e) = self.bus.execute_dma(&result.dma_requests) {
-                tracing::warn!("on_event execute_dma failed: {e:?}");
-            }
+        // Each item runs on behalf of its issuer, which hears about a FIFO
+        // load's data and about a bus error (`Peripheral::dma_load_data` /
+        // `dma_transfer_error`).
+        for req in &result.dma_requests {
+            self.bus.execute_dma_for(peripheral_idx, req);
         }
     }
 
@@ -4777,6 +5176,29 @@ impl<C: Cpu> Machine<C> {
             .and_then(|a| a.downcast_ref::<crate::peripherals::esp32::rtc_cntl::RtcCntl>())
             .map(|rtc| rtc.reset_request_pending())
             .unwrap_or(false)
+    }
+
+    /// Drain every reset-capable peripheral's latch. Every capable peripheral
+    /// is polled (no short-circuit) so each latch clears even when another
+    /// already fired. The returned causes are what was latched before the
+    /// take; an empty vec means nobody requested a reset.
+    pub(crate) fn drain_peripheral_reset_requests(&mut self) -> Vec<Option<PeripheralResetCause>> {
+        let mut requests = Vec::new();
+        for i in 0..self.reset_request_indices.len() {
+            let idx = self.reset_request_indices[i];
+            let cause = self.bus.peripherals[idx].dev.latched_reset_cause();
+            if self.bus.peripherals[idx].dev.take_reset_request() {
+                requests.push(cause);
+            }
+        }
+        requests
+    }
+
+    /// Tell every peripheral that a CPU reboot from `cause` is being applied.
+    fn record_peripheral_reset_cause(&mut self, cause: PeripheralResetCause) {
+        for peripheral in &mut self.bus.peripherals {
+            peripheral.dev.on_peripheral_reset(cause);
+        }
     }
 
     /// Returns true (and clears the latch) if the registered SCB peripheral

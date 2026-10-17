@@ -291,6 +291,65 @@ pub(crate) fn with_clr_alias_write<R>(f: impl FnOnce() -> R) -> R {
     })
 }
 
+/// Ends a CPU batch on the instruction that could change another core: any
+/// access to a device (not plain memory), or a store into a watched byte
+/// range. Armed by the machine around a primary batch beside a deferred
+/// secondary core ([`crate::Machine::secondary_defer`]); inert
+/// otherwise. While armed, the store-spin coalescers refuse, so the batch
+/// stops on the exact store.
+#[derive(Default)]
+pub struct BatchStop {
+    armed: std::cell::Cell<bool>,
+    hit: std::cell::Cell<bool>,
+    watch: std::cell::RefCell<Vec<(u64, u64)>>,
+}
+
+impl BatchStop {
+    pub(crate) fn arm(&self, watch: &[(u64, u64)]) {
+        let mut w = self.watch.borrow_mut();
+        w.clear();
+        w.extend_from_slice(watch);
+        self.hit.set(false);
+        self.armed.set(true);
+    }
+
+    /// Disarm; true when the batch was stopped.
+    pub(crate) fn disarm(&self) -> bool {
+        self.armed.set(false);
+        self.hit.replace(false)
+    }
+
+    #[inline]
+    pub(crate) fn armed(&self) -> bool {
+        self.armed.get()
+    }
+
+    #[inline]
+    pub(crate) fn hit(&self) -> bool {
+        self.hit.get()
+    }
+
+    #[inline]
+    pub(crate) fn note_device_access(&self) {
+        if self.armed.get() {
+            self.hit.set(true);
+        }
+    }
+
+    #[inline]
+    pub(crate) fn note_store(&self, addr: u64, len: u64) {
+        if self.armed.get()
+            && self
+                .watch
+                .borrow()
+                .iter()
+                .any(|&(lo, hi)| addr < hi && addr + len > lo)
+        {
+            self.hit.set(true);
+        }
+    }
+}
+
 pub struct SystemBus {
     pub(crate) supply_domains: crate::peripherals::components::supply_domain::SupplyDomains,
     pub flash: LinearMemory,
@@ -574,6 +633,8 @@ pub struct SystemBus {
     /// Batch-local count of [`MmioAccessClass::SideEffecting`] accesses.
     /// Any non-zero value disqualifies timer-poll coalesce for that batch.
     side_effecting_mmio: std::cell::Cell<u32>,
+    /// See [`BatchStop`].
+    pub(crate) batch_stop: BatchStop,
     /// Run-lifetime successful RAM / flash / extra_mem reads (any width).
     /// Always-on, cheap; not MMIO (see [`Self::peripheral_accesses`]).
     memory_reads: std::cell::Cell<u64>,

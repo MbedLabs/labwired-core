@@ -172,7 +172,7 @@ impl SystemBus {
     /// refusal leaves the bus exactly as it was.
     #[inline]
     pub(crate) fn commit_ram_store_spin(&mut self, addr: u32, value: u32, stores: u64) -> bool {
-        if self.esp32c3_pms_armed() || !self.observers.is_empty() {
+        if self.esp32c3_pms_armed() || !self.observers.is_empty() || self.batch_stop.armed() {
             return false;
         }
         if self.ram_cpu_writes_blocked(u64::from(addr)) {
@@ -205,7 +205,10 @@ impl SystemBus {
         value: u32,
         elided: u64,
     ) -> crate::SimResult<bool> {
-        if !self.observers.is_empty() || !self.is_plain_xtensa_ram_range(u64::from(addr), 4) {
+        if !self.observers.is_empty()
+            || self.batch_stop.armed()
+            || !self.is_plain_xtensa_ram_range(u64::from(addr), 4)
+        {
             return Ok(false);
         }
         crate::Bus::write_u32(self, u64::from(addr), value)?;
@@ -258,8 +261,12 @@ impl SystemBus {
                 .wrapping_add(u64::from(count)),
         );
         let Some(p) = self.peripherals.get(peri_idx) else {
+            self.batch_stop.note_device_access();
             return;
         };
+        if self.batch_stop.armed() && !p.dev.is_plain_memory() {
+            self.batch_stop.note_device_access();
+        }
         let class = p.dev.mmio_access_class(offset);
         if !matches!(class, crate::MmioAccessClass::FreerunningTimerPoll) {
             let (i, o, n, _) = self.poll_streak.get();
