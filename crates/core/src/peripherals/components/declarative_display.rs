@@ -57,6 +57,10 @@ use labwired_config::{
 use crate::peripherals::i2c::I2cDevice;
 use crate::peripherals::spi::SpiDevice;
 
+/// ST7735R RGBSET requires 128 parameters, in addition to the shorter
+/// e-paper waveform tables. One shared bound for validation and storage.
+const DISPLAY_MAX_COMMAND_PARAMS: usize = 128;
+
 /// A glass that shows a strip of the controller's frame memory, in FIXED
 /// physical coordinates. Its origin does not move when firmware changes the
 /// orientation byte.
@@ -226,7 +230,7 @@ pub struct GenericDisplay {
     /// than re-looked-up when the parameters complete, because a command may
     /// change the very var its own guard reads.
     pending_idx: Option<u16>,
-    params: [u8; 64],
+    params: [u8; DISPLAY_MAX_COMMAND_PARAMS],
     param_have: u8,
     param_want: u8,
     unit: [u8; 4],
@@ -642,17 +646,15 @@ fn validate_spec(spec: &DisplaySpec) -> Result<()> {
 
     let mut claims: Vec<Vec<usize>> = vec![Vec::new(); 256];
     for (i, cmd) in spec.commands.iter().enumerate() {
-        // 64 rather than 8: the UC8151D's waveform LUT commands (0x20 VCOM, 44
-        // bytes; 0x21..=0x24 WW/BW/WB/BB, 42 each) are real entries in a real
-        // command table, and a table that could not state their length would
-        // have to leave them undeclared and rely on an unlisted opcode dropping
-        // its parameters — which is only a no-op while `ram.stream` is
-        // `command`.
-        if cmd.args as usize > 64 {
+        // The largest currently needed payload is ST7735R RGBSET (128 bytes).
+        // Existing UC8151D waveform tables (44/42 bytes) still fit. Refuse a
+        // longer descriptor rather than accepting and silently dropping bytes.
+        if cmd.args as usize > DISPLAY_MAX_COMMAND_PARAMS {
             bail!(
-                "command 0x{:02X} takes {} parameters; this engine buffers 64",
+                "command 0x{:02X} takes {} parameters; this engine buffers {}",
                 cmd.opcode,
-                cmd.args
+                cmd.args,
+                DISPLAY_MAX_COMMAND_PARAMS
             );
         }
         let end = cmd.opcode_end.unwrap_or(cmd.opcode);
@@ -948,7 +950,7 @@ impl GenericDisplay {
             framing: Framing::Idle,
             pending_cmd: 0,
             pending_idx: None,
-            params: [0; 64],
+            params: [0; DISPLAY_MAX_COMMAND_PARAMS],
             param_have: 0,
             param_want: 0,
             unit: [0; 4],
@@ -1337,7 +1339,7 @@ impl GenericDisplay {
         self.pending_cmd = byte;
         self.param_have = 0;
         self.param_want = 0;
-        self.params = [0; 64];
+        self.params = [0; DISPLAY_MAX_COMMAND_PARAMS];
         let resolved = self.lookup(byte);
         self.pending_idx = resolved;
         let Some(idx) = resolved else {
@@ -2348,6 +2350,79 @@ pub fn st7789(cs_pin: &str, dc_pin: &str) -> GenericDisplay {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn long_parameter_display(args: u8) -> Result<GenericDisplay> {
+        let mut spec = embedded("st7789-170x320")?.spec;
+        spec.vars.insert("last_param".into(), 0);
+        let command: DisplayCommand = serde_yaml::from_str(&format!(
+            "opcode: 0x2d\nargs: {args}\ndo: [{{ set_var: {{ name: last_param, value: {{ args: [{}] }} }} }}]",
+            args - 1
+        ))?;
+        spec.commands.push(command);
+        validate_spec(&spec)?;
+        Ok(GenericDisplay::from_spec(spec))
+    }
+
+    #[test]
+    fn display_command_accepts_and_stores_the_128th_parameter_only_on_completion() {
+        let mut display = long_parameter_display(128).expect("128-byte payload accepted");
+        display.command_byte(0x2d);
+        for _ in 0..127 {
+            // RAMWR's opcode is a PARAMETER here, never a nested command.
+            display.data_byte(0x2c);
+            assert_eq!(display.vars["last_param"], 0);
+            assert_eq!(display.framing, Framing::Params);
+        }
+        display.data_byte(0x5a);
+        assert_eq!(display.params[127], 0x5a);
+        assert_eq!(display.vars["last_param"], 0x5a);
+        assert_eq!(display.framing, Framing::Idle);
+        assert!(display.framebuffer().iter().all(|&byte| byte == 0));
+        display.data_byte(0xff);
+        assert_eq!(display.vars["last_param"], 0x5a, "extra data is stray");
+    }
+
+    #[test]
+    fn display_command_refuses_129_parameters_instead_of_truncating() {
+        let error = long_parameter_display(129).expect_err("over-limit payload refused");
+        assert!(format!("{error:#}").contains("buffers 128"));
+    }
+
+    #[test]
+    fn display_command_128_byte_payload_survives_whole_byte_cs_pauses_when_declared() {
+        let mut display = long_parameter_display(128).unwrap();
+        display.spec.cs_select = DisplayCsSelect::KeepsStream;
+        display.command_byte(0x2d);
+        display.set_dc_level(true);
+        for byte in 0..128u8 {
+            // SPI door, not a direct parser call: every byte in a new burst.
+            display.cs_select();
+            display.transfer(byte);
+            display.cs_release();
+        }
+        assert_eq!(display.vars["last_param"], 127);
+        assert_eq!(display.params[127], 127);
+        assert_eq!(display.framing, Framing::Idle);
+    }
+
+    #[test]
+    fn display_command_interruption_cannot_commit_stale_128_byte_payload() {
+        let mut display = long_parameter_display(128).unwrap();
+        display.command_byte(0x2d);
+        for _ in 0..127 {
+            display.data_byte(0xa5);
+        }
+        display.command_byte(0x29); // DISPON interrupts the incomplete command.
+        assert!(display.display_on);
+        display.data_byte(0xff);
+        assert_eq!(display.vars["last_param"], 0);
+        display.command_byte(0x2d);
+        for _ in 0..128 {
+            display.data_byte(0x17);
+        }
+        assert_eq!(display.vars["last_param"], 0x17);
+        assert!(display.params.iter().all(|&byte| byte == 0x17));
+    }
 
     /// Every display descriptor this engine ships must LOAD. A descriptor that
     /// only fails when a canvas happens to place it is a lab that breaks in the

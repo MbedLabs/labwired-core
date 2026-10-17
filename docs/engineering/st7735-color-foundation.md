@@ -23,8 +23,10 @@ on the exact source before adopting the codec.
 ## Next implementation slice
 
 1. Add an opt-in serial-colour extension to the generic display descriptor and
-   command parser, preserving existing fixed-format panels. Support the full
-   128-byte RGBSET payload; invalidate the table at upload start and expose
+   command parser, preserving existing fixed-format panels. The draft extends
+   generic command buffering to 128 bytes, with completion, over-limit,
+   whole-byte CS-pause and interruption controls; it does not yet interpret
+   RGBSET. Integrate that payload; invalidate the table at upload start and expose
    incomplete upload/unknown pixels honestly. Exact partial-table silicon
    contents are outside the codec's current boundary.
 2. Feed only RAMWR data into the codec. Every completed pixel, including an
