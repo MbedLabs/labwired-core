@@ -2111,6 +2111,14 @@ pub trait Peripheral: std::fmt::Debug + Send {
         false
     }
 
+    /// Diagnostic capability: pin a model to its retained legacy reference.
+    /// Returns false when unsupported. Use only before execution, then call
+    /// `SystemBus::recompute_walk_deletable` and `refresh_peripheral_index`.
+    /// This avoids concrete-type reaches in differential harnesses.
+    fn force_legacy_walk(&mut self) -> bool {
+        false
+    }
+
     /// Phase 2B.2 (issue #192): advance a scheduler-driven peripheral's lazy
     /// state to CPU cycle `now_cycle` (`SystemBus::current_cycle` — the same
     /// cycle count the legacy walk advances by via `tick_elapsed(interval)`).

@@ -5,8 +5,8 @@ use labwired_config::{ChipDescriptor, SystemManifest};
 use labwired_core::{
     bus::SystemBus,
     cpu::cortex_m::CortexM,
+    cycle_clock::event_scheduler_enabled,
     memory::ProgramImage,
-    peripherals::sam::sercom_spi::SamSercomSpi,
     peripherals::spi::{SpiDevice, SpiSampling},
     AdvanceRequest, Arch, Bus, Machine,
 };
@@ -77,16 +77,13 @@ fn board_with_drive(legacy: bool) -> (SystemBus, Arc<Mutex<Seen>>) {
     let manifest = SystemManifest::from_file(root.join("configs/systems/pybadge.yaml")).unwrap();
     let mut bus = SystemBus::from_config(&chip, &manifest).unwrap();
     if legacy {
-        bus.peripherals
+        assert!(bus
+            .peripherals
             .iter_mut()
             .find(|p| p.name == "sercom4")
             .unwrap()
             .dev
-            .as_any_mut()
-            .unwrap()
-            .downcast_mut::<SamSercomSpi>()
-            .unwrap()
-            .force_legacy_walk();
+            .force_legacy_walk());
         bus.recompute_walk_deletable();
         bus.refresh_peripheral_index();
     }
@@ -364,7 +361,7 @@ fn cortex_m_guest_polls_real_spi_completion_and_wrong_mux_cannot_complete() {
 fn polling_guest_matches_legacy_with_auto_batches_and_scheduler() {
     for legacy in [true, false] {
         for interval in [1, 64, 1024] {
-            if interval > 1 && !cfg!(feature = "event-scheduler") {
+            if interval > 1 && !event_scheduler_enabled() {
                 continue;
             }
             for correct_mux in [true, false] {
@@ -450,10 +447,10 @@ fn idle_spi_does_not_arm_events_or_force_the_legacy_walk() {
         .find(|p| p.name == "sercom4")
         .unwrap()
         .dev;
-    assert_eq!(spi.uses_scheduler(), cfg!(feature = "event-scheduler"));
-    assert_eq!(spi.needs_legacy_walk(), !cfg!(feature = "event-scheduler"));
+    assert_eq!(spi.uses_scheduler(), event_scheduler_enabled());
+    assert_eq!(spi.needs_legacy_walk(), !event_scheduler_enabled());
     assert!(!spi.needs_bus_tick());
-    if cfg!(feature = "event-scheduler") {
+    if event_scheduler_enabled() {
         assert_eq!(bus.max_safe_tick_interval(), 1024);
     }
     let mut machine = Machine::new(CortexM::new(), bus);

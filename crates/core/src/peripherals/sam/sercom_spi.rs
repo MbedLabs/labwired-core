@@ -85,12 +85,6 @@ impl SamSercomSpi {
         self.scheduler_mode() && !self.legacy_walk_forced
     }
 
-    /// Retain the independent per-cycle reference for differential tests.
-    /// Call before refreshing the bus's peripheral index / starting execution.
-    pub fn force_legacy_walk(&mut self) {
-        self.legacy_walk_forced = true;
-    }
-
     fn has_bus_work(&self) -> bool {
         self.holding.is_some() || self.active.is_some() || self.selected.iter().any(|s| *s)
     }
@@ -287,6 +281,10 @@ impl Peripheral for SamSercomSpi {
     }
     fn uses_scheduler(&self) -> bool {
         self.sched_driven()
+    }
+    fn force_legacy_walk(&mut self) -> bool {
+        self.legacy_walk_forced = true;
+        true
     }
     fn needs_legacy_walk(&self) -> bool {
         !self.sched_driven()
