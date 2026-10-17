@@ -4,6 +4,8 @@ on:
     paths:
       - 'crates/core/src/cpu/cortex_m.rs'
       - 'crates/core/src/tests/scb_reset.rs'
+      - 'crates/core/src/config.rs'
+      - 'crates/core/src/bus/**'
       - 'crates/core/tests/samd_real_core_reset_guest.rs'
       - '.github/workflows/samd-real-core-reset-guest.yml'
 permissions:
@@ -12,7 +14,7 @@ concurrency:
   group: real-core-reset-${{ github.ref }}
   cancel-in-progress: true
 env:
-  LABWIRED_RESET_SOURCE: 4ab84c54c1e9d28c6e927458ddebc3da7b753432
+  LABWIRED_RESET_SOURCE: 12d4759af0bf2b29726cfd79c487474a282cc5b0
   LABWIRED_SERVICES_SOURCE: 932d476344107386d56dfd2d595d74d713780563
   LABWIRED_SPI_SOURCE: 932d476344107386d56dfd2d595d74d713780563
 jobs:
@@ -27,7 +29,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: CrispStrobe/codal-samd
-          ref: 4ab84c54c1e9d28c6e927458ddebc3da7b753432
+          ref: 12d4759af0bf2b29726cfd79c487474a282cc5b0
           path: owned-reset-source
           persist-credentials: false
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -58,6 +60,7 @@ jobs:
         run: |
           cargo test --release --locked -p labwired-core --test samd_real_core_reset_guest -- --nocapture
           cargo test --release --locked -p labwired-core --lib scb_reset_tests -- --nocapture
+          cargo test --release --locked -p labwired-core --lib test_wide_ram_store_observation_is_explicit_and_exact -- --nocapture
       - name: Execute new reset and all affected earlier callers in both profiles
         run: |
           set -o pipefail

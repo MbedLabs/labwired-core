@@ -14,7 +14,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-const SOURCE: &str = "4ab84c54c1e9d28c6e927458ddebc3da7b753432";
+const SOURCE: &str = "12d4759af0bf2b29726cfd79c487474a282cc5b0";
 const CORE: &str = "2ed19d64ec3359143409a4b0a9758b4aeef3ee7d";
 const BUDGET: u64 = 200_000;
 const POST: u64 = 64;
@@ -340,6 +340,7 @@ fn actual_codal_core_reset_and_invalid_key() {
         m.add_observer(trace.clone());
         m.config.peripheral_tick_interval = quantum;
         m.config.idle_fast_forward_enabled = false;
+        m.bus.config.observe_wide_ram_stores = true;
         let mut terminal = None;
         let mut total_batches = 0u64;
         let mut total_steps = 0u64;
@@ -430,7 +431,7 @@ fn actual_codal_core_reset_and_invalid_key() {
                     0,
                     0,
                     0x20030000,
-                    0x01000000,
+                    0, // MRS xPSR masks EPSR; debugger snapshots above retain T.
                     u32::MAX,
                     1,
                     0
