@@ -414,6 +414,13 @@ fn authored_descriptor_guests_transfer_or_refuse_completion_and_return_from_corr
                 assert_eq!(machine.bus.read_u32(writeback).unwrap(), 0xaaaaaaaa);
             }
             let flags = machine.bus.read_u8(channel(index) + 14).unwrap();
+            if delivered || matches!(mode, "noact" | "primask" | "nvic" | "inten" | "reset") {
+                assert_eq!(
+                    machine.bus.read_u32(channel(index)).unwrap() & 2,
+                    0,
+                    "terminal channel must be disabled"
+                );
+            }
             assert_eq!(
                 flags,
                 if matches!(mode, "primask" | "nvic" | "inten") {
