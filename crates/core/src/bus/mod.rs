@@ -32,6 +32,7 @@ mod faults;
 mod from_config;
 pub mod interrupt_fabric;
 pub mod known_stubs;
+mod memory_policy;
 mod mmio_activity;
 mod mmio_words;
 mod motors;
@@ -56,6 +57,7 @@ pub use interrupt_fabric::{
     Esp32c3Fabric, Esp32c3IntcCache, Esp32s3Fabric, Esp32s3IrqAudit, Esp32s3IrqDivergence,
     InterruptFabric,
 };
+pub use memory_policy::{CpuWritePolicy, MemoryPolicyReport, RegionPolicyStats};
 pub use motors::MotorSnapshot;
 
 impl SystemBus {
@@ -292,6 +294,8 @@ pub(crate) fn with_clr_alias_write<R>(f: impl FnOnce() -> R) -> R {
 pub struct SystemBus {
     pub(crate) supply_domains: crate::peripherals::components::supply_domain::SupplyDomains,
     pub flash: LinearMemory,
+    /// Violation record + counts + mirrored PC/cycle for the policy gate.
+    pub(crate) memory_policy: crate::bus::memory_policy::MemoryPolicyState,
     pub ram: LinearMemory,
     /// Extra CPU-visible RAM/ROM windows beyond `flash`/`ram` (e.g. ESP32 IRAM
     /// `0x4037C000` and flash-DROM `0x3C000000`), from the chip's

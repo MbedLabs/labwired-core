@@ -12,6 +12,7 @@ impl SystemBus {
         let mut bus = Self {
             flash_thunks: std::collections::HashMap::new(),
             flash: LinearMemory::new_erased(1024 * 1024, 0x0),
+            memory_policy: crate::bus::memory_policy::MemoryPolicyState::default(),
             ram: LinearMemory::new(1024 * 1024, 0x2000_0000),
             extra_mem: Vec::new(),
             peripherals: vec![
@@ -147,6 +148,7 @@ impl SystemBus {
         let mut bus = Self {
             flash_thunks: std::collections::HashMap::new(),
             flash: LinearMemory::new_erased(0, 0),
+            memory_policy: crate::bus::memory_policy::MemoryPolicyState::default(),
             ram: LinearMemory::new(0, 0),
             extra_mem: Vec::new(),
             peripherals: Vec::new(),

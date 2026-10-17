@@ -3557,6 +3557,7 @@ fn test_system_bus_memory_observer() {
 fn test_flash_boot_alias_read_and_write() {
     let mut bus = SystemBus {
         flash: LinearMemory::new_erased(256, 0x0800_0000),
+        memory_policy: crate::bus::memory_policy::MemoryPolicyState::default(),
         ram: LinearMemory::new(256, 0x2000_0000),
         extra_mem: Vec::new(),
         peripherals: Vec::new(),
@@ -3665,6 +3666,7 @@ fn h5_flash_bus(gate: bool) -> SystemBus {
     flash.data.iter_mut().for_each(|b| *b = 0xFF);
     let mut bus = SystemBus {
         flash,
+        memory_policy: crate::bus::memory_policy::MemoryPolicyState::default(),
         ram: LinearMemory::new(256, 0x2000_0000),
         extra_mem: Vec::new(),
         peripherals: vec![PeripheralEntry {
@@ -3939,6 +3941,7 @@ fn h5_rww_bus(gate: bool) -> SystemBus {
     flash.data.iter_mut().for_each(|b| *b = 0xFF);
     let mut bus = SystemBus {
         flash,
+        memory_policy: crate::bus::memory_policy::MemoryPolicyState::default(),
         ram: LinearMemory::new(0x1000, 0x2000_0000),
         extra_mem: Vec::new(),
         peripherals: vec![PeripheralEntry {
@@ -4203,6 +4206,7 @@ fn rww_gate_off_same_bank_erase_succeeds_silently() {
 fn test_peripheral_range_index_lookup() {
     let mut bus = SystemBus {
         flash: LinearMemory::new_erased(256, 0x0800_0000),
+        memory_policy: crate::bus::memory_policy::MemoryPolicyState::default(),
         ram: LinearMemory::new(256, 0x2000_0000),
         extra_mem: Vec::new(),
         peripherals: vec![
@@ -4340,6 +4344,7 @@ fn test_execute_dma_copy_request() {
 fn test_dma_tick_executes_copy_and_raises_irq() {
     let mut bus = SystemBus {
         flash: LinearMemory::new_erased(256, 0x0800_0000),
+        memory_policy: crate::bus::memory_policy::MemoryPolicyState::default(),
         ram: LinearMemory::new(256, 0x2000_0000),
         extra_mem: Vec::new(),
         peripherals: vec![PeripheralEntry {
