@@ -1019,6 +1019,23 @@ pub trait Peripheral: std::fmt::Debug + Send {
     fn peek(&self, _offset: u64) -> Option<u8> {
         None
     }
+    /// Latched CPU-reset request raised by this peripheral, e.g. a watchdog
+    /// time-out with reset enabled. Returns `true` once per event and clears
+    /// the latch. The machine drains it at a clean instruction boundary and
+    /// reboots the CPU through the existing reset path (see
+    /// `Machine::advance`). Default: no reset requests.
+    fn take_reset_request(&mut self) -> bool {
+        false
+    }
+
+    /// `true` if this peripheral can ever return `true` from
+    /// [`Self::take_reset_request`]. The machine caches the bus indices of
+    /// such peripherals once at construction, so peripherals that never
+    /// request a reset add nothing to the per-instruction drain.
+    fn reset_request_capable(&self) -> bool {
+        false
+    }
+
     fn tick(&mut self) -> PeripheralTickResult {
         PeripheralTickResult::default()
     }
@@ -3063,6 +3080,11 @@ pub struct Machine<C: Cpu> {
     /// reorders `bus.peripherals` after construction (appends are safe — they
     /// never move an existing index).
     nvmc_index: Option<usize>,
+    /// Bus indices of peripherals whose `reset_request_capable()` is true,
+    /// resolved once at construction. Empty on every chip that has no such
+    /// peripheral, so the boundary drain is a single `is_empty()` test.
+    /// Same fixed-set assumption as [`Self::scb_index`].
+    reset_request_indices: Vec<usize>,
     /// A SoftDevice emulated at API level (nrf-softdevice-hle), when the
     /// image is an application built for one. `None` on every other board:
     /// the advance boundary then pays one `Option` test.
@@ -3749,6 +3771,13 @@ impl<C: Cpu> Machine<C> {
                 .and_then(|a| a.downcast_ref::<crate::peripherals::scb::Scb>())
                 .is_some()
         });
+        let reset_request_indices: Vec<usize> = bus
+            .peripherals
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.dev.reset_request_capable())
+            .map(|(i, _)| i)
+            .collect();
         let nvmc_index = bus.peripherals.iter().position(|p| {
             p.dev
                 .as_any()
@@ -3813,6 +3842,7 @@ impl<C: Cpu> Machine<C> {
             simctl_index,
             scb_index,
             nvmc_index,
+            reset_request_indices,
             sd_hle: None,
             boot_vtor: None,
             scheduler_bootstrapped: false,
@@ -5012,6 +5042,20 @@ impl<C: Cpu> Machine<C> {
             .and_then(|a| a.downcast_ref::<crate::peripherals::esp32::rtc_cntl::RtcCntl>())
             .map(|rtc| rtc.reset_request_pending())
             .unwrap_or(false)
+    }
+
+    /// Drain every reset-capable peripheral's latch. Every capable peripheral
+    /// is polled (no short-circuit) so each latch clears even when another
+    /// already fired. Returns true if any requested a reset.
+    pub(crate) fn drain_peripheral_reset_requests(&mut self) -> bool {
+        let mut requested = false;
+        for i in 0..self.reset_request_indices.len() {
+            let idx = self.reset_request_indices[i];
+            if self.bus.peripherals[idx].dev.take_reset_request() {
+                requested = true;
+            }
+        }
+        requested
     }
 
     /// Returns true (and clears the latch) if the registered SCB peripheral
