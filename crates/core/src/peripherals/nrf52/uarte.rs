@@ -57,6 +57,11 @@ const OFF_EVENTS_TXSTARTED: u64 = 0x150;
 const OFF_EVENTS_TXSTOPPED: u64 = 0x158;
 
 // Interrupt registers
+// nRF5340 UARTE DPPI endpoints; reserved on nRF52 instances without DPPIC.
+const OFF_SUBSCRIBE_STOPTX: u64 = 0x08C;
+const OFF_PUBLISH_ENDTX: u64 = 0x1A0;
+const DPPI_ENDPOINT_MASK: u32 = 0x8000_00FF;
+
 const OFF_INTEN: u64 = 0x300;
 const OFF_INTENSET: u64 = 0x304;
 const OFF_INTENCLR: u64 = 0x308;
@@ -162,6 +167,9 @@ pub struct Nrf52Uarte {
     config: u32,
     // Overflow bucket for any unmodelled register
     extra: BTreeMap<u64, u32>,
+    /// Resolved sibling DPPIC base, present only on a chip that declares it.
+    /// Only this instance's ENDTX -> STOPTX route is implemented.
+    dppic_base: Option<u64>,
     // ── Dynamic EasyDMA TX state (not part of the register surface) ──────
     /// Set by a STARTTX task write; consumed by the EasyDMA engine
     /// (`do_easydma_tx`). The scheduler wake waits one frame per byte. The
@@ -258,6 +266,13 @@ impl std::fmt::Debug for Nrf52Uarte {
 }
 
 impl Nrf52Uarte {
+    pub fn with_dppic(dppic_base: Option<u64>) -> Self {
+        Self {
+            dppic_base,
+            ..Self::new()
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             // PSELs reset to disconnected (all bits set = 0xFFFF_FFFF)
@@ -596,11 +611,7 @@ impl Peripheral for Nrf52Uarte {
             // STOPTX completes immediately in this model: raise TXSTOPPED so a
             // driver waiting on it (nrfx is_tx_ready) makes progress. A legacy
             // byte still in the shifter is abandoned; its wake then no-ops.
-            OFF_TASKS_STOPTX => {
-                self.events_txstopped = 1;
-                self.legacy_tx_armed = false;
-                self.legacy_shift_busy = false;
-            }
+            OFF_TASKS_STOPTX => self.stop_transmitter(),
             // STARTRX (UARTE personality) arms an EasyDMA drain of the RX
             // injection queue; the RAM write happens in `do_easydma_rx`.
             OFF_TASKS_STARTRX if self.enable != ENABLE_UART_LEGACY => self.rx_pending = true,
@@ -674,6 +685,9 @@ impl Peripheral for Nrf52Uarte {
             OFF_TXD_AMOUNT => {} // RO
             // CONFIG
             OFF_CONFIG => self.config = value & 0x1F,
+            OFF_SUBSCRIBE_STOPTX | OFF_PUBLISH_ENDTX if self.dppic_base.is_some() => {
+                self.extra.insert(offset, value & DPPI_ENDPOINT_MASK);
+            }
             _ => {
                 self.extra.insert(offset, value);
             }
@@ -890,6 +904,33 @@ impl Nrf52Uarte {
         self.events_txstarted = 1;
         self.events_txdrdy = 1;
         self.events_endtx = 1;
+        // A configured DPPI route really requests STOPTX. This is distinct
+        // from inventing a stop on every completed nRF52 buffer. Both endpoint
+        // enable bits, their matching channel and DPPIC.CHEN must admit it.
+        if self.endtx_stoptx_dppi_enabled(bus) {
+            self.stop_transmitter();
+        }
+    }
+
+    fn stop_transmitter(&mut self) {
+        self.events_txstopped = 1;
+        self.legacy_tx_armed = false;
+        self.legacy_shift_busy = false;
+    }
+
+    fn endtx_stoptx_dppi_enabled(&self, bus: &dyn Bus) -> bool {
+        let Some(base) = self.dppic_base else {
+            return false;
+        };
+        let publish = self.extra.get(&OFF_PUBLISH_ENDTX).copied().unwrap_or(0);
+        let subscribe = self.extra.get(&OFF_SUBSCRIBE_STOPTX).copied().unwrap_or(0);
+        let channel = publish & 0xff;
+        publish & subscribe & 0x8000_0000 != 0
+            && channel < 32
+            && subscribe & 0xff == channel
+            && bus
+                .read_u32(base + 0x500)
+                .is_ok_and(|chen| chen & (1 << channel) != 0)
     }
 
     /// EasyDMA RX engine shared by `tick_with_bus` and `on_event` so the two
@@ -1284,6 +1325,151 @@ mod tests {
                 "INTEN {inten:#x}: only completion events pend"
             );
             assert_eq!(u.irq_line_level(), Some(want), "INTEN {inten:#x}: line");
+        }
+    }
+
+    #[test]
+    fn dppic_channel_enable_aliases_preserve_other_channels() {
+        use crate::peripherals::nrf52::dppic::NrfDppic;
+        let mut dppic = NrfDppic::new();
+        for offset in [0x500, 0x504, 0x508] {
+            assert_eq!(dppic.read_u32(offset).unwrap(), 0);
+        }
+        dppic.write_u32(0x504, 1 << 3).unwrap();
+        dppic.write_u32(0x504, 1 << 31).unwrap();
+        assert_eq!(dppic.read_u32(0x500).unwrap(), (1 << 3) | (1 << 31));
+        dppic.write_u32(0x508, 1 << 3).unwrap();
+        assert_eq!(dppic.read_u32(0x504).unwrap(), 1 << 31);
+        dppic.write(0x504, 0x02).unwrap();
+        dppic.write(0x50b, 0x80).unwrap();
+        assert_eq!(dppic.read_u32(0x508).unwrap(), 2);
+        dppic.write_u32(0x500, 0xffff_ffff).unwrap();
+        dppic.write(0x501, 0).unwrap();
+        assert_eq!(dppic.read_u32(0x500).unwrap(), 0xffff_00ff);
+        assert_eq!(dppic.read(0x503).unwrap(), 0xff);
+        assert!(!dppic.needs_legacy_walk());
+        assert!(!dppic.legacy_tick_active());
+    }
+
+    #[test]
+    fn local_dppi_stop_requires_matching_enabled_endpoints_and_channel() {
+        use crate::bus::SystemBus;
+        use crate::memory::LinearMemory;
+        use crate::sched::EventScheduler;
+        // Remapped away from the nRF5340 address: only the supplied sibling
+        // base may be consulted, never a hardcoded silicon address.
+        const DPPIC: u64 = 0x6000_0000;
+        const ENABLE: u32 = 1 << 31;
+        for (name, base, publish, subscribe, channels, want_stop) in [
+            (
+                "configured",
+                Some(DPPIC),
+                ENABLE | 3,
+                ENABLE | 3,
+                1 << 3,
+                true,
+            ),
+            ("publisher-off", Some(DPPIC), 3, ENABLE | 3, 1 << 3, false),
+            ("subscriber-off", Some(DPPIC), ENABLE | 3, 3, 1 << 3, false),
+            (
+                "mismatch",
+                Some(DPPIC),
+                ENABLE | 3,
+                ENABLE | 4,
+                0xffff_ffff,
+                false,
+            ),
+            ("channel-off", Some(DPPIC), ENABLE | 3, ENABLE | 3, 0, false),
+            (
+                "last-channel",
+                Some(DPPIC),
+                ENABLE | 31,
+                ENABLE | 31,
+                1 << 31,
+                true,
+            ),
+            (
+                "invalid-channel",
+                Some(DPPIC),
+                ENABLE | 32,
+                ENABLE | 32,
+                0xffff_ffff,
+                false,
+            ),
+            (
+                "nrf52-no-dppic",
+                None,
+                ENABLE | 3,
+                ENABLE | 3,
+                1 << 3,
+                false,
+            ),
+        ] {
+            for scheduled in [false, true] {
+                let mut bus = SystemBus::empty();
+                bus.ram = LinearMemory::new(4096, DPPIC);
+                bus.write_u32(DPPIC + 0x500, channels).unwrap();
+                bus.write_u8(DPPIC + 0x100, b'K').unwrap();
+                let mut u = Nrf52Uarte::with_dppic(base);
+                let sink = Arc::new(Mutex::new(Vec::new()));
+                u.set_sink(Some(sink.clone()), false);
+                u.write_u32(OFF_ENABLE, ENABLE_UARTE).unwrap();
+                u.write_u32(OFF_PUBLISH_ENDTX, publish).unwrap();
+                u.write_u32(OFF_SUBSCRIBE_STOPTX, subscribe).unwrap();
+                u.write_u32(OFF_INTENSET, 1 << 22).unwrap();
+                u.write_u32(OFF_TXD_PTR, (DPPIC + 0x100) as u32).unwrap();
+                u.write_u32(OFF_TXD_MAXCNT, 1).unwrap();
+                u.write_u32(OFF_TASKS_STARTTX, 1).unwrap();
+                assert_eq!(u.read_u32(OFF_EVENTS_TXSTOPPED).unwrap(), 0);
+                if scheduled {
+                    let wakes = u.take_scheduled_events();
+                    assert_eq!(wakes, vec![(0, 4), (u.frame_cycles(), 1)]);
+                    u.on_event(4, &mut EventScheduler::new(), &mut bus);
+                    assert!(sink.lock().unwrap().is_empty());
+                    assert_eq!(u.read_u32(OFF_EVENTS_TXSTOPPED).unwrap(), 0);
+                    u.on_event(1, &mut EventScheduler::new(), &mut bus);
+                } else {
+                    u.tick_with_bus(&mut bus);
+                }
+                assert_eq!(
+                    &*sink.lock().unwrap(),
+                    b"K",
+                    "{name}, scheduler={scheduled}"
+                );
+                assert_eq!(u.read_u32(OFF_EVENTS_ENDTX).unwrap(), 1);
+                assert_eq!(
+                    u.read_u32(OFF_EVENTS_TXSTOPPED).unwrap(),
+                    u32::from(want_stop),
+                    "{name}, scheduler={scheduled}"
+                );
+                assert_eq!(u.irq_line_level(), Some(want_stop));
+            }
+        }
+    }
+
+    #[test]
+    fn dppi_channel_enable_is_sampled_at_endtx_not_buffer_capture() {
+        use crate::bus::SystemBus;
+        use crate::memory::LinearMemory;
+        use crate::sched::EventScheduler;
+        for (at_start, at_end) in [(0, 1), (1, 0)] {
+            let base = 0x6000_0000;
+            let mut bus = SystemBus::empty();
+            bus.ram = LinearMemory::new(4096, base);
+            bus.write_u32(base + 0x500, at_start).unwrap();
+            bus.write_u8(base + 0x100, b'D').unwrap();
+            let mut u = Nrf52Uarte::with_dppic(Some(base));
+            u.write_u32(OFF_ENABLE, ENABLE_UARTE).unwrap();
+            u.write_u32(OFF_PUBLISH_ENDTX, 1 << 31).unwrap();
+            u.write_u32(OFF_SUBSCRIBE_STOPTX, 1 << 31).unwrap();
+            u.write_u32(OFF_TXD_PTR, (base + 0x100) as u32).unwrap();
+            u.write_u32(OFF_TXD_MAXCNT, 1).unwrap();
+            u.write_u32(OFF_TASKS_STARTTX, 1).unwrap();
+            u.take_scheduled_events();
+            u.on_event(4, &mut EventScheduler::new(), &mut bus);
+            bus.write_u32(base + 0x500, at_end).unwrap();
+            u.on_event(1, &mut EventScheduler::new(), &mut bus);
+            assert_eq!(u.read_u32(OFF_EVENTS_TXSTOPPED).unwrap(), at_end);
         }
     }
 

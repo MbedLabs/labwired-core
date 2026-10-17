@@ -179,3 +179,16 @@ The event distinction follows the [nRF52833 UARTE transmission specification](ht
 ENDTX marks a completed buffer; TXSTOPPED acknowledges STOPTX. Existing framing,
 completion-cycle bounds, descriptor capture and explicit-stop IRQ checks stay
 required. No physical timing or silicon re-capture result is implied.
+
+The shared UARTE model also serves nRF5340. Its Zephyr enhanced polling driver
+uses a configured local DPPI ENDTX-to-STOPTX route; a completed buffer alone
+must not imply that route exists. The nRF5340 channel-enable subset models
+CHEN, CHENSET and CHENCLR. UARTE's local route requires enabled publish and
+subscribe endpoints on the same valid channel plus the controller's live
+channel-enable bit. The controller base comes from ChipMap, so remapped buses
+remain valid. The unchanged full nRF5340 Zephyr greeting is mandatory.
+
+This is a UART-local subset grounded in the [nRF5340 DPPI specification](https://docs.nordicsemi.com/r/bundle/ps_nrf5340/page/dppi.html).
+General DPPI delivery, cross-instance routes, channel groups and SPU security
+attributes remain outside this model's qualified boundary. nRF52 boards without
+a DPPIC keep ENDTX and explicit STOPTX separate. No silicon result is claimed.
