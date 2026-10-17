@@ -806,7 +806,9 @@ impl CortexM {
                 let addr = self
                     .read_reg(rn)
                     .wrapping_add(u32::from((op >> 6) & 0x1f) << 2);
-                if !bus.ram.write_u32(u64::from(addr), self.read_reg(rt)) {
+                if bus.ram_cpu_writes_blocked(u64::from(addr))
+                    || !bus.ram.write_u32(u64::from(addr), self.read_reg(rt))
+                {
                     return false;
                 }
                 bus.note_memory_write();
@@ -916,6 +918,9 @@ impl CortexM {
             let addr = self
                 .read_reg(store_rn)
                 .wrapping_add(u32::from(store_imm) << 2);
+            if bus.ram_cpu_writes_blocked(u64::from(addr)) {
+                return executed;
+            }
             if bus.ram.read_u32(u64::from(addr)).is_none() {
                 return executed;
             }
@@ -1021,6 +1026,9 @@ impl CortexM {
         }
 
         let addr = self.sp.wrapping_add(store_imm);
+        if bus.ram_cpu_writes_blocked(u64::from(addr)) {
+            return 0;
+        }
         if bus.ram.read_u32(u64::from(addr)).is_none() {
             return 0;
         }
@@ -1438,7 +1446,9 @@ impl CortexM {
             }
             Instruction::StrImm { rt, rn, imm } => {
                 let addr = self.read_reg(rn).wrapping_add(u32::from(imm));
-                if !bus.ram.write_u32(u64::from(addr), self.read_reg(rt)) {
+                if bus.ram_cpu_writes_blocked(u64::from(addr))
+                    || !bus.ram.write_u32(u64::from(addr), self.read_reg(rt))
+                {
                     return false;
                 }
                 bus.note_memory_write();
@@ -1453,7 +1463,9 @@ impl CortexM {
             }
             Instruction::StrReg { rt, rn, rm } => {
                 let addr = self.read_reg(rn).wrapping_add(self.read_reg(rm));
-                if !bus.ram.write_u32(u64::from(addr), self.read_reg(rt)) {
+                if bus.ram_cpu_writes_blocked(u64::from(addr))
+                    || !bus.ram.write_u32(u64::from(addr), self.read_reg(rt))
+                {
                     return false;
                 }
                 bus.note_memory_write();
@@ -1470,7 +1482,9 @@ impl CortexM {
             }
             Instruction::StrSp { rt, imm } => {
                 let addr = self.sp.wrapping_add(u32::from(imm));
-                if !bus.ram.write_u32(u64::from(addr), self.read_reg(rt)) {
+                if bus.ram_cpu_writes_blocked(u64::from(addr))
+                    || !bus.ram.write_u32(u64::from(addr), self.read_reg(rt))
+                {
                     return false;
                 }
                 bus.note_memory_write();
@@ -1493,14 +1507,18 @@ impl CortexM {
             }
             Instruction::StrbImm { rt, rn, imm } => {
                 let addr = self.read_reg(rn).wrapping_add(u32::from(imm));
-                if !bus.ram.write_u8(u64::from(addr), self.read_reg(rt) as u8) {
+                if bus.ram_cpu_writes_blocked(u64::from(addr))
+                    || !bus.ram.write_u8(u64::from(addr), self.read_reg(rt) as u8)
+                {
                     return false;
                 }
                 bus.note_memory_write();
             }
             Instruction::StrbReg { rt, rn, rm } => {
                 let addr = self.read_reg(rn).wrapping_add(self.read_reg(rm));
-                if !bus.ram.write_u8(u64::from(addr), self.read_reg(rt) as u8) {
+                if bus.ram_cpu_writes_blocked(u64::from(addr))
+                    || !bus.ram.write_u8(u64::from(addr), self.read_reg(rt) as u8)
+                {
                     return false;
                 }
                 bus.note_memory_write();
@@ -1523,14 +1541,18 @@ impl CortexM {
             }
             Instruction::StrhImm { rt, rn, imm } => {
                 let addr = self.read_reg(rn).wrapping_add(u32::from(imm));
-                if !bus.ram.write_u16(u64::from(addr), self.read_reg(rt) as u16) {
+                if bus.ram_cpu_writes_blocked(u64::from(addr))
+                    || !bus.ram.write_u16(u64::from(addr), self.read_reg(rt) as u16)
+                {
                     return false;
                 }
                 bus.note_memory_write();
             }
             Instruction::StrhReg { rt, rn, rm } => {
                 let addr = self.read_reg(rn).wrapping_add(self.read_reg(rm));
-                if !bus.ram.write_u16(u64::from(addr), self.read_reg(rt) as u16) {
+                if bus.ram_cpu_writes_blocked(u64::from(addr))
+                    || !bus.ram.write_u16(u64::from(addr), self.read_reg(rt) as u16)
+                {
                     return false;
                 }
                 bus.note_memory_write();
