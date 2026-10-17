@@ -34,6 +34,9 @@
 //! stored bytes. A twin that pre-rendered its own idea of the picture could not
 //! be compared against a photograph of the glass, and the whole point of the
 //! byte-exact artifact is that it can.
+//! An explicit `serial_color` profile is the exception for wire decoding:
+//! it stores expanded controller-memory channels and a validity mask, not
+//! literal bus bytes. It still does not render analogue/glass effects.
 //!
 //! One struct, two buses
 //! ---------------------
@@ -54,6 +57,7 @@ use labwired_config::{
     DisplayRamStream, DisplaySpec, DisplayValue,
 };
 
+use super::st7735_color::{DecodedPixel, St7735ColorDecoder};
 use crate::peripherals::i2c::I2cDevice;
 use crate::peripherals::spi::SpiDevice;
 
@@ -154,6 +158,12 @@ enum Framing {
     Ram,
 }
 
+struct SerialColorState {
+    decoder: St7735ColorDecoder,
+    known: Vec<bool>,
+    rejected_colmod: u64,
+}
+
 /// The engine device. One per placed panel.
 pub struct GenericDisplay {
     // ── the descriptor, compiled ────────────────────────────────────────
@@ -215,6 +225,8 @@ pub struct GenericDisplay {
     page_end: u16,
 
     ram: Vec<u8>,
+    /// Present only for an explicitly opted-in serial-colour descriptor.
+    serial_color: Option<SerialColorState>,
     /// WHAT IS ON THE GLASS. Equal to `ram` for every panel whose frame memory
     /// IS the screen; latched from `ram` by a `refresh` action on the panels
     /// where it is not (e-paper). Same length as `ram` always, so a consumer
@@ -312,6 +324,39 @@ fn validate_spec(spec: &DisplaySpec) -> Result<()> {
     }
     let w = spec.width as usize;
     let h = spec.height as usize;
+    if let Some(color) = &spec.serial_color {
+        if spec.pixel_format != DisplayPixelFormat::Rgb888
+            || spec.artifact_format != "rgb888"
+            || spec.ram.layout != DisplayRamLayout::RowMajor
+            || !spec.ram.planes.is_empty()
+            || spec.ram.units.col.pixels_per_step() != 1
+            || spec.ram.units.row.pixels_per_step() != 1
+            || spec.ram.stream != DisplayRamStream::Command
+            || spec.dc.source != DisplayDcSource::Pin
+            || spec.dc.unwired != DisplayDcUnwired::Level
+            || spec.cs_select != DisplayCsSelect::KeepsStream
+        {
+            bail!("serial_color requires single-plane RGB888 row-major pixel RAM, command stream, pin D/C and keeps_stream CS");
+        }
+        if spec.vars.get(&color.colmod_var) != Some(&6) {
+            bail!("serial_color COLMOD variable must be declared with hardware default 6");
+        }
+        if let Some(orientation) = &spec.orientation {
+            if orientation.var == color.colmod_var || spec.vars.get(&orientation.var) != Some(&0) {
+                bail!(
+                    "serial_color orientation must use a distinct variable with hardware default 0"
+                );
+            }
+        }
+        let lut_commands = spec
+            .commands
+            .iter()
+            .filter(|cmd| cmd.actions.iter().any(|action| action.load_rgb_lut))
+            .count();
+        if lut_commands != 1 {
+            bail!("serial_color requires exactly one complete RGBSET command");
+        }
+    }
 
     // The stated RAM size is CHECKED against the geometry rather than trusted.
     // Two numbers for one fact is how a descriptor starts lying: a `bytes:`
@@ -588,6 +633,14 @@ fn validate_spec(spec: &DisplaySpec) -> Result<()> {
         if matches!(key.as_str(), "w" | "h" | "format" | "generation") {
             bail!("artifact_meta publishes '{key}', which describes the payload and is always present");
         }
+        if spec.serial_color.is_some()
+            && matches!(
+                key.as_str(),
+                "unknown_pixels" | "known_pixels" | "serial_color" | "rejected_colmod"
+            )
+        {
+            bail!("artifact_meta '{key}' is reserved by serial_color");
+        }
         if meta_keys.contains(&key) {
             bail!("artifact_meta publishes '{key}' twice");
         }
@@ -721,6 +774,25 @@ fn validate_action(spec: &DisplaySpec, cmd: &DisplayCommand, action: &DisplayAct
              between them would be this engine's private business rather than the datasheet's.",
             where_()
         ),
+    }
+    if action.load_rgb_lut
+        && (spec.serial_color.is_none()
+            || cmd.args != 128
+            || cmd.actions.len() != 1
+            || cmd.when.is_some()
+            || cmd.opcode_end.is_some()
+            || action.when.is_some())
+    {
+        bail!(
+            "{}: load_rgb_lut requires serial_color and a sole unguarded 128-argument command",
+            where_()
+        );
+    }
+    if spec.serial_color.is_some() && (action.clear_ram || action.refresh) {
+        bail!(
+            "{}: serial_color RAM is retained across resets; clear_ram/refresh are unsupported",
+            where_()
+        );
     }
 
     let check_value = |v: &DisplayValue| -> Result<()> {
@@ -912,6 +984,11 @@ impl GenericDisplay {
         let row_units = height / spec.ram.units.row.pixels_per_step() as usize;
         let plane_names = spec.ram.planes.clone();
         let plane_bytes = spec.ram.bytes as usize / plane_names.len().max(1);
+        let serial_color = spec.serial_color.as_ref().map(|_| SerialColorState {
+            decoder: St7735ColorDecoder::default(),
+            known: vec![false; width * height],
+            rejected_colmod: 0,
+        });
         let mut dev = Self {
             by_opcode,
             width,
@@ -945,6 +1022,7 @@ impl GenericDisplay {
             page_start: 0,
             page_end: 0,
             ram,
+            serial_color,
             screen,
             refresh_generation: 0,
             framing: Framing::Idle,
@@ -970,18 +1048,23 @@ impl GenericDisplay {
     /// memory. Both panels ported first power on with the full extent, which is
     /// what their datasheets give as the CASET/RASET/column defaults.
     fn reset_window(&mut self) {
+        let (cols, rows) = if self.serial_color.is_some() {
+            self.addressable_units()
+        } else {
+            (self.col_units as u16, self.row_units as u16)
+        };
         self.col_start = 0;
         self.col_end = self
             .spec
             .window
             .col_end
-            .unwrap_or_else(|| (self.col_units as u16).saturating_sub(1));
+            .unwrap_or_else(|| cols.saturating_sub(1));
         self.row_start = 0;
         self.row_end = self
             .spec
             .window
             .row_end
-            .unwrap_or_else(|| (self.row_units as u16).saturating_sub(1));
+            .unwrap_or_else(|| rows.saturating_sub(1));
         self.page_start = 0;
         self.page_end = self
             .spec
@@ -1022,9 +1105,62 @@ impl GenericDisplay {
 
     // ── what the outside asks a panel ───────────────────────────────────
 
-    /// The raw frame memory, in the controller's own layout.
+    /// Raw frame memory. Opted-in serial colour uses bit-expanded RGB666;
+    /// unknown entries are placeholders, NOT black pixels. Consult
+    /// `known_pixels()` or use artifacts, which withhold incomplete pictures.
     pub fn framebuffer(&self) -> &[u8] {
         &self.ram
+    }
+
+    /// Per physical RAM pixel validity, or None for fixed-format panels.
+    pub fn known_pixels(&self) -> Option<&[bool]> {
+        self.serial_color
+            .as_ref()
+            .map(|color| color.known.as_slice())
+    }
+
+    /// Explicit hardware reset entry point for future GPIO wiring. This is
+    /// not yet called by an attached reset pin. ST7735R frame RAM is retained.
+    pub fn hardware_reset(&mut self) {
+        self.reset_control_state(true);
+    }
+
+    fn reset_control_state(&mut self, hardware: bool) {
+        let retained = self.spec.serial_color.as_ref().map(|color| {
+            let colmod = self.vars[&color.colmod_var];
+            let orientation = self
+                .spec
+                .orientation
+                .as_ref()
+                .map(|o| (o.var.clone(), self.vars[&o.var]));
+            (color.colmod_var.clone(), colmod, orientation)
+        });
+        self.display_on = self.spec.power_on.display_on;
+        self.awake = self.spec.power_on.awake;
+        self.inverted = self.spec.power_on.inverted;
+        self.mode = self.spec.addressing.default;
+        self.vars = self.spec.vars.clone();
+        if let Some(color) = &mut self.serial_color {
+            if hardware {
+                color.decoder.hardware_reset();
+            } else {
+                color.decoder.software_reset();
+                if let Some((name, value, orientation)) = retained {
+                    self.vars.insert(name, value);
+                    if let Some((name, value)) = orientation {
+                        self.vars.insert(name, value);
+                    }
+                }
+            }
+        }
+        self.reset_window();
+        self.framing = Framing::Idle;
+        self.param_have = 0;
+        self.param_want = 0;
+        self.pending_idx = None;
+        self.unit_have = 0;
+        self.ram_remaining = None;
+        self.control = None;
     }
 
     /// Frame-memory bytes carrying at least one lit pixel (mono panels).
@@ -1264,7 +1400,29 @@ impl GenericDisplay {
             }
             if let Some(sv) = &action.set_var {
                 let n = self.resolve(&sv.value, DisplayAxis::Col);
+                if self
+                    .spec
+                    .serial_color
+                    .as_ref()
+                    .is_some_and(|color| color.colmod_var == sv.name)
+                {
+                    let color = self
+                        .serial_color
+                        .as_mut()
+                        .expect("validated colour profile");
+                    if n > u8::MAX as u32 || !color.decoder.set_colmod(n as u8) {
+                        color.rejected_colmod = color.rejected_colmod.saturating_add(1);
+                        continue;
+                    }
+                }
                 self.vars.insert(sv.name.clone(), n);
+            }
+            if action.load_rgb_lut {
+                self.serial_color
+                    .as_mut()
+                    .expect("validated RGBSET")
+                    .decoder
+                    .install_complete_lut(&self.params);
             }
             if let Some(rw) = &action.ram_write {
                 if rw.reset_cursor {
@@ -1295,12 +1453,17 @@ impl GenericDisplay {
                 self.inverted = i;
             }
             if action.reset_control {
-                self.display_on = self.spec.power_on.display_on;
-                self.awake = self.spec.power_on.awake;
-                self.inverted = self.spec.power_on.inverted;
-                self.mode = self.spec.addressing.default;
-                self.vars = self.spec.vars.clone();
-                self.reset_window();
+                if self.serial_color.is_some() {
+                    self.reset_control_state(false);
+                } else {
+                    // Preserve the established fixed-format action contract.
+                    self.display_on = self.spec.power_on.display_on;
+                    self.awake = self.spec.power_on.awake;
+                    self.inverted = self.spec.power_on.inverted;
+                    self.mode = self.spec.addressing.default;
+                    self.vars = self.spec.vars.clone();
+                    self.reset_window();
+                }
             }
             if action.clear_ram {
                 self.ram.fill(self.spec.ram.blank);
@@ -1336,6 +1499,9 @@ impl GenericDisplay {
             self.take_param(byte);
             return;
         }
+        if let Some(color) = &mut self.serial_color {
+            color.decoder.discard_partial();
+        }
         self.pending_cmd = byte;
         self.param_have = 0;
         self.param_want = 0;
@@ -1353,6 +1519,17 @@ impl GenericDisplay {
             return;
         };
         let idx = idx as usize;
+        if self.spec.commands[idx]
+            .actions
+            .iter()
+            .any(|action| action.load_rgb_lut)
+        {
+            self.serial_color
+                .as_mut()
+                .expect("validated RGBSET")
+                .decoder
+                .invalidate_lut();
+        }
         let want = self.spec.commands[idx].args;
         if want > 0 {
             self.param_want = want;
@@ -1420,6 +1597,23 @@ impl GenericDisplay {
     }
 
     fn ram_byte(&mut self, byte: u8) {
+        if self.serial_color.is_some() {
+            let pixel = self.serial_color.as_mut().unwrap().decoder.push(byte);
+            let Some(pixel) = pixel else { return };
+            let (x, y) = self.to_physical(self.col, self.row);
+            if x < self.width && y < self.height {
+                let index = y * self.width + x;
+                let color = self.serial_color.as_mut().unwrap();
+                color.known[index] = matches!(pixel, DecodedPixel::Rgb666(_));
+                let channels = match pixel {
+                    DecodedPixel::Rgb666(channels) => channels.map(|v| (v << 2) | (v >> 4)),
+                    DecodedPixel::UndefinedLookup => [0; 3],
+                };
+                self.ram[index * 3..index * 3 + 3].copy_from_slice(&channels);
+            }
+            self.advance();
+            return;
+        }
         self.unit[self.unit_have] = byte;
         self.unit_have += 1;
         if self.unit_have < self.unit_bytes {
@@ -1559,12 +1753,36 @@ impl GenericDisplay {
         out
     }
 
+    /// The validity map follows EXACTLY the same crop/orientation as bytes.
+    /// Out-of-RAM crop pixels remain unknown instead of becoming valid black.
+    fn oriented_known_pixels(&self) -> Option<Vec<bool>> {
+        let color = self.serial_color.as_ref()?;
+        let (w, h) = self.logical_dimensions();
+        let mut known = vec![false; w * h];
+        for row in 0..h {
+            for col in 0..w {
+                let (x, y) = match self.glass {
+                    Some(g) => (col + g.col_offset as usize, row + g.row_offset as usize),
+                    None => self.to_physical(col as u16, row as u16),
+                };
+                if x < self.width && y < self.height {
+                    known[row * w + col] = color.known[y * self.width + x];
+                }
+            }
+        }
+        Some(known)
+    }
+
     fn build_artifacts(
         &self,
         id: &str,
         opts: &crate::inspect::InspectOpts,
     ) -> Vec<crate::inspect::Artifact> {
         let fb = self.oriented_framebuffer();
+        let known = self.oriented_known_pixels();
+        let unknown_pixels = known
+            .as_ref()
+            .map_or(0, |mask| mask.iter().filter(|&&v| !v).count());
         let (w, h) = self.logical_dimensions();
         let mut meta = serde_json::Map::new();
         // These four describe the PAYLOAD, so they are always present: a
@@ -1575,15 +1793,36 @@ impl GenericDisplay {
             "format".into(),
             serde_json::json!(self.spec.artifact_format),
         );
-        meta.insert(
-            "generation".into(),
-            serde_json::json!(crate::inspect::artifact_generation(&fb)),
-        );
+        let generation = if let Some(mask) = &known {
+            // Unknown -> known black must change generation even though the
+            // storage placeholder and black both contain zero bytes.
+            let mut content = fb.clone();
+            content.extend(mask.iter().map(|&valid| u8::from(valid)));
+            crate::inspect::artifact_generation(&content)
+        } else {
+            crate::inspect::artifact_generation(&fb)
+        };
+        meta.insert("generation".into(), serde_json::json!(generation));
         // Which panel this is. Two panels can hold the same picture (three
         // OLEDs at 0x3C behind a TCA9548A drawing one splash), and a consumer
         // that tells evidence apart by its contents would merge them into one.
         if let Some(id) = &self.component_id {
             meta.insert("device_id".into(), serde_json::json!(id));
+        }
+        if let Some(color) = &self.serial_color {
+            meta.insert(
+                "serial_color".into(),
+                serde_json::json!("st7735r_memory_rgb666_expanded"),
+            );
+            meta.insert("unknown_pixels".into(), serde_json::json!(unknown_pixels));
+            meta.insert(
+                "known_pixels".into(),
+                serde_json::json!(w * h - unknown_pixels),
+            );
+            meta.insert(
+                "rejected_colmod".into(),
+                serde_json::json!(color.rejected_colmod),
+            );
         }
 
         // The dominant colour is counted in a BTreeMap, not a HashMap: a tie
@@ -1638,7 +1877,11 @@ impl GenericDisplay {
                     serde_json::json!(fb.iter().map(|b| b.count_ones() as usize).sum::<usize>())
                 }
                 DisplayMetaFlag::PaintedBytes => {
-                    serde_json::json!(fb.iter().filter(|&&b| b != 0x00).count())
+                    if unknown_pixels > 0 {
+                        serde_json::Value::Null
+                    } else {
+                        serde_json::json!(fb.iter().filter(|&&b| b != 0x00).count())
+                    }
                 }
                 DisplayMetaFlag::TotalBytes => serde_json::json!(fb.len()),
                 DisplayMetaFlag::TopColour => top(0),
@@ -1662,7 +1905,11 @@ impl GenericDisplay {
             kind: "framebuffer".to_string(),
             id: id.to_string(),
             meta: serde_json::Value::Object(meta),
-            bytes: crate::inspect::artifact_bytes(&fb, opts),
+            bytes: if unknown_pixels == 0 {
+                crate::inspect::artifact_bytes(&fb, opts)
+            } else {
+                None
+            },
         }]
     }
 
@@ -1677,6 +1924,17 @@ impl GenericDisplay {
     /// activated, and `min_refresh_generation` would resolve against a zero
     /// that the run had already passed.
     fn snapshot_ram(&self) -> Vec<u8> {
+        if let Some(color) = &self.serial_color {
+            // A separate wire shape preserves byte-for-byte v1 snapshots for
+            // every existing panel and rejects snapshots lacking validity.
+            let snap = SerialColorSnapshot {
+                tag: SERIAL_COLOR_SNAPSHOT_TAG,
+                version: 1,
+                ram: self.ram.clone(),
+                known: color.known.clone(),
+            };
+            return bincode::serialize(&snap).expect("bincode serialize SerialColorSnapshot");
+        }
         let snap = DisplaySnapshot {
             tag: DISPLAY_SNAPSHOT_TAG,
             version: DISPLAY_SNAPSHOT_VERSION,
@@ -1689,6 +1947,23 @@ impl GenericDisplay {
 
     fn restore_ram(&mut self, bytes: &[u8]) -> crate::SimResult<()> {
         let refuse = |why: String| crate::SimulationError::NotImplemented(why);
+        if let Some(color) = &mut self.serial_color {
+            let snap: SerialColorSnapshot = bincode::deserialize(bytes)
+                .map_err(|e| refuse(format!("serial colour snapshot: invalid encoding ({e})")))?;
+            if snap.tag != SERIAL_COLOR_SNAPSHOT_TAG
+                || snap.version != 1
+                || snap.ram.len() != self.ram.len()
+                || snap.known.len() != color.known.len()
+            {
+                return Err(refuse(
+                    "serial colour snapshot: wrong tag, version or geometry".into(),
+                ));
+            }
+            // Validate everything before mutating either RAM or validity.
+            self.ram.copy_from_slice(&snap.ram);
+            color.known.copy_from_slice(&snap.known);
+            return Ok(());
+        }
         let snap: DisplaySnapshot = bincode::deserialize(bytes).map_err(|e| {
             refuse(format!(
                 "display snapshot: not a tagged panel snapshot ({e}). Snapshots taken before                  the panel carried its glass and refresh counter cannot be resumed — retake it."
@@ -1739,6 +2014,16 @@ struct DisplaySnapshot {
     ram: Vec<u8>,
     screen: Vec<u8>,
     refresh_generation: u32,
+}
+
+const SERIAL_COLOR_SNAPSHOT_TAG: u32 = 0x4C57_4443;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SerialColorSnapshot {
+    tag: u32,
+    version: u16,
+    ram: Vec<u8>,
+    known: Vec<bool>,
 }
 
 // ─── I²C door (control-byte framing) ───────────────────────────────────────
@@ -2350,6 +2635,341 @@ pub fn st7789(cs_pin: &str, dc_pin: &str) -> GenericDisplay {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const ST7735_PROTOTYPE: &str = include_str!("../../../../../configs/devices/st7735r.yaml");
+
+    fn serial_panel(w: u16, h: u16) -> GenericDisplay {
+        let mut descriptor = DeviceDescriptor::from_yaml(ST7735_PROTOTYPE).unwrap();
+        let spec = descriptor.behavior.display.as_mut().unwrap();
+        spec.width = w;
+        spec.height = h;
+        spec.ram.bytes = u32::from(w) * u32::from(h) * 3;
+        GenericDisplay::from_descriptor(&descriptor).unwrap()
+    }
+
+    fn serial_command(panel: &mut GenericDisplay, opcode: u8, data: &[u8]) {
+        panel.cs_select();
+        panel.set_dc_level(false);
+        panel.transfer(opcode);
+        panel.cs_release();
+        panel.set_dc_level(true);
+        for &byte in data {
+            panel.cs_select();
+            panel.transfer(byte);
+            panel.cs_release();
+        }
+    }
+
+    fn serial_artifact(panel: &GenericDisplay) -> crate::inspect::Artifact {
+        panel
+            .build_artifacts(
+                "panel",
+                &crate::inspect::InspectOpts {
+                    include_bytes: true,
+                    peripheral: None,
+                },
+            )
+            .remove(0)
+    }
+
+    fn serial_lut() -> [u8; 128] {
+        std::array::from_fn(|i| ((i * 19 + i / 32 * 7 + 11) & 63) as u8)
+    }
+
+    fn expand_channels(values: [u8; 3]) -> [u8; 3] {
+        values.map(|v| (v << 2) | (v >> 4))
+    }
+
+    #[test]
+    fn st7735_stream_descriptor_has_controller_ram_not_assumed_pybadge_glass() {
+        let panel = GenericDisplay::from_yaml(ST7735_PROTOTYPE).unwrap();
+        assert_eq!((panel.width(), panel.height()), (132, 162));
+        assert_eq!(panel.framebuffer().len(), 64152);
+        assert_eq!(serial_artifact(&panel).meta["unknown_pixels"], 132 * 162);
+        assert!(serial_artifact(&panel).bytes.is_none());
+    }
+
+    #[test]
+    fn st7735_stream_unknown_then_known_black_changes_generation_and_payload() {
+        let mut panel = serial_panel(1, 1);
+        let before = serial_artifact(&panel);
+        assert!(before.bytes.is_none());
+        assert!(before.meta["painted_bytes"].is_null());
+        serial_command(&mut panel, 0x2c, &[0, 0, 0]);
+        let after = serial_artifact(&panel);
+        assert_eq!(after.bytes, Some(vec![0; 3]));
+        assert_eq!(after.meta["known_pixels"], 1);
+        assert_eq!(after.meta["painted_bytes"], 0);
+        assert_ne!(before.meta["generation"], after.meta["generation"]);
+        assert_eq!(
+            serial_artifact(&panel).meta,
+            after.meta,
+            "inspection is side-effect-free"
+        );
+    }
+
+    #[test]
+    fn st7735_stream_rgbset_and_rgb444_survive_every_whole_byte_cs_pause() {
+        let mut panel = serial_panel(2, 1);
+        let lut = serial_lut();
+        serial_command(&mut panel, 0x3a, &[3]);
+        serial_command(&mut panel, 0x2d, &lut);
+        serial_command(&mut panel, 0x2c, &[0x12]);
+        assert_eq!(panel.known_pixels(), Some([false, false].as_slice()));
+        panel.transfer(0x34);
+        assert_eq!(panel.known_pixels(), Some([true, false].as_slice()));
+        panel.cs_release();
+        panel.cs_select();
+        panel.transfer(0x56);
+        let expected = [
+            expand_channels([lut[1], lut[34], lut[99]]),
+            expand_channels([lut[4], lut[37], lut[102]]),
+        ]
+        .concat();
+        assert_eq!(serial_artifact(&panel).bytes, Some(expected));
+        assert_eq!(
+            (panel.col, panel.row),
+            (0, 0),
+            "two pixels consumed, then wrap"
+        );
+    }
+
+    #[test]
+    fn st7735_stream_undefined_lookup_consumes_pixels_but_incomplete_does_not() {
+        let mut panel = serial_panel(3, 1);
+        serial_command(&mut panel, 0x3a, &[3]);
+        serial_command(&mut panel, 0x2c, &[0x12]);
+        assert_eq!(panel.col, 0);
+        panel.transfer(0x34);
+        assert_eq!(panel.col, 1);
+        panel.transfer(0x56);
+        assert_eq!(panel.col, 2);
+        assert_eq!(panel.known_pixels(), Some([false; 3].as_slice()));
+        assert!(serial_artifact(&panel).bytes.is_none());
+    }
+
+    #[test]
+    fn st7735_stream_rgbset_abort_invalidates_table_without_recolouring_ram() {
+        let mut panel = serial_panel(2, 1);
+        serial_command(&mut panel, 0x3a, &[5]);
+        serial_command(&mut panel, 0x2d, &serial_lut());
+        serial_command(&mut panel, 0x2c, &[0xf8, 0]);
+        let first = panel.framebuffer()[..3].to_vec();
+        serial_command(&mut panel, 0x2d, &[0xff; 127]);
+        // A new command aborts this table. Old RAM remains valid, but the
+        // new pixel consumes its address with undefined colour.
+        serial_command(&mut panel, 0x2a, &[0, 1, 0, 1]);
+        serial_command(&mut panel, 0x2c, &[0x07, 0xe0]);
+        assert_eq!(&panel.framebuffer()[..3], first.as_slice());
+        assert_eq!(panel.known_pixels(), Some([true, false].as_slice()));
+        serial_command(&mut panel, 0x2d, &[63; 128]);
+        assert_eq!(
+            &panel.framebuffer()[..3],
+            first.as_slice(),
+            "RGBSET is not a RAM recolour operation"
+        );
+        serial_command(&mut panel, 0x2c, &[0, 0]);
+        assert_eq!(&panel.framebuffer()[3..], &[255; 3]);
+    }
+
+    #[test]
+    fn st7735_stream_command_boundary_discards_partial_and_colmod_rejects_reserved() {
+        let mut panel = serial_panel(2, 1);
+        serial_command(&mut panel, 0x2c, &[0xfc, 0x80]);
+        serial_command(&mut panel, 0x3a, &[0]);
+        assert_eq!(panel.vars["colmod"], 6);
+        assert_eq!(serial_artifact(&panel).meta["rejected_colmod"], 1);
+        serial_command(&mut panel, 0x2c, &[4, 8, 12]);
+        assert_eq!(&panel.framebuffer()[..3], &[4, 8, 12]);
+        assert_eq!(panel.known_pixels(), Some([true, false].as_slice()));
+        assert_eq!(panel.col, 1);
+    }
+
+    #[test]
+    fn st7735_stream_software_reset_retains_depth_table_madctl_and_ram() {
+        let mut panel = serial_panel(2, 3);
+        serial_command(&mut panel, 0x3a, &[5]);
+        serial_command(&mut panel, 0x2d, &serial_lut());
+        serial_command(&mut panel, 0x36, &[0x20]);
+        serial_command(&mut panel, 0x2c, &[0xf8, 0]);
+        let ram = panel.framebuffer().to_vec();
+        let known = panel.known_pixels().unwrap().to_vec();
+        serial_command(&mut panel, 0x29, &[]);
+        serial_command(&mut panel, 0x11, &[]);
+        serial_command(&mut panel, 0x01, &[]);
+        assert_eq!(panel.vars["colmod"], 5);
+        assert_eq!(panel.vars["madctl"], 0x20);
+        assert_eq!((panel.col_end, panel.row_end), (2, 1));
+        assert!(!panel.display_on() && !panel.awake());
+        assert_eq!(panel.framebuffer(), ram);
+        assert_eq!(panel.known_pixels().unwrap(), known);
+        serial_command(&mut panel, 0x2c, &[0x07, 0xe0]);
+        assert!(
+            panel.known_pixels().unwrap()[0],
+            "retained LUT decodes a new pixel"
+        );
+    }
+
+    #[test]
+    fn st7735_stream_hardware_reset_restores_depth_and_unknown_lut_retains_ram() {
+        let mut panel = serial_panel(2, 1);
+        serial_command(&mut panel, 0x3a, &[3]);
+        serial_command(&mut panel, 0x2d, &serial_lut());
+        serial_command(&mut panel, 0x2c, &[0x12, 0x34]);
+        let ram = panel.framebuffer().to_vec();
+        let known = panel.known_pixels().unwrap().to_vec();
+        panel.hardware_reset();
+        assert_eq!(panel.vars["colmod"], 6);
+        assert_eq!(panel.vars["madctl"], 0);
+        assert_eq!(panel.framebuffer(), ram);
+        assert_eq!(panel.known_pixels().unwrap(), known);
+        assert_eq!(panel.framing, Framing::Idle);
+        serial_command(&mut panel, 0x3a, &[5]);
+        serial_command(&mut panel, 0x2c, &[0, 0]);
+        assert!(
+            !panel.known_pixels().unwrap()[0],
+            "hardware reset invalidated LUT"
+        );
+    }
+
+    #[test]
+    fn st7735_stream_visible_crop_validity_uses_physical_memory_coordinates() {
+        let mut panel = serial_panel(2, 2);
+        serial_command(&mut panel, 0x2a, &[0, 1, 0, 1]);
+        serial_command(&mut panel, 0x2b, &[0, 1, 0, 1]);
+        serial_command(&mut panel, 0x2c, &[0xfc, 0, 0]);
+        panel.set_glass_window(GlassWindow {
+            col_offset: 1,
+            row_offset: 1,
+            cols: 1,
+            rows: 1,
+        });
+        let before = serial_artifact(&panel);
+        assert_eq!(before.bytes, Some(vec![255, 0, 0]));
+        serial_command(&mut panel, 0x36, &[0xe0]);
+        assert_eq!(
+            serial_artifact(&panel).bytes,
+            before.bytes,
+            "MADCTL does not move fixed glass crop"
+        );
+        panel.set_glass_window(GlassWindow {
+            col_offset: 0,
+            row_offset: 0,
+            cols: 1,
+            rows: 1,
+        });
+        assert!(
+            serial_artifact(&panel).bytes.is_none(),
+            "other physical RAM pixel remains unknown"
+        );
+    }
+
+    #[test]
+    fn st7735_stream_snapshot_preserves_validity_and_refuses_wrong_profile_atomically() {
+        let mut panel = serial_panel(2, 1);
+        serial_command(&mut panel, 0x2c, &[0, 0, 0]);
+        let snap = panel.snapshot_ram();
+        serial_command(&mut panel, 0x2c, &[0xfc, 0, 0, 0, 0xfc, 0]);
+        panel.restore_ram(&snap).unwrap();
+        assert_eq!(panel.known_pixels(), Some([true, false].as_slice()));
+        let before = panel.snapshot_ram();
+        let legacy = st7789("cs", "dc").snapshot_ram();
+        assert!(panel.restore_ram(&legacy).is_err());
+        assert_eq!(panel.snapshot_ram(), before);
+        let mut wrong_size = serial_panel(1, 1);
+        let before = wrong_size.snapshot_ram();
+        assert!(wrong_size.restore_ram(&snap).is_err());
+        assert_eq!(wrong_size.snapshot_ram(), before);
+        let mut fixed = st7789("cs", "dc");
+        let before = fixed.snapshot_ram();
+        assert!(fixed.restore_ram(&snap).is_err());
+        assert_eq!(fixed.snapshot_ram(), before);
+    }
+
+    #[test]
+    fn st7735_stream_invalid_opt_in_descriptors_are_refused() {
+        for (old, new) in [
+            ("pixel_format: rgb888", "pixel_format: rgb565"),
+            ("colmod: 6", "colmod: 5"),
+            ("cs_select: keeps_stream", "cs_select: closes_stream"),
+            ("args: 128", "args: 127"),
+            ("{ load_rgb_lut: true }", "{ refresh: true }"),
+        ] {
+            let broken = ST7735_PROTOTYPE.replace(old, new);
+            assert_ne!(broken, ST7735_PROTOTYPE);
+            assert!(
+                GenericDisplay::from_yaml(&broken).is_err(),
+                "accepted {new}"
+            );
+        }
+    }
+
+    #[test]
+    fn st7735_stream_power_and_dc_gates_cannot_invent_a_valid_pixel() {
+        let mut panel = serial_panel(1, 1);
+        panel.set_powered(false);
+        serial_command(&mut panel, 0x2c, &[0xfc, 0xfc, 0xfc]);
+        assert_eq!(panel.known_pixels(), Some([false].as_slice()));
+        panel.set_powered(true);
+        panel.set_dc_level(true);
+        for byte in [0x2c, 0xfc, 0xfc, 0xfc] {
+            panel.transfer(byte);
+        }
+        assert_eq!(
+            panel.known_pixels(),
+            Some([false].as_slice()),
+            "data cannot infer RAMWR"
+        );
+        serial_command(&mut panel, 0x2c, &[0xfc, 0xfc, 0xfc]);
+        assert_eq!(serial_artifact(&panel).bytes, Some(vec![255; 3]));
+    }
+
+    #[test]
+    fn st7735_stream_depth_changes_do_not_mix_partial_pixels() {
+        let mut panel = serial_panel(2, 1);
+        serial_command(&mut panel, 0x2d, &serial_lut());
+        serial_command(&mut panel, 0x3a, &[3]);
+        serial_command(&mut panel, 0x2c, &[0x12]);
+        serial_command(&mut panel, 0x3a, &[5]);
+        serial_command(&mut panel, 0x2c, &[0xff]);
+        assert_eq!(panel.col, 0);
+        serial_command(&mut panel, 0x3a, &[6]);
+        serial_command(&mut panel, 0x2c, &[0x04, 0x08, 0x0c]);
+        assert_eq!(&panel.framebuffer()[..3], &[4, 8, 12]);
+        assert_eq!(panel.col, 1);
+        assert_eq!(panel.known_pixels(), Some([true, false].as_slice()));
+    }
+
+    #[test]
+    fn st7735_stream_rgb444_odd_pixel_command_does_not_commit_unused_nibble() {
+        let mut panel = serial_panel(2, 1);
+        serial_command(&mut panel, 0x2d, &serial_lut());
+        serial_command(&mut panel, 0x3a, &[3]);
+        serial_command(&mut panel, 0x2c, &[0x12, 0x3f]);
+        assert_eq!(panel.col, 1);
+        serial_command(&mut panel, 0x29, &[]);
+        panel.set_dc_level(true);
+        panel.transfer(0xff);
+        assert_eq!(panel.known_pixels(), Some([true, false].as_slice()));
+        assert_eq!(panel.col, 1, "command discarded unused second-pixel nibble");
+    }
+
+    #[test]
+    fn st7735_stream_rotated_validity_tracks_the_same_pixel_as_frame_bytes() {
+        let mut panel = serial_panel(2, 3);
+        serial_command(&mut panel, 0x36, &[0xe0]);
+        serial_command(&mut panel, 0x2c, &[0xfc, 0x80, 0x04]);
+        assert_eq!(
+            panel.oriented_known_pixels(),
+            Some(vec![true, false, false, false, false, false])
+        );
+        assert_eq!(&panel.oriented_framebuffer()[..3], &[255, 130, 4]);
+        assert_eq!((panel.logical_dimensions()), (3, 2));
+        assert_eq!(
+            panel.known_pixels().unwrap().iter().filter(|&&v| v).count(),
+            1
+        );
+    }
 
     fn long_parameter_display(args: u8) -> Result<GenericDisplay> {
         let mut spec = embedded("st7789-170x320")?.spec;

@@ -7,6 +7,8 @@ on:
       - crates/core/src/peripherals/components/st7735_color.rs
       - crates/core/src/peripherals/components/declarative_display.rs
       - crates/core/src/peripherals/components/mod.rs
+      - crates/config/src/peripherals.rs
+      - configs/devices/st7735r.yaml
       - .github/workflows/st7735-color-controls.yml
   workflow_dispatch:
 
