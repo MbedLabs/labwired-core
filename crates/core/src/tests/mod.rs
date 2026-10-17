@@ -86,6 +86,8 @@ pub mod rp2040_spi_waveform;
 #[cfg(test)]
 pub mod rp2040_uart_waveform;
 #[cfg(test)]
+pub mod peripheral_reset_request;
+#[cfg(test)]
 pub mod scb_reset;
 #[cfg(test)]
 pub mod scheduler_lane_coverage;
