@@ -171,7 +171,7 @@ impl SeggerRtt {
     fn has_bounded_scan_range(&self) -> bool {
         self.scan_ranges
             .iter()
-            .any(|&(_, size)| size >= 16 && size <= BOUNDED_SCAN_RANGE)
+            .any(|&(_, size)| (16u64..=BOUNDED_SCAN_RANGE).contains(&size))
     }
 
     /// True when the 16-byte RTT ID sits at `addr`. Bails on the first
@@ -211,7 +211,7 @@ impl SeggerRtt {
         let mut skipped = 0usize;
         while skipped < n {
             let (base, size) = self.scan_ranges[range_idx];
-            if size < 16 || size > SKIP_SCAN_RANGE_ABOVE {
+            if !(16u64..=SKIP_SCAN_RANGE_ABOVE).contains(&size) {
                 range_idx = (range_idx + 1) % n;
                 offset = 0;
                 skipped += 1;

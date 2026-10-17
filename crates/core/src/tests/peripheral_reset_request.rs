@@ -41,9 +41,10 @@ mod peripheral_reset_request_tests {
     }
 
     /// Records the cause the machine publishes after it drains a request.
-    #[derive(Debug, Default)]
+    /// The test holds the same `Rc` the peripheral writes, so the assertion
+    /// does not downcast the bus device.
     struct CauseListener {
-        seen: Option<crate::PeripheralResetCause>,
+        seen: std::rc::Rc<std::cell::Cell<Option<crate::PeripheralResetCause>>>,
     }
 
     impl Peripheral for CauseListener {
@@ -56,11 +57,7 @@ mod peripheral_reset_request_tests {
         }
 
         fn on_peripheral_reset(&mut self, cause: crate::PeripheralResetCause) {
-            self.seen = Some(cause);
-        }
-
-        fn as_any(&self) -> Option<&dyn std::any::Any> {
-            Some(self)
+            self.seen.set(Some(cause));
         }
     }
 
@@ -82,12 +79,15 @@ mod peripheral_reset_request_tests {
             None,
             Box::new(ResetOnWrite::default()),
         );
+        let seen = std::rc::Rc::new(std::cell::Cell::new(None));
         bus.add_peripheral(
             "cause_listener",
             PERIPH_BASE + 0x100,
             0x100,
             None,
-            Box::new(CauseListener::default()),
+            Box::new(CauseListener {
+                seen: std::rc::Rc::clone(&seen),
+            }),
         );
         let mut m = Machine::new(cpu, bus);
 
@@ -118,14 +118,6 @@ mod peripheral_reset_request_tests {
             MSP,
             "SP must reload from vector[0] after a peripheral reset request"
         );
-        let seen = m
-            .bus
-            .peripherals
-            .iter()
-            .find(|p| p.name == "cause_listener")
-            .and_then(|p| p.dev.as_any())
-            .and_then(|a| a.downcast_ref::<CauseListener>())
-            .and_then(|l| l.seen);
-        assert_eq!(seen, Some(crate::PeripheralResetCause::Watchdog));
+        assert_eq!(seen.get(), Some(crate::PeripheralResetCause::Watchdog));
     }
 }
