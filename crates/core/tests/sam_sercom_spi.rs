@@ -6,8 +6,9 @@ use labwired_core::{
     bus::SystemBus,
     cpu::cortex_m::CortexM,
     memory::ProgramImage,
+    peripherals::sam::sercom_spi::SamSercomSpi,
     peripherals::spi::{SpiDevice, SpiSampling},
-    Arch, Bus, Machine,
+    AdvanceRequest, Arch, Bus, Machine,
 };
 use std::sync::{Arc, Mutex};
 
@@ -67,10 +68,28 @@ impl SpiDevice for Slave {
     }
 }
 fn board() -> (SystemBus, Arc<Mutex<Seen>>) {
+    board_with_drive(true)
+}
+
+fn board_with_drive(legacy: bool) -> (SystemBus, Arc<Mutex<Seen>>) {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let chip = ChipDescriptor::from_file(root.join("configs/chips/atsamd51-pybadge.yaml")).unwrap();
     let manifest = SystemManifest::from_file(root.join("configs/systems/pybadge.yaml")).unwrap();
     let mut bus = SystemBus::from_config(&chip, &manifest).unwrap();
+    if legacy {
+        bus.peripherals
+            .iter_mut()
+            .find(|p| p.name == "sercom4")
+            .unwrap()
+            .dev
+            .as_any_mut()
+            .unwrap()
+            .downcast_mut::<SamSercomSpi>()
+            .unwrap()
+            .force_legacy_walk();
+        bus.recompute_walk_deletable();
+        bus.refresh_peripheral_index();
+    }
     let seen = Arc::new(Mutex::new(Seen::default()));
     bus.attach_spi_device(
         "sercom4",
@@ -339,4 +358,106 @@ fn cortex_m_guest_polls_real_spi_completion_and_wrong_mux_cannot_complete() {
             assert!(seen.lock().unwrap().bytes.is_empty());
         }
     }
+}
+
+#[test]
+fn polling_guest_matches_legacy_with_auto_batches_and_scheduler() {
+    for legacy in [true, false] {
+        for interval in [1, 64, 1024] {
+            if interval > 1 && !cfg!(feature = "event-scheduler") {
+                continue;
+            }
+            for correct_mux in [true, false] {
+                let (mut bus, seen) = board_with_drive(legacy);
+                bus.config.peripheral_tick_interval = if legacy { 1 } else { interval };
+                let mut machine = Machine::new(CortexM::new(), bus);
+                machine.load_firmware(&polling_guest(correct_mux)).unwrap();
+                machine.advance(AdvanceRequest::run(Some(2000))).unwrap();
+                let marker = machine.bus.read_u32(0x20000000).unwrap();
+                let seen = seen.lock().unwrap();
+                if correct_mux {
+                    assert_eq!(marker, 0xcafebabe, "legacy={legacy}, interval={interval}");
+                    assert_eq!(seen.bytes, [0x51, 0x42]);
+                    assert_eq!(seen.dc, [false, true]);
+                    assert_eq!(machine.bus.read_u8(SPI + 0x18).unwrap() & 7, 7);
+                    assert_eq!(machine.bus.read_u8(SPI + 0x28).unwrap(), 0x51 ^ 0x5a);
+                    assert_eq!(machine.bus.read_u8(SPI + 0x28).unwrap(), 0x42 ^ 0x5a);
+                } else {
+                    assert_ne!(marker, 0xcafebabe);
+                    assert!(seen.bytes.is_empty());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn scheduler_clock_gate_freezes_inflight_frame_and_resumes_once() {
+    for gate in [MCLK, GCLK] {
+        let (bus, seen) = board_with_drive(false);
+        let mut machine = Machine::new(CortexM::new(), bus);
+        machine.load_firmware(&polling_guest(true)).unwrap();
+        // Wait for ENABLE, then execute DATA setup and the beginning of polling.
+        // This also works for the walk reference, which consumes the holding
+        // byte before the host can observe DRE=0 at the next boundary.
+        let mut enabled = false;
+        for _ in 0..200 {
+            machine.step().unwrap();
+            if machine.bus.read_u32(SPI).unwrap() & 2 != 0 {
+                enabled = true;
+                break;
+            }
+        }
+        assert!(enabled, "guest did not enable SPI");
+        for _ in 0..5 {
+            machine.step().unwrap();
+        }
+        assert!(seen.lock().unwrap().bytes.is_empty());
+        machine.bus.write_u32(gate, 0).unwrap();
+        for _ in 0..100 {
+            machine.step().unwrap();
+        }
+        assert!(
+            seen.lock().unwrap().bytes.is_empty(),
+            "unclocked frame escaped"
+        );
+        machine
+            .bus
+            .write_u32(gate, if gate == MCLK { 1 } else { 1 << 6 })
+            .unwrap();
+        for _ in 0..10 {
+            machine.step().unwrap();
+        }
+        assert!(
+            seen.lock().unwrap().bytes.is_empty(),
+            "gated time consumed BAUD countdown"
+        );
+        for _ in 0..2000 {
+            machine.step().unwrap();
+        }
+        assert_eq!(seen.lock().unwrap().bytes, [0x51, 0x42]);
+        assert_eq!(machine.bus.read_u32(0x20000000).unwrap(), 0xcafebabe);
+    }
+}
+
+#[test]
+fn idle_spi_does_not_arm_events_or_force_the_legacy_walk() {
+    let (bus, _) = board_with_drive(false);
+    let spi = &bus
+        .peripherals
+        .iter()
+        .find(|p| p.name == "sercom4")
+        .unwrap()
+        .dev;
+    assert_eq!(spi.uses_scheduler(), cfg!(feature = "event-scheduler"));
+    assert_eq!(spi.needs_legacy_walk(), !cfg!(feature = "event-scheduler"));
+    assert!(!spi.needs_bus_tick());
+    if cfg!(feature = "event-scheduler") {
+        assert_eq!(bus.max_safe_tick_interval(), 1024);
+    }
+    let mut machine = Machine::new(CortexM::new(), bus);
+    // Wrong mux guest would arm an event; idle setup must not.
+    machine.load_firmware(&polling_guest(true)).unwrap();
+    machine.step().unwrap();
+    assert!(machine.sched.is_empty());
 }

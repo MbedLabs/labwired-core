@@ -2082,6 +2082,16 @@ pub trait Peripheral: std::fmt::Debug + Send {
         sched::EventResult::default()
     }
 
+    /// Opt in when each event represents ONE clocked peripheral tick, rather
+    /// than an absolute deadline. The machine checks the bus's live clock gate
+    /// before delivery. While gated, it retries after one CPU cycle without
+    /// calling the model, so pending work freezes without losing its wake.
+    /// Deadline-driven models must not opt in: they need their own elapsed-time
+    /// accounting. Default preserves existing scheduler delivery semantics.
+    fn event_is_clock_tick(&self) -> bool {
+        false
+    }
+
     /// Phase 2B.1: synchronously notified when a subscribed clock domain
     /// changes rate. Implementations typically cancel in-flight events and
     /// reschedule at the new cadence. Default no-op.
@@ -4913,6 +4923,13 @@ impl<C: Cpu> Machine<C> {
         for ev in due.drain(..) {
             let idx = ev.peripheral_idx as usize;
             if idx >= self.bus.peripherals.len() {
+                continue;
+            }
+            if self.bus.peripherals[idx].dev.event_is_clock_tick()
+                && !self.bus.is_peripheral_clocked(idx)
+            {
+                self.sched
+                    .schedule(now + 1, ev.peripheral_idx, ev.event_token);
                 continue;
             }
             // Swap the peripheral out so we can pass `&mut self.bus` into

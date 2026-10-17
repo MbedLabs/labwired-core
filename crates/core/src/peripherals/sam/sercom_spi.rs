@@ -43,6 +43,9 @@ pub struct SamSercomSpi {
     pads: SamSpiPads,
     devices: Vec<Box<dyn SpiDevice>>,
     selected: Vec<bool>,
+    clock: Option<crate::CycleClock>,
+    scheduled: bool,
+    legacy_walk_forced: bool,
 }
 
 impl std::fmt::Debug for SamSercomSpi {
@@ -70,6 +73,33 @@ impl SamSercomSpi {
             pads,
             devices: Vec::new(),
             selected: Vec::new(),
+            clock: None,
+            scheduled: false,
+            legacy_walk_forced: false,
+        }
+    }
+
+    crate::cycle_clock::scheduler_mode!();
+
+    fn sched_driven(&self) -> bool {
+        self.scheduler_mode() && !self.legacy_walk_forced
+    }
+
+    /// Retain the independent per-cycle reference for differential tests.
+    /// Call before refreshing the bus's peripheral index / starting execution.
+    pub fn force_legacy_walk(&mut self) {
+        self.legacy_walk_forced = true;
+    }
+
+    fn has_bus_work(&self) -> bool {
+        self.holding.is_some() || self.active.is_some() || self.selected.iter().any(|s| *s)
+    }
+
+    fn advance_frame(&mut self, cycles: u64) {
+        if self.enabled() {
+            if let Some((_, left)) = &mut self.active {
+                *left = left.saturating_sub(cycles);
+            }
         }
     }
 
@@ -243,17 +273,64 @@ impl Peripheral for SamSercomSpi {
         self.tick_elapsed(1)
     }
     fn tick_elapsed(&mut self, cycles: u64) -> PeripheralTickResult {
-        if self.enabled() {
-            if let Some((_, left)) = &mut self.active {
-                *left = left.saturating_sub(cycles);
-            }
+        if !self.sched_driven() {
+            self.advance_frame(cycles);
         }
         PeripheralTickResult::default()
     }
+    fn tick_elapsed_forced(&mut self, cycles: u64) -> PeripheralTickResult {
+        self.advance_frame(cycles);
+        PeripheralTickResult::default()
+    }
+    fn attach_cycle_clock(&mut self, clock: crate::CycleClock) {
+        self.clock = Some(clock);
+    }
+    fn uses_scheduler(&self) -> bool {
+        self.sched_driven()
+    }
+    fn needs_legacy_walk(&self) -> bool {
+        !self.sched_driven()
+    }
+    fn event_is_clock_tick(&self) -> bool {
+        true
+    }
+    fn take_scheduled_events(&mut self) -> Vec<(u64, u32)> {
+        if self.sched_driven() && self.has_bus_work() && !self.scheduled {
+            self.scheduled = true;
+            vec![(0, 0)]
+        } else {
+            Vec::new()
+        }
+    }
+    fn on_event(
+        &mut self,
+        _token: u32,
+        _sched: &mut crate::sched::EventScheduler,
+        bus: &mut dyn Bus,
+    ) -> crate::sched::EventResult {
+        // Match the historical PRE-tick bus pass, then the countdown tick.
+        // Active transfers intentionally retain one-cycle service; the win is
+        // removing idle SPI from the walk, not changing BAUD/CS/mux semantics.
+        self.tick_with_bus_forced(bus);
+        self.advance_frame(1);
+        self.scheduled = self.has_bus_work();
+        crate::sched::EventResult {
+            reschedule_delay: self.scheduled.then_some(1),
+            ..Default::default()
+        }
+    }
     fn needs_bus_tick(&self) -> bool {
-        self.holding.is_some() || self.active.is_some() || self.selected.iter().any(|s| *s)
+        !self.sched_driven() && self.has_bus_work()
+    }
+    fn needs_bus_tick_forced(&self) -> bool {
+        self.has_bus_work()
     }
     fn tick_with_bus(&mut self, bus: &mut dyn Bus) {
+        if !self.sched_driven() {
+            self.tick_with_bus_forced(bus);
+        }
+    }
+    fn tick_with_bus_forced(&mut self, bus: &mut dyn Bus) {
         self.selected.resize(self.devices.len(), false);
         for (dev, selected) in self.devices.iter_mut().zip(&mut self.selected) {
             let next = if dev.cs_pin().is_empty() {
