@@ -188,6 +188,26 @@ fn guest_with_driver_trace(
     commands: Option<&serde_json::Value>,
     truncate_lut: bool,
 ) -> ProgramImage {
+    let mut guest = guest_trace_prefix(
+        wiring,
+        controls,
+        rectangular_axes_swapped,
+        commands,
+        truncate_lut,
+    );
+    guest.store(0x20000000, MARKER, false);
+    guest.image()
+}
+
+// Return the actual instruction stream before its completion marker so a
+// staged guest can continue with protocol writes, never host pixel injection.
+fn guest_trace_prefix(
+    wiring: Wiring,
+    controls: Option<Controls>,
+    rectangular_axes_swapped: Option<bool>,
+    commands: Option<&serde_json::Value>,
+    truncate_lut: bool,
+) -> Guest {
     let mut guest = Guest::default();
     if let Some(controls) = controls {
         let level = match controls {
@@ -303,8 +323,7 @@ fn guest_with_driver_trace(
         guest.store(MCLK, 0, false);
         guest.store(PORT_A + 0x14, 1, false);
     }
-    guest.store(0x20000000, MARKER, false);
-    guest.image()
+    guest
 }
 
 #[test]
@@ -781,6 +800,136 @@ fn st7735_guest_gm00_all_address_orientations_and_wrong_mv_negative() {
                         Some(expected.as_slice()),
                         "MADCTL={madctl:#04x}, legacy={legacy}"
                     );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn st7735_guest_retains_physical_ram_and_replaces_lut_only_for_future_pixels() {
+    let trace: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/st7735-codal-host-trace.json")).unwrap();
+    let captured = &trace["cases"][0];
+    assert_eq!(captured["width"], 3);
+    let original: Vec<u8> = vec![
+        255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0, 255, 0, 255, 0, 255, 255,
+    ];
+    // Independent six-bit channel constants expanded to RGB888: 17,29,43.
+    let replacement = [69, 117, 174];
+    let mut lut = [17; 128];
+    lut[32..96].fill(29);
+    lut[96..].fill(43);
+    for legacy in [false, true] {
+        for omit_replacement in [false, true] {
+            let mut guest = guest_trace_prefix(
+                Wiring::Correct,
+                Some(Controls::Released),
+                None,
+                Some(&captured["commands"]),
+                false,
+            );
+            guest.store(0x20000000, 1, false);
+            guest.command(0x36, &[0x40], Wiring::Correct);
+            guest.store(0x20000000, 2, false);
+            if !omit_replacement {
+                guest.command(0x2d, &lut, Wiring::Correct);
+            }
+            guest.store(0x20000000, 3, false);
+            // At MX=1, logical column120 maps to physical11; row7 is fixed.
+            guest.command(0x2a, &[0, 120, 0, 120], Wiring::Correct);
+            guest.command(0x2b, &[0, 7, 0, 7], Wiring::Correct);
+            guest.command(0x2c, &[0x11, 0x10], Wiring::Correct);
+            guest.store(0x20000000, 4, false);
+            guest.command(0x01, &[], Wiring::Correct);
+            guest.store(0x20000000, 5, false);
+            // Software reset retains MX, RGB444 depth and the replacement LUT.
+            guest.command(0x2a, &[0, 119, 0, 119], Wiring::Correct);
+            guest.command(0x2b, &[0, 7, 0, 7], Wiring::Correct);
+            guest.command(0x2c, &[0x22, 0x20], Wiring::Correct);
+            guest.store(0x20000000, 6, false);
+            // Real guest GPIO reset while SPI is gated; release before restart.
+            guest.store(MCLK, 0, false);
+            guest.store(PORT_A + 0x14, 1, false);
+            guest.store(PORT_A + 0x18, 1, false);
+            guest.store(MCLK, 1, false);
+            guest.store(0x20000000, 7, false);
+            // Hardware reset retained RAM, but the RGB444 LUT is now unknown.
+            guest.command(0x3a, &[3], Wiring::Correct);
+            guest.command(0x2a, &[0, 11, 0, 11], Wiring::Correct);
+            guest.command(0x2b, &[0, 8, 0, 8], Wiring::Correct);
+            guest.command(0x2c, &[0x33, 0x30], Wiring::Correct);
+            guest.store(0x20000000, 8, false);
+            guest.command(0x2d, &lut, Wiring::Correct);
+            guest.store(0x20000000, 9, false);
+            guest.command(0x2c, &[0x33, 0x30], Wiring::Correct);
+            guest.store(0x20000000, 10, false);
+            let mut machine = Machine::new(
+                CortexM::new(),
+                board_with_window(
+                    legacy,
+                    true,
+                    GlassWindow {
+                        col_offset: 11,
+                        row_offset: 7,
+                        cols: 2,
+                        rows: 3,
+                    },
+                ),
+            );
+            machine.load_firmware(&guest.image()).unwrap();
+            let mut expected = original.clone();
+            for stage in 1..=if omit_replacement { 4 } else { 10 } {
+                for _ in 0..50000 {
+                    machine.step().unwrap();
+                    if machine.bus.read_u32(0x20000000).unwrap() == stage {
+                        break;
+                    }
+                }
+                assert_eq!(
+                    machine.bus.read_u32(0x20000000).unwrap(),
+                    stage,
+                    "stage={stage}, legacy={legacy}, omit_replacement={omit_replacement}"
+                );
+                let frame = artifact(&machine.bus);
+                if stage == 4 && !omit_replacement {
+                    expected[..3].copy_from_slice(&replacement);
+                }
+                if stage == 6 {
+                    expected[3..6].copy_from_slice(&replacement);
+                }
+                if stage == 10 {
+                    expected[6..9].copy_from_slice(&replacement);
+                }
+                assert_eq!(
+                    frame.meta["colmod"],
+                    if stage == 7 { 6 } else { 3 },
+                    "stage={stage}, legacy={legacy}"
+                );
+                assert_eq!(
+                    frame.meta["madctl"],
+                    if (2..=6).contains(&stage) { 0x40 } else { 0 }
+                );
+                assert_eq!(frame.meta["reset_asserted"], false);
+                assert_eq!(frame.meta["display_on"], stage <= 4);
+                assert_eq!(frame.meta["awake"], stage <= 4);
+                if stage == 8 || stage == 9 {
+                    assert_eq!(frame.meta["known_pixels"], 5);
+                    assert_eq!(frame.meta["unknown_pixels"], 1);
+                    assert!(frame.bytes.is_none());
+                } else {
+                    assert_eq!(frame.meta["known_pixels"], 6);
+                    assert_eq!(frame.meta["unknown_pixels"], 0);
+                    assert_eq!(
+                        frame.bytes.as_deref(),
+                        Some(expected.as_slice()),
+                        "stage={stage}, legacy={legacy}, omit_replacement={omit_replacement}"
+                    );
+                }
+                if stage == 4 && omit_replacement {
+                    let mut wanted = original.clone();
+                    wanted[..3].copy_from_slice(&replacement);
+                    assert_ne!(frame.bytes.as_deref(), Some(wanted.as_slice()));
                 }
             }
         }
