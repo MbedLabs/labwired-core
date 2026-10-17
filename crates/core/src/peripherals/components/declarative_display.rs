@@ -2738,7 +2738,7 @@ pub fn st7789(cs_pin: &str, dc_pin: &str) -> GenericDisplay {
 mod tests {
     use super::*;
 
-    const ST7735_PROTOTYPE: &str = include_str!("../../../../../configs/devices/st7735r.yaml");
+    const ST7735_PROTOTYPE: &str = include_str!("../../../tests/fixtures/st7735r-memory.yaml");
 
     fn serial_panel(w: u16, h: u16) -> GenericDisplay {
         let mut descriptor = DeviceDescriptor::from_yaml(ST7735_PROTOTYPE).unwrap();

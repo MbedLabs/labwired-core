@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Prototype controller-memory descriptor, NOT registered/attached to PyBadge.
+# Test-only controller-memory descriptor, NOT registered/attached to PyBadge.
 # ST7735R v0.2 sections 9.6, 9.15, 9.18, 10.1.20–22, 10.1.27, 10.1.30:
 # https://cdn-shop.adafruit.com/datasheets/ST7735R_V0.2.pdf
 # Geometry is GM00 controller RAM, not an asserted module glass/crop. BGR,

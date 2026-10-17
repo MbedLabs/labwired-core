@@ -54,7 +54,7 @@ fn board_with_controls(legacy: bool, controls: bool) -> SystemBus {
         bus.refresh_peripheral_index();
     }
     let descriptor =
-        DeviceDescriptor::from_yaml(include_str!("../../../configs/devices/st7735r.yaml")).unwrap();
+        DeviceDescriptor::from_yaml(include_str!("fixtures/st7735r-memory.yaml")).unwrap();
     let mut display = GenericDisplay::from_descriptor(&descriptor).unwrap();
     display.set_cs_pin("PB7");
     display.set_dc_pin("PB5");
@@ -69,7 +69,7 @@ fn board_with_controls(legacy: bool, controls: bool) -> SystemBus {
     if controls {
         // Exercise the actual generic kit/AttachCtx path. Only enable its
         // fixture crop; the unregistered prototype remains unshipped.
-        let yaml = include_str!("../../../configs/devices/st7735r.yaml")
+        let yaml = include_str!("fixtures/st7735r-memory.yaml")
             .replace("    width: 132", "    glass_crop: true\n    width: 132");
         let kit = DeclarativeDisplayKit::from_yaml(&yaml).unwrap();
         let ext: labwired_config::ExternalDevice = serde_yaml::from_str(

@@ -198,7 +198,7 @@ mod tests {
     const LIGHT: u64 = 0x41008090; // same bit, different port: no PA0/PB0 alias
     fn panel() -> (DisplaySpiHandle, DisplayGpioObserver) {
         let mut panel =
-            GenericDisplay::from_yaml(include_str!("../../../../../configs/devices/st7735r.yaml"))
+            GenericDisplay::from_yaml(include_str!("../../../tests/fixtures/st7735r-memory.yaml"))
                 .unwrap();
         panel.set_glass_window(super::super::declarative_display::GlassWindow {
             col_offset: 0,

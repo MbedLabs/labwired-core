@@ -29,9 +29,19 @@ normal crate/workspace checks; it does not execute a guest or measure RTx.
 
 ## Draft parser and memory integration
 
-`configs/devices/st7735r.yaml` is an **unregistered prototype** using GM00's
+`crates/core/tests/fixtures/st7735r-memory.yaml` is an **unregistered test
+prototype** using GM00's
 132×162 controller extent, not a claim about PyBadge module GM/crop. It must be
-loaded explicitly. RGB888 artifact bytes contain bit-expanded RGB666 memory
+loaded explicitly. It is deliberately outside the production device catalogue:
+every `configs/devices` descriptor must be a registered kit, and this fixture
+must not become a shipped panel before qualification. The production YAML
+baseline stays at main's 89; no gate exemption or model allowance is added.
+The original location failed `every_device_descriptor_is_a_kit` at source
+`8a810a86b1958a071de109128b139fd274a61dec` in
+[board run 37603425496](https://github.com/CrispStrobe/labwired-core/actions/runs/37603425496).
+Preserve that failure; the fixture relocation still needs exact-head hosted
+verification and is not a retrospective passing result.
+RGB888 artifact bytes contain bit-expanded RGB666 memory
 channels (`(v << 2) | (v >> 4)`), not original wire bytes or analogue glass output.
 BGR, gamma, scan order and inversion rendering remain unimplemented. MADCTL
 address mapping reuses the generic engine; physical module parity is still owed.
