@@ -115,6 +115,18 @@ fn blocking_mmio_frames_cs_dc_fifo_and_w1c() {
     assert_eq!(seen.lock().unwrap().bytes, [0x81]); // 32-bit access sends ONE byte
     assert_eq!(seen.lock().unwrap().dc, [false]);
     assert_eq!(bus.read_u8(SPI + 0x18).unwrap() & 7, 7);
+    let controller = bus
+        .peripherals
+        .iter()
+        .find(|p| p.name == "sercom4")
+        .unwrap();
+    assert_eq!(controller.dev.peek(0x28), Some(0xdb));
+    assert_eq!(bus.read_u8(SPI + 0x29).unwrap(), 0);
+    assert_eq!(
+        bus.read_u8(SPI + 0x18).unwrap() & 4,
+        4,
+        "debug peeks and upper DATA lanes must not consume RX"
+    );
     bus.write_u8(SPI + 0x18, 7).unwrap(); // RXC/DRE are not W1C
     assert_eq!(bus.read_u8(SPI + 0x18).unwrap() & 7, 5);
     assert_eq!(bus.read_u32(SPI + 0x28).unwrap(), 0xdb);
@@ -172,6 +184,53 @@ fn pending_completion_freezes_when_clock_is_removed() {
     bus.write_u32(MCLK, 1).unwrap();
     settle(&mut bus);
     assert_eq!(seen.lock().unwrap().bytes, [0x51]);
+}
+
+#[test]
+fn overflow_preserves_queued_rx_and_status_flags_are_w1c() {
+    let (mut bus, seen) = board();
+    enable(&mut bus);
+    for byte in [0x10, 0x20, 0x30] {
+        bus.write_u8(SPI + 0x28, byte).unwrap();
+        settle(&mut bus);
+    }
+    assert_eq!(seen.lock().unwrap().bytes, [0x10, 0x20, 0x30]);
+    assert_eq!(bus.read_u16(SPI + 0x1a).unwrap() & 4, 4);
+    assert_eq!(bus.read_u8(SPI + 0x18).unwrap() & 128, 128);
+    bus.write_u16(SPI + 0x1a, 4).unwrap();
+    bus.write_u8(SPI + 0x18, 128).unwrap();
+    assert_eq!(bus.read_u16(SPI + 0x1a).unwrap(), 0);
+    assert_eq!(bus.read_u8(SPI + 0x18).unwrap() & 128, 0);
+    assert_eq!(bus.read_u8(SPI + 0x28).unwrap(), 0x4a);
+    assert_eq!(bus.read_u16(SPI + 0x28).unwrap(), 0x7a);
+    assert_eq!(bus.read_u8(SPI + 0x18).unwrap() & 4, 0);
+}
+
+#[test]
+fn wrong_dopo_and_character_size_block_transfers_and_configuration_is_protected() {
+    let (mut bus, seen) = board();
+    enable(&mut bus);
+    bus.write_u32(SPI, 3 << 2 | 2).unwrap();
+    assert_eq!(
+        bus.read_u32(SPI).unwrap(),
+        MASTER | 2,
+        "enabled DOPO is protected"
+    );
+    bus.write_u32(SPI, MASTER).unwrap(); // disable
+    bus.write_u32(SPI, 3 << 2 | 2).unwrap(); // wrong DOPO=0
+    bus.write_u8(SPI + 0x28, 0x61).unwrap();
+    settle(&mut bus);
+    assert!(seen.lock().unwrap().bytes.is_empty());
+    bus.write_u32(SPI, 3 << 2).unwrap(); // disable, cancelling pending data
+    bus.write_u32(SPI + 4, 1).unwrap(); // unsupported 9-bit frame
+    bus.write_u32(SPI, MASTER | 2).unwrap();
+    bus.write_u8(SPI + 0x28, 0x62).unwrap();
+    settle(&mut bus);
+    assert!(seen.lock().unwrap().bytes.is_empty());
+    enable(&mut bus);
+    bus.write_u8(SPI + 0x28, 0x63).unwrap();
+    settle(&mut bus);
+    assert_eq!(seen.lock().unwrap().bytes, [0x63]);
 }
 
 #[test]
