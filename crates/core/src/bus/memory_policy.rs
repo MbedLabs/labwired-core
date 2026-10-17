@@ -334,13 +334,17 @@ mod tests {
 
     #[test]
     fn from_config_copies_policies() {
+        use crate::tests::bus_trace_one_home::dummy_manifest;
+
         let chip_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../configs/chips/stm32f103.yaml");
-        let mut chip = labwired_config::ChipDescriptor::from_file(chip_path).unwrap();
+        let mut chip = labwired_config::ChipDescriptor::from_file(&chip_path).unwrap();
         chip.flash.cpu_writes = CpuWritePolicy::Fault;
-        let state = MemoryPolicyState::for_chip(&chip);
-        assert_eq!(state.flash, CpuWritePolicy::Fault);
-        assert_eq!(state.ram, CpuWritePolicy::Allow);
-        assert!(state.active());
+        chip.ram.cpu_writes = CpuWritePolicy::Warn;
+        let path = chip_path.to_string_lossy();
+        let bus = crate::bus::SystemBus::from_config(&chip, &dummy_manifest(&path)).unwrap();
+        assert_eq!(bus.memory_policy.flash, CpuWritePolicy::Fault);
+        assert_eq!(bus.memory_policy.ram, CpuWritePolicy::Warn);
+        assert!(bus.memory_policy.active());
     }
 }
