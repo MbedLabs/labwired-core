@@ -980,6 +980,30 @@ pub enum MmioAccessClass {
 pub trait Peripheral: std::fmt::Debug + Send {
     fn read(&self, offset: u64) -> SimResult<u8>;
     fn write(&mut self, offset: u64, value: u8) -> SimResult<()>;
+
+    /// Controller-local byte TX DMA request. `None` refuses this endpoint;
+    /// `Some(false)` is a supported endpoint that is not ready. This does not
+    /// grant bus access: the bus must separately enforce clocks and routing.
+    /// DMA requests are independent of CPU interrupt-enable bits.
+    fn dma_tx_request(&self, _offset: u64) -> Option<bool> {
+        None
+    }
+
+    /// Refresh bus-sourced transport control inputs before an admitted TX beat.
+    /// This is not a tick: implementations must not advance time, drain bytes
+    /// or commit DMA progress. The bus calls this only after clock/readiness
+    /// admission, before the byte acceptance and its observer notification.
+    fn prepare_dma_tx(&mut self, _bus: &mut dyn Bus) {}
+
+    /// Atomically accept one TX byte, or return `false` without changing
+    /// state when not ready. Unsupported endpoints refuse explicitly.
+    /// A successful ordinary register store is not an acceptance certificate.
+    /// The bus remains responsible for gating, observers and scheduler wakes.
+    fn try_dma_write_tx_u8(&mut self, _offset: u64, _value: u8) -> SimResult<bool> {
+        Err(SimulationError::NotImplemented(
+            "peripheral has no byte TX DMA endpoint".into(),
+        ))
+    }
     fn read_u16(&self, offset: u64) -> SimResult<u16> {
         let b0 = self.read(offset)? as u16;
         let b1 = self.read(offset + 1)? as u16;
@@ -1019,6 +1043,39 @@ pub trait Peripheral: std::fmt::Debug + Send {
     fn peek(&self, _offset: u64) -> Option<u8> {
         None
     }
+    /// Latched CPU-reset request raised by this peripheral, e.g. a watchdog
+    /// time-out with reset enabled. Returns `true` once per event and clears
+    /// the latch. The machine drains it at a clean instruction boundary and
+    /// reboots the CPU through the existing reset path (see
+    /// `Machine::advance`). Default: no reset requests.
+    ///
+    /// Read [`Self::latched_reset_cause`] before this call. It is `None` once
+    /// the latch has been taken.
+    fn take_reset_request(&mut self) -> bool {
+        false
+    }
+
+    /// Why [`Self::take_reset_request`] would return `true` right now.
+    /// `None` when nothing is latched, or when the peripheral does not name a
+    /// cause (the CPU still reboots; no reset-cause flag is recorded).
+    fn latched_reset_cause(&self) -> Option<PeripheralResetCause> {
+        None
+    }
+
+    /// A peripheral's reset request was drained and the CPU is about to
+    /// reboot. Sticky cause registers (RESETCAUSE and its equivalents) record
+    /// `cause` here. Called after the requesting peripheral has cleared its
+    /// own latch. Default: ignore.
+    fn on_peripheral_reset(&mut self, _cause: PeripheralResetCause) {}
+
+    /// `true` if this peripheral can ever return `true` from
+    /// [`Self::take_reset_request`]. The machine caches the bus indices of
+    /// such peripherals once at construction, so peripherals that never
+    /// request a reset add nothing to the per-instruction drain.
+    fn reset_request_capable(&self) -> bool {
+        false
+    }
+
     fn tick(&mut self) -> PeripheralTickResult {
         PeripheralTickResult::default()
     }
@@ -1413,6 +1470,33 @@ pub trait Peripheral: std::fmt::Debug + Send {
     /// with capture channels.
     fn timer_input_stage(&self) -> Option<crate::peripherals::timer::TimerInputStage> {
         None
+    }
+
+    /// Timer capability: the channel-OUTPUT wire (`CH1`..`CH4`), created on
+    /// first call, so the bus can route it onto GPIO pads. With `arm` the
+    /// timer also starts generating its outputs onto the wire (a pad was
+    /// bound); without it the wire exists but stays inert, so a timer no pad
+    /// can reach costs nothing. `None` for everything that is not a timer
+    /// with output channels.
+    fn timer_output_lines(
+        &mut self,
+        _arm: bool,
+    ) -> Option<std::sync::Arc<crate::peripherals::pad_lines::PadLines>> {
+        None
+    }
+
+    /// GPIO capability: bind pad `pin` CONDITIONALLY to `line` of a timer's
+    /// channel-output wire `cell` — live while the pad is an alternate-function
+    /// output and the timer drives that line (STM32 F1 fixed mapping). A port
+    /// whose register layout is not F1 refuses it and returns `false`.
+    fn bind_timer_output_pad(
+        &mut self,
+        _cell: &std::sync::Arc<crate::peripherals::pad_lines::PadLines>,
+        _pin: u8,
+        _line: usize,
+        _func: &'static str,
+    ) -> bool {
+        false
     }
 
     /// GPIO capability: bind pad `pin` to input `ti` of the timer at bus
@@ -2022,6 +2106,16 @@ pub trait Peripheral: std::fmt::Debug + Send {
         sched::EventResult::default()
     }
 
+    /// Opt in when service represents ONE clocked peripheral tick, rather
+    /// than an absolute deadline. Both walk and event delivery check the bus's
+    /// live clock gate. While gated, an event retries after one CPU cycle
+    /// without calling the model, so work freezes without losing its wake.
+    /// Deadline-driven models must not opt in: they need their own elapsed-time
+    /// accounting. Default preserves existing scheduler delivery semantics.
+    fn requires_clocked_tick(&self) -> bool {
+        false
+    }
+
     /// Phase 2B.1: synchronously notified when a subscribed clock domain
     /// changes rate. Implementations typically cancel in-flight events and
     /// reschedule at the new cadence. Default no-op.
@@ -2038,6 +2132,14 @@ pub trait Peripheral: std::fmt::Debug + Send {
     /// the scheduler to drive it. Default `false` preserves existing per-cycle
     /// tick behaviour.
     fn uses_scheduler(&self) -> bool {
+        false
+    }
+
+    /// Diagnostic capability: pin a model to its retained legacy reference.
+    /// Returns false when unsupported. Use only before execution, then call
+    /// `SystemBus::recompute_walk_deletable` and `refresh_peripheral_index`.
+    /// This avoids concrete-type reaches in differential harnesses.
+    fn force_legacy_walk(&mut self) -> bool {
         false
     }
 
@@ -2287,6 +2389,15 @@ pub trait Peripheral: std::fmt::Debug + Send {
         None
     }
 
+    /// Set the ambient (die) temperature an on-chip temperature sensor
+    /// reports, in °C. `true` when this peripheral has such a sensor and took
+    /// the value; `false` otherwise (the default). The bus fans one world
+    /// temperature out to every peripheral through
+    /// [`crate::bus::SystemBus::set_ambient_temperature_c`].
+    fn set_ambient_temperature_c(&mut self, _celsius: f64) -> bool {
+        false
+    }
+
     /// Hand the peripheral the machine's ONE universal bus trace, plus the name
     /// it should stamp events with. Called from the same registration choke
     /// points as [`Peripheral::attach_cycle_clock`] and
@@ -2462,6 +2573,29 @@ pub trait Bus {
     /// asks this before forwarding, instead of swallowing a refused access.
     /// Default `false`: a bus with no such windows.
     fn has_mmio_window(&self, _addr: u64) -> bool {
+        false
+    }
+
+    /// Byte TX readiness after bus routing/clock admission. Unsupported
+    /// endpoints return None; supported but blocked endpoints return false.
+    fn dma_tx_request(&self, _addr: u64) -> Option<bool> {
+        None
+    }
+
+    /// Accept one TX byte through the bus's normal MMIO bookkeeping. False
+    /// means not ready, not a successful beat. Default explicit refusal.
+    fn try_dma_write_tx_u8(&mut self, _addr: u64, _value: u8) -> SimResult<bool> {
+        Err(SimulationError::NotImplemented(
+            "bus has no admitted byte TX DMA endpoint".into(),
+        ))
+    }
+
+    /// Admit an extent for a RAM-only DMA profile without reaching through
+    /// the bus's concrete type. Mapped targets must be primary RAM, never
+    /// MMIO (including aliases), flash or extra mappings. Unmapped addresses
+    /// may be admitted so the actual read/write reports the transfer fault;
+    /// this is not a promise that the access will succeed. Default refusal.
+    fn admits_ram_only_dma_extent(&self, _start: u64, _length: u64) -> bool {
         false
     }
 
@@ -2806,6 +2940,13 @@ pub trait Bus {
         false
     }
 
+    /// A read-only view of plain memory (RAM or flash) holding `addr`, as
+    /// `(start, end, bytes)`: reading it has no side effects and changes
+    /// nothing. Used by poll-loop proofs. Default: [`Self::fetch_slice`].
+    fn plain_memory_slice(&self, addr: u64) -> Option<(u64, u64, &[u8])> {
+        self.fetch_slice(addr)
+    }
+
     fn fetch_slice(&self, _pc: u64) -> Option<(u64, u64, &[u8])> {
         None
     }
@@ -2869,6 +3010,16 @@ pub trait DebugControl {
     // State Management
     fn snapshot(&self) -> snapshot::MachineSnapshot;
     fn restore(&mut self, snapshot: &snapshot::MachineSnapshot) -> SimResult<()>;
+}
+
+/// Why a peripheral asked the machine to reboot the CPU.
+///
+/// `Watchdog` and `System` match the K32W041 RESETCAUSE bits WDTRESET and
+/// SYSTEMRESET. Peripherals that only need the reboot leave the cause unset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeripheralResetCause {
+    Watchdog,
+    System,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2979,6 +3130,18 @@ pub struct Machine<C: Cpu> {
     pub(crate) secondary_defer: Option<(u64, u64)>,
     /// Retained buffer for [`Cpu::poll_loop_watch`].
     batch_watch_scratch: Vec<(u64, u64)>,
+    /// Plan CPU windows at `config.peripheral_tick_interval` (wide) while
+    /// keeping every boundary cycle-exact: each batch ends right after an
+    /// instruction that touches a device (`bus::BatchStop`), windows already
+    /// end at scheduler and interrupt deadlines, and every boundary ticks. So the tick, IRQ aggregation and
+    /// drain run on each cycle where interval 1 would see a change, and the
+    /// cycles in between, where it would see none, run as one batch.
+    ///
+    /// Pair it with `bus.config.peripheral_tick_interval = 1`: models such as
+    /// the UART pace their own events by the bus interval and quantise to it.
+    /// Off by default (the browser runs wide and quantised); `labwired test`
+    /// sets it for Cortex-M, where hosted runs must be cycle-exact.
+    pub exact_batch_boundaries: bool,
     pub config: SimulationConfig,
     /// Injectable host clock used by [`HostTimeMode::Realtime`] pacing.
     host_clock: Box<dyn host_time::HostClock + Send>,
@@ -3027,6 +3190,11 @@ pub struct Machine<C: Cpu> {
     /// reorders `bus.peripherals` after construction (appends are safe — they
     /// never move an existing index).
     nvmc_index: Option<usize>,
+    /// Bus indices of peripherals whose `reset_request_capable()` is true,
+    /// resolved once at construction. Empty on every chip that has no such
+    /// peripheral, so the boundary drain is a single `is_empty()` test.
+    /// Same fixed-set assumption as [`Self::scb_index`].
+    reset_request_indices: Vec<usize>,
     /// A SoftDevice emulated at API level (nrf-softdevice-hle), when the
     /// image is an application built for one. `None` on every other board:
     /// the advance boundary then pays one `Option` test.
@@ -3713,6 +3881,13 @@ impl<C: Cpu> Machine<C> {
                 .and_then(|a| a.downcast_ref::<crate::peripherals::scb::Scb>())
                 .is_some()
         });
+        let reset_request_indices: Vec<usize> = bus
+            .peripherals
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.dev.reset_request_capable())
+            .map(|(i, _)| i)
+            .collect();
         let nvmc_index = bus.peripherals.iter().position(|p| {
             p.dev
                 .as_any()
@@ -3767,6 +3942,7 @@ impl<C: Cpu> Machine<C> {
             primary_batches_beside_deferred: 0,
             secondary_defer: None,
             batch_watch_scratch: Vec::new(),
+            exact_batch_boundaries: false,
             config: SimulationConfig::default(),
             host_clock: Box::new(host_time::StdHostClock::new()),
             step_profile: StepProfile::default(),
@@ -3777,6 +3953,7 @@ impl<C: Cpu> Machine<C> {
             simctl_index,
             scb_index,
             nvmc_index,
+            reset_request_indices,
             sd_hle: None,
             boot_vtor: None,
             scheduler_bootstrapped: false,
@@ -4132,7 +4309,23 @@ impl<C: Cpu> Machine<C> {
             let primary_spin = match wfi_budget {
                 Some(budget) if budget > 0 => None,
                 _ if self.cpu.poll_loop_anchor_ready() => {
-                    self.cpu.poll_loop_skip_budget(&self.bus, remaining)
+                    // The proof may only skip to the nearest deadline, so
+                    // hand it that limit: a window too short for a whole
+                    // iteration refuses before probing.
+                    let mut limit = remaining;
+                    let now = self.total_cycles;
+                    for deadline in [
+                        self.bus.next_cpu_interrupt_deadline_cycle(),
+                        self.bus.next_motor_service_deadline_cycle(),
+                        self.bus.next_resident_edge_deadline_cycle(),
+                        self.sched.next_event_deadline(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        limit = limit.min(deadline.saturating_sub(now));
+                    }
+                    self.cpu.poll_loop_skip_budget(&self.bus, limit)
                 }
                 _ => None,
             };
@@ -4810,6 +5003,13 @@ impl<C: Cpu> Machine<C> {
             if idx >= self.bus.peripherals.len() {
                 continue;
             }
+            if self.bus.peripherals[idx].dev.requires_clocked_tick()
+                && !self.bus.is_peripheral_clocked(idx)
+            {
+                self.sched
+                    .schedule(now + 1, ev.peripheral_idx, ev.event_token);
+                continue;
+            }
             // Swap the peripheral out so we can pass `&mut self.bus` into
             // `on_event` without holding two simultaneous mutable borrows.
             // Same dance the bus uses for `tick_with_bus`, but the stub stand-in
@@ -4976,6 +5176,29 @@ impl<C: Cpu> Machine<C> {
             .and_then(|a| a.downcast_ref::<crate::peripherals::esp32::rtc_cntl::RtcCntl>())
             .map(|rtc| rtc.reset_request_pending())
             .unwrap_or(false)
+    }
+
+    /// Drain every reset-capable peripheral's latch. Every capable peripheral
+    /// is polled (no short-circuit) so each latch clears even when another
+    /// already fired. The returned causes are what was latched before the
+    /// take; an empty vec means nobody requested a reset.
+    pub(crate) fn drain_peripheral_reset_requests(&mut self) -> Vec<Option<PeripheralResetCause>> {
+        let mut requests = Vec::new();
+        for i in 0..self.reset_request_indices.len() {
+            let idx = self.reset_request_indices[i];
+            let cause = self.bus.peripherals[idx].dev.latched_reset_cause();
+            if self.bus.peripherals[idx].dev.take_reset_request() {
+                requests.push(cause);
+            }
+        }
+        requests
+    }
+
+    /// Tell every peripheral that a CPU reboot from `cause` is being applied.
+    fn record_peripheral_reset_cause(&mut self, cause: PeripheralResetCause) {
+        for peripheral in &mut self.bus.peripherals {
+            peripheral.dev.on_peripheral_reset(cause);
+        }
     }
 
     /// Returns true (and clears the latch) if the registered SCB peripheral

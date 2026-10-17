@@ -255,9 +255,21 @@ impl<C: Cpu> Machine<C> {
                     }
                     n
                 } else {
-                    let mut retired =
+                    // See `Machine::exact_batch_boundaries`. Armed only for a
+                    // batch that can span more than one cycle of tick work.
+                    let exact = self.exact_batch_boundaries
+                        && self.config.peripheral_tick_interval > 1
+                        && !self.bus.batch_stop.armed();
+                    if exact {
+                        self.bus.batch_stop.arm(&[]);
+                    }
+                    let first =
                         self.cpu
-                            .step_batch(&mut self.bus, &self.observers, &self.config, count)?;
+                            .step_batch(&mut self.bus, &self.observers, &self.config, count);
+                    if exact && first.is_err() {
+                        self.bus.batch_stop.disarm();
+                    }
+                    let mut retired = first?;
                     // Finish the tick window. `count` was it divided by the
                     // LONGEST instruction, so a batch of cheaper ones stops
                     // short; left alone the leftover goes back to the planner,
@@ -278,6 +290,7 @@ impl<C: Cpu> Machine<C> {
                         while retired > 0
                             && retired < fill.max_steps
                             && !self.bus.logic_tap.batch_stop_hit()
+                            && !self.bus.batch_stop.hit()
                         {
                             let spent = self.cpu.clock_cycles().saturating_sub(before);
                             let Some(left) =
@@ -303,6 +316,9 @@ impl<C: Cpu> Machine<C> {
                             }
                             retired = retired.saturating_add(n);
                         }
+                    }
+                    if exact {
+                        self.bus.batch_stop.disarm();
                     }
                     retired
                 };
@@ -550,9 +566,13 @@ impl<C: Cpu> Machine<C> {
         let coalesced_dual_idle = mode == ExecutionMode::RunBatch
             && progress.secondary_steps > 0
             && progress.primary_steps > 1;
+        // Under exact boundaries every window ends where state can change (a
+        // device access, a scheduler or interrupt deadline), so a tick at
+        // every boundary is the tick interval 1 runs at that cycle.
+        let exact_tick = self.exact_batch_boundaries && tick_interval > 1;
         let should_tick = if internally_committed_per_cycle_batch {
             false
-        } else if coalesced_dual_idle {
+        } else if coalesced_dual_idle || exact_tick {
             true
         } else if progress.timed_cycles.is_some() {
             // A timed core's window can end past a tick boundary (its last
@@ -636,11 +656,31 @@ impl<C: Cpu> Machine<C> {
             }
             self.reset_core_system_state();
             self.reset()?;
+            self.record_peripheral_reset_cause(crate::PeripheralResetCause::System);
             // An emulated SoftDevice restarts with the chip (crate::sd_hle).
             if let Some(slot) = self.sd_hle.as_mut() {
                 slot.sd.reset();
             }
             tracing::debug!("SCB SYSRESETREQ: CPU rebooted through vector table");
+        }
+
+        // Peripheral-requested CPU reset (e.g. a watchdog time-out with reset
+        // enabled). Same clean-boundary contract and the same reboot sequence
+        // as SYSRESETREQ above; the requesting peripheral clears its own latch
+        // inside `take_reset_request`. Short-circuits on an empty index list.
+        if !self.reset_request_indices.is_empty() {
+            let requests = self.drain_peripheral_reset_requests();
+            if !requests.is_empty() {
+                self.reset_core_system_state();
+                self.reset()?;
+                for cause in requests.into_iter().flatten() {
+                    self.record_peripheral_reset_cause(cause);
+                }
+                if let Some(slot) = self.sd_hle.as_mut() {
+                    slot.sd.reset();
+                }
+                tracing::debug!("peripheral reset request: CPU rebooted through vector table");
+            }
         }
 
         // nRF52 NVMC erase drain (same clean-boundary contract as the SCB

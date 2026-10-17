@@ -1087,6 +1087,9 @@ impl SystemBus {
         // And the other direction: pads that feed a timer's input-capture
         // stage (TIMx_CHn), so an external edge latches CCRx at its cycle.
         bus.wire_stm32_timer_capture_pads();
+        // And the timers' channel OUTPUTS (F1): a PWM / output-compare channel
+        // drives its AF pad, so `analogWrite` is a waveform on the pin.
+        bus.wire_stm32_timer_output_pads();
         // nRF52: bind every TWIM/SPIM/UARTE wire to every pad its PSEL can
         // name. Unlike the four above this is not a datasheet AF table — the
         // pad has no function register on this family, so the peripherals

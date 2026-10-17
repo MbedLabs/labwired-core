@@ -25,6 +25,9 @@ mod exec;
 #[path = "cortex_m/semihost.rs"]
 pub mod semihost;
 
+#[path = "cortex_m/poll_loop.rs"]
+mod poll_loop;
+
 /// How an executed arm advances PC relative to the decoded default. Returned
 /// by every `exec_*` method instead of mutating a `&mut` out-parameter: the
 /// hot `Keep` case costs nothing once the method is inlined.
@@ -212,6 +215,9 @@ pub struct CortexM {
     it_state_restored: bool,
     decode_cache: Box<[Option<DecodeCacheEntry>; 4096]>,
     decode_generation: u64,
+    /// Loop-head detection and the last proven fixed-point poll loop
+    /// (`poll_loop.rs`).
+    poll: poll_loop::PollDetector,
     // Bounded 1 KiB, direct-mapped (PC, generation) discovery-only memo.
     // Register-dependent execution failures MUST NOT be recorded here.
     t16_discovery_misses: [(u32, u64); T16_DISCOVERY_MISS_SLOTS],
@@ -321,6 +327,7 @@ impl Default for CortexM {
             it_state_restored: false,
             decode_cache: Box::new([None; 4096]),
             decode_generation: 1,
+            poll: poll_loop::PollDetector::default(),
             t16_discovery_misses: [(0, 0); T16_DISCOVERY_MISS_SLOTS],
             t16_fast_block: None,
             fpu_s: [0u32; 32],
@@ -2680,6 +2687,16 @@ impl Cpu for CortexM {
         self.pc = 0x0000_0000;
         self.sp = 0x2000_0000;
         self.pending_exceptions = [0; 4];
+        // Reset is not exception return: no interrupt mask, IT block or
+        // exception-return LR from the previous boot may survive. Cortex-M4
+        // DUI0553A table 2-1 defines these reset values. General registers
+        // remain architecturally UNKNOWN; do not invent a zeroing promise.
+        self.primask = false;
+        self.basepri = 0;
+        self.faultmask = false;
+        self.it_state = 0;
+        self.xpsr = 0x0100_0000;
+        self.lr = u32::MAX;
         self.exclusive_subword = None;
         self.firmware_exit = None;
         self.set_core_sleeping(false);
@@ -2896,6 +2913,7 @@ impl Cpu for CortexM {
             self.retire_pending_debug_step(bus, observers, config)?;
             return Ok(1);
         }
+        self.poll_batch_start();
         #[cfg(feature = "jit")]
         {
             self.jit_enabled = config.cortex_m_jit_enabled;
@@ -3071,7 +3089,9 @@ impl Cpu for CortexM {
                 if let Some(tap) = &tap {
                     tap.bump_clock();
                 }
+                let pc_before = self.pc;
                 self.step_internal(sysbus, observers, config)?;
+                self.note_poll_step(pc_before);
                 // The hot arm. Concrete `SystemBus`, so this is one in-place
                 // add on a field, not a virtual call — and deliberately NOT
                 // `set_current_cycle`, whose extra job is republishing the
@@ -3093,6 +3113,10 @@ impl Cpu for CortexM {
                 if sysbus.pending_wake_left() == Some(0) {
                     break;
                 }
+                // A device access under `Machine::exact_batch_boundaries`.
+                if sysbus.batch_stop.hit() {
+                    break;
+                }
                 // See the `!batch_mode_enabled` arm: a latched SYSRESETREQ ends
                 // the batch here so the reset lands on this exact boundary.
                 if self.sysreset_latched()
@@ -3108,7 +3132,7 @@ impl Cpu for CortexM {
                 // sleep leaves the batch, so the machine can fast-forward the
                 // idle window.
                 if config.idle_fast_forward_enabled
-                    && self.idle_fast_forward_budget(sysbus).is_some()
+                    && (self.idle_fast_forward_budget(sysbus).is_some() || self.poll_anchor_ready())
                 {
                     break;
                 }
@@ -3135,11 +3159,16 @@ impl Cpu for CortexM {
                 if let Some(tap) = &tap {
                     tap.bump_clock();
                 }
+                let pc_before = self.pc;
                 self.step_internal(bus, observers, config)?;
+                self.note_poll_step(pc_before);
                 // See the `live_step` block above.
                 #[cfg(feature = "event-scheduler")]
                 bus.advance_cycle(live_step);
                 executed += 1;
+                if bus.batch_stop_hit() {
+                    break;
+                }
                 if self.sysreset_latched()
                     || self.debug_batch_break()
                     || self.firmware_exit_latched()
@@ -3147,7 +3176,8 @@ impl Cpu for CortexM {
                 {
                     break;
                 }
-                if config.idle_fast_forward_enabled && self.idle_fast_forward_budget(bus).is_some()
+                if config.idle_fast_forward_enabled
+                    && (self.idle_fast_forward_budget(bus).is_some() || self.poll_anchor_ready())
                 {
                     break;
                 }
@@ -3155,6 +3185,18 @@ impl Cpu for CortexM {
         }
 
         Ok(executed)
+    }
+
+    fn poll_loop_anchor_ready(&self) -> bool {
+        self.poll_anchor_ready()
+    }
+
+    fn poll_loop_skip_budget(&mut self, bus: &dyn Bus, limit: u64) -> Option<(u64, u64)> {
+        self.poll_skip_budget(bus, limit)
+    }
+
+    fn fast_forward_poll_loop(&mut self, cycles: u64) -> bool {
+        self.poll_fast_forward(cycles)
     }
 
     fn idle_fast_forward_budget(&self, _bus: &dyn Bus) -> Option<u64> {

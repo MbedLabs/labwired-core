@@ -493,6 +493,13 @@ impl SystemBus {
         let mut bus_tick_pos = 0;
         while bus_tick_pos < self.bus_tick_indices.len() {
             let i = self.bus_tick_indices[bus_tick_pos];
+            // Bus-assisted transfer work must obey the same live clock gate
+            // as register accesses and the legacy walk. In particular, a
+            // completed frame must not reach its slave while its clock is off.
+            if !self.is_peripheral_clocked(i) {
+                bus_tick_pos += 1;
+                continue;
+            }
             let placeholder: Box<dyn Peripheral> =
                 Box::new(crate::peripherals::stub::StubPeripheral::new(0));
             let mut dev = std::mem::replace(&mut self.peripherals[i].dev, placeholder);
@@ -536,6 +543,10 @@ impl SystemBus {
         let mut pos = 0;
         while pos < forced.len() {
             let i = forced[pos];
+            if self.peripherals[i].dev.requires_clocked_tick() && !self.is_peripheral_clocked(i) {
+                pos += 1;
+                continue;
+            }
             let placeholder: Box<dyn Peripheral> =
                 Box::new(crate::peripherals::stub::StubPeripheral::new(0));
             let mut dev = std::mem::replace(&mut self.peripherals[i].dev, placeholder);
@@ -667,6 +678,18 @@ impl SystemBus {
         } else {
             self.legacy_tick_indices.get(tick_pos).copied()
         } {
+            // A bus pass alone cannot freeze a clocked countdown: otherwise
+            // tick_elapsed consumes gated time and completes immediately on
+            // resume. Opt-in tick models use the same central gate as events;
+            // other legacy models retain their historical behavior.
+            if self.peripherals[peripheral_index]
+                .dev
+                .requires_clocked_tick()
+                && !self.is_peripheral_clocked(peripheral_index)
+            {
+                tick_pos += 1;
+                continue;
+            }
             let Some((res, irq, base, refresh_after_tick)) =
                 self.peripherals.get_mut(peripheral_index).map(|p| {
                     // Phase 2B.2 (issue #192): scheduler-driven peripherals are advanced
