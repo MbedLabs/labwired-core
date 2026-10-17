@@ -12,6 +12,7 @@
  *   3 undef             UDF (__builtin_trap), UsageFault off -> HardFault (FORCED)
  *   4 div0              SDIV by zero, CCR.DIV_0_TRP + USGFAULTENA -> UsageFault
  *   5 lockup            bad read, then a bad read inside HardFault -> LOCKUP
+ *   6 readonly_flash    store to flash with cpu_writes: fault -> precise BusFault
  *
  * The fault is always inside `sensor_read`, called from `main`, so the verdict
  * can name both.
@@ -50,6 +51,11 @@ __attribute__((noinline)) uint32_t sensor_read(uint32_t channel)
     int32_t scaled = (int32_t)(1000 + channel) / (int32_t)g_divisor; /* faults */
     g_last = (uint32_t)scaled;
     return g_last;
+#elif FAULT_KIND == 6
+    (void)channel;
+    /* 0x0800_1000 is inside flash; the fixture chip sets cpu_writes: fault. */
+    *(volatile uint32_t *)0x08001000u = 0xDEADBEEFu; /* faults */
+    return 0;
 #else
     volatile uint32_t *reg = (volatile uint32_t *)(UNMAPPED_ADDR + channel * 0u);
     uint32_t raw = *reg; /* faults */
@@ -60,7 +66,7 @@ __attribute__((noinline)) uint32_t sensor_read(uint32_t channel)
 
 int main(void)
 {
-#if FAULT_KIND == 2
+#if FAULT_KIND == 2 || FAULT_KIND == 6
     SCB_SHCSR |= SHCSR_BUSFAULTENA;
 #elif FAULT_KIND == 4
     SCB_CCR |= CCR_DIV_0_TRP;

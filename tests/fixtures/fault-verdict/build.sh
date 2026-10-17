@@ -13,3 +13,4 @@ build busfault 2
 build undef 3
 build div0 4
 build lockup 5
+build readonly-flash 6
