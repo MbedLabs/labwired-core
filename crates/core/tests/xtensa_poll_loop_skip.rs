@@ -304,4 +304,92 @@ mod tests {
         );
         fast
     }
+
+    /// `ipi.S` (primary): count 1000 stores, write 1 to DPORT `FROM_CPU_1`
+    /// (a5), count on forever.
+    const IPI: [u8; 30] = [
+        0x32, 0xa3, 0xe8, 0x22, 0xa0, 0x00, 0x22, 0xc2, 0x01, 0x22, 0x66, 0x40, 0x37, 0x92, 0xf6,
+        0x42, 0xa0, 0x01, 0x42, 0x65, 0x00, 0x22, 0xc2, 0x01, 0x22, 0x66, 0x40, 0x86, 0xfd, 0xff,
+    ];
+    /// `handler.S` (APP kernel vector): record CCOUNT at a6[0], then count
+    /// into a6[4] forever.
+    const HANDLER: [u8; 18] = [
+        0x20, 0xea, 0x03, 0x22, 0x66, 0x00, 0x32, 0xa0, 0x00, 0x32, 0xc3, 0x01, 0x32, 0x66, 0x01,
+        0x86, 0xfd, 0xff,
+    ];
+    const VECBASE: u64 = 0x4008_3000;
+    const APP_DATA: u32 = DATA + 0x200;
+    const IPI_RUN: u64 = 20_000;
+
+    /// A WAITI-parked APP_CPU woken by the primary's cross-core interrupt in
+    /// the middle of a window: returns (handler CCOUNT, handler count, APP
+    /// CCOUNT, machine cycles) after `IPI_RUN` cycles advanced in `chunk`-
+    /// cycle calls.
+    fn run_ipi(chunk: u64, fast_forward: bool, observed: bool) -> (u32, u32, u32, u64) {
+        use labwired_core::cpu::xtensa_regs::Ps;
+        use labwired_core::cpu::xtensa_sr::{INTENABLE, VECBASE as VECBASE_SR};
+        let mut bus = SystemBus::new();
+        let mut primary = configure_xtensa_esp32(&mut bus);
+        load(&mut bus, IDLE, &IPI);
+        load(&mut bus, CODE, &PARK);
+        load(&mut bus, VECBASE + 0x300, &HANDLER);
+        // DPORT: route FROM_CPU_1 (source 25) to APP_CPU interrupt 2 (level 1).
+        bus.write_u32(0x3ff0_0208 + 25 * 4, 2).unwrap();
+        arm(&mut primary, IDLE);
+        primary.regs.write_logical(5, 0x3ff0_00e0);
+        let mut app = XtensaLx7::new_app_cpu();
+        arm(&mut app, CODE);
+        app.regs.write_logical(6, APP_DATA);
+        app.ps = Ps::from_raw(0);
+        app.sr.write(VECBASE_SR, VECBASE as u32);
+        app.sr.write(INTENABLE, 1 << 2);
+        app.unhalt();
+        let mut machine = Machine::new(primary, bus).with_secondary_cpu(app);
+        machine.config.idle_fast_forward_enabled = fast_forward;
+        if observed {
+            machine.add_observer(std::sync::Arc::new(Quiet));
+        }
+        while machine.total_cycles < IPI_RUN {
+            let n = chunk.min(IPI_RUN - machine.total_cycles);
+            machine.advance(AdvanceRequest::run(Some(n))).unwrap();
+        }
+        let app = machine.cpu_secondary.as_ref().unwrap();
+        (
+            machine.bus.read_u32(u64::from(APP_DATA)).unwrap(),
+            machine.bus.read_u32(u64::from(APP_DATA) + 4).unwrap(),
+            app.sr.read(CCOUNT),
+            machine.total_cycles,
+        )
+    }
+
+    /// A parked secondary woken inside a window runs from the next cycle: the
+    /// result does not depend on where `advance` calls end. The quantum-1
+    /// window used to step a secondary only while it was parked, so after a
+    /// mid-window wake it sat unstepped until the window ended; ending the
+    /// calls at different cycles moved the handler's CCOUNT and count.
+    #[test]
+    fn a_parked_secondary_woken_mid_window_runs_from_the_next_cycle() {
+        let reference = run_ipi(1, false, true);
+        assert!(
+            reference.0 > 3_000,
+            "APP never took the interrupt: {reference:?}"
+        );
+        assert!(
+            reference.1 > 1_000,
+            "APP handler did not run on: {reference:?}"
+        );
+        // Observed and unobserved: an observer changes how a window steps
+        // (no store-spin coalescing), never when the secondary wakes.
+        for observed in [true, false] {
+            for fast_forward in [false, true] {
+                for chunk in [IPI_RUN, 1_000, 997, 64] {
+                    assert_eq!(
+                        run_ipi(chunk, fast_forward, observed),
+                        reference,
+                        "chunk {chunk}, fast-forward {fast_forward}, observed {observed}"
+                    );
+                }
+            }
+        }
+    }
 }

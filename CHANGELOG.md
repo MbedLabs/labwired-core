@@ -115,6 +115,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a run without any skip. The four-servo trajectory lab (two cores, loopTask
   on APP_CPU) goes from 0.03x to 2.0x real time in WASM (Node, 12 s).
 ### Fixed
+- A WAITI-parked secondary core that an interrupt wakes in the middle of a
+  quantum-1 window runs from the next cycle. The window stepped a secondary
+  only while it was parked, so after a mid-window wake it sat unstepped
+  until the window ended, and a dual-core run depended on where `advance`
+  calls ended (with idle fast-forward on or off). On the four-servo ESP32
+  lab the APP_CPU lost 776 cycles at its boot wake; every servo edge now
+  lands 776 cycles earlier, the same for every call size.
 - Idle fast-forward on a dual-core machine waits until BOTH cores are idle.
   It skipped on the primary's WAITI alone, so an ESP32 sketch whose
   `loopTask` runs on APP_CPU got about 1 % of the machine's cycles: a
