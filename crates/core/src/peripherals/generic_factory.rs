@@ -562,7 +562,9 @@ pub fn try_build(
             if p_cfg.irq != Some(31) || p_cfg.base_address != 0x4100a000 {
                 anyhow::bail!("sam_dmac_byte requires SAMD51 base 0x4100a000 and IRQ31");
             }
-            Box::new(crate::peripherals::sam::dmac_byte::SamDmacByte::new(p_cfg.base_address))
+            Box::new(crate::peripherals::sam::dmac_byte::SamDmacByte::new(
+                p_cfg.base_address,
+            ))
         }
         "sam_sercom_spi" => {
             let number = |key: &str| -> anyhow::Result<u64> {
