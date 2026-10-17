@@ -84,7 +84,7 @@ fn store_to_read_only_flash_is_named_in_the_verdict() {
         "readonly-flash",
         "max_steps",
         "Precise BusFault: data access at 0x0800_1000 (BFAR valid; store to read-only flash), \
-         at PC 0x0800_006C in `sensor_read` (fault_fixture.c:57), called from `main`.",
+         at PC 0x0800_006C in `sensor_read` (fault_fixture.c:61), called from `main`.",
     );
     assert_eq!(v["kind"], "bus_fault");
     assert_eq!(v["fault_address"], "0x08001000");
