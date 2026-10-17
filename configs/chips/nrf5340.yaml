@@ -216,10 +216,10 @@ peripherals:
     size: "4KB"
     config:
       debug_schema: "../peripherals/nrf5340/gpiote0_s.yaml"
-  # DPPIC — the RTC/timer SUBSCRIBE/PUBLISH channel wiring is poked here at boot
-  # but is not read back; benign for a UART smoke boot.
+  # DPPIC channel-enable subset. UARTE implements its own configured
+  # ENDTX -> STOPTX route; cross-instance and other DPPI routes are unmodelled.
   - id: "dppic"
-    type: "nrf5340_dppic_stub"
+    type: "nrf5340_dppic"
     base_address: 0x50017000
     size: "4KB"
     config:

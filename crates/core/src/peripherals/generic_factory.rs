@@ -145,6 +145,7 @@ pub const MODEL_TYPES: &[&str] = &[
     "nrf52840_spis",
     "nrf52840_twis",
     "nrf52840_uart",
+    "nrf5340_dppic",
     "nrf52_gpiote",
     // nRF54L behavioral models (nrf54l factory). Listed here so the fuzzy
     // `contains("uart")` heuristic cannot coerce `nrf54l_uarte` onto the

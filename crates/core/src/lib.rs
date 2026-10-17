@@ -1019,6 +1019,39 @@ pub trait Peripheral: std::fmt::Debug + Send {
     fn peek(&self, _offset: u64) -> Option<u8> {
         None
     }
+    /// Latched CPU-reset request raised by this peripheral, e.g. a watchdog
+    /// time-out with reset enabled. Returns `true` once per event and clears
+    /// the latch. The machine drains it at a clean instruction boundary and
+    /// reboots the CPU through the existing reset path (see
+    /// `Machine::advance`). Default: no reset requests.
+    ///
+    /// Read [`Self::latched_reset_cause`] before this call. It is `None` once
+    /// the latch has been taken.
+    fn take_reset_request(&mut self) -> bool {
+        false
+    }
+
+    /// Why [`Self::take_reset_request`] would return `true` right now.
+    /// `None` when nothing is latched, or when the peripheral does not name a
+    /// cause (the CPU still reboots; no reset-cause flag is recorded).
+    fn latched_reset_cause(&self) -> Option<PeripheralResetCause> {
+        None
+    }
+
+    /// A peripheral's reset request was drained and the CPU is about to
+    /// reboot. Sticky cause registers (RESETCAUSE and its equivalents) record
+    /// `cause` here. Called after the requesting peripheral has cleared its
+    /// own latch. Default: ignore.
+    fn on_peripheral_reset(&mut self, _cause: PeripheralResetCause) {}
+
+    /// `true` if this peripheral can ever return `true` from
+    /// [`Self::take_reset_request`]. The machine caches the bus indices of
+    /// such peripherals once at construction, so peripherals that never
+    /// request a reset add nothing to the per-instruction drain.
+    fn reset_request_capable(&self) -> bool {
+        false
+    }
+
     fn tick(&mut self) -> PeripheralTickResult {
         PeripheralTickResult::default()
     }
@@ -1413,6 +1446,33 @@ pub trait Peripheral: std::fmt::Debug + Send {
     /// with capture channels.
     fn timer_input_stage(&self) -> Option<crate::peripherals::timer::TimerInputStage> {
         None
+    }
+
+    /// Timer capability: the channel-OUTPUT wire (`CH1`..`CH4`), created on
+    /// first call, so the bus can route it onto GPIO pads. With `arm` the
+    /// timer also starts generating its outputs onto the wire (a pad was
+    /// bound); without it the wire exists but stays inert, so a timer no pad
+    /// can reach costs nothing. `None` for everything that is not a timer
+    /// with output channels.
+    fn timer_output_lines(
+        &mut self,
+        _arm: bool,
+    ) -> Option<std::sync::Arc<crate::peripherals::pad_lines::PadLines>> {
+        None
+    }
+
+    /// GPIO capability: bind pad `pin` CONDITIONALLY to `line` of a timer's
+    /// channel-output wire `cell` — live while the pad is an alternate-function
+    /// output and the timer drives that line (STM32 F1 fixed mapping). A port
+    /// whose register layout is not F1 refuses it and returns `false`.
+    fn bind_timer_output_pad(
+        &mut self,
+        _cell: &std::sync::Arc<crate::peripherals::pad_lines::PadLines>,
+        _pin: u8,
+        _line: usize,
+        _func: &'static str,
+    ) -> bool {
+        false
     }
 
     /// GPIO capability: bind pad `pin` to input `ti` of the timer at bus
@@ -2287,6 +2347,15 @@ pub trait Peripheral: std::fmt::Debug + Send {
         None
     }
 
+    /// Set the ambient (die) temperature an on-chip temperature sensor
+    /// reports, in °C. `true` when this peripheral has such a sensor and took
+    /// the value; `false` otherwise (the default). The bus fans one world
+    /// temperature out to every peripheral through
+    /// [`crate::bus::SystemBus::set_ambient_temperature_c`].
+    fn set_ambient_temperature_c(&mut self, _celsius: f64) -> bool {
+        false
+    }
+
     /// Hand the peripheral the machine's ONE universal bus trace, plus the name
     /// it should stamp events with. Called from the same registration choke
     /// points as [`Peripheral::attach_cycle_clock`] and
@@ -2871,6 +2940,16 @@ pub trait DebugControl {
     fn restore(&mut self, snapshot: &snapshot::MachineSnapshot) -> SimResult<()>;
 }
 
+/// Why a peripheral asked the machine to reboot the CPU.
+///
+/// `Watchdog` and `System` match the K32W041 RESETCAUSE bits WDTRESET and
+/// SYSTEMRESET. Peripherals that only need the reboot leave the cause unset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeripheralResetCause {
+    Watchdog,
+    System,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum StopReason {
     Breakpoint(u32),
@@ -3039,6 +3118,11 @@ pub struct Machine<C: Cpu> {
     /// reorders `bus.peripherals` after construction (appends are safe — they
     /// never move an existing index).
     nvmc_index: Option<usize>,
+    /// Bus indices of peripherals whose `reset_request_capable()` is true,
+    /// resolved once at construction. Empty on every chip that has no such
+    /// peripheral, so the boundary drain is a single `is_empty()` test.
+    /// Same fixed-set assumption as [`Self::scb_index`].
+    reset_request_indices: Vec<usize>,
     /// A SoftDevice emulated at API level (nrf-softdevice-hle), when the
     /// image is an application built for one. `None` on every other board:
     /// the advance boundary then pays one `Option` test.
@@ -3725,6 +3809,13 @@ impl<C: Cpu> Machine<C> {
                 .and_then(|a| a.downcast_ref::<crate::peripherals::scb::Scb>())
                 .is_some()
         });
+        let reset_request_indices: Vec<usize> = bus
+            .peripherals
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.dev.reset_request_capable())
+            .map(|(i, _)| i)
+            .collect();
         let nvmc_index = bus.peripherals.iter().position(|p| {
             p.dev
                 .as_any()
@@ -3790,6 +3881,7 @@ impl<C: Cpu> Machine<C> {
             simctl_index,
             scb_index,
             nvmc_index,
+            reset_request_indices,
             sd_hle: None,
             boot_vtor: None,
             scheduler_bootstrapped: false,
@@ -4989,6 +5081,29 @@ impl<C: Cpu> Machine<C> {
             .and_then(|a| a.downcast_ref::<crate::peripherals::esp32::rtc_cntl::RtcCntl>())
             .map(|rtc| rtc.reset_request_pending())
             .unwrap_or(false)
+    }
+
+    /// Drain every reset-capable peripheral's latch. Every capable peripheral
+    /// is polled (no short-circuit) so each latch clears even when another
+    /// already fired. The returned causes are what was latched before the
+    /// take; an empty vec means nobody requested a reset.
+    pub(crate) fn drain_peripheral_reset_requests(&mut self) -> Vec<Option<PeripheralResetCause>> {
+        let mut requests = Vec::new();
+        for i in 0..self.reset_request_indices.len() {
+            let idx = self.reset_request_indices[i];
+            let cause = self.bus.peripherals[idx].dev.latched_reset_cause();
+            if self.bus.peripherals[idx].dev.take_reset_request() {
+                requests.push(cause);
+            }
+        }
+        requests
+    }
+
+    /// Tell every peripheral that a CPU reboot from `cause` is being applied.
+    fn record_peripheral_reset_cause(&mut self, cause: PeripheralResetCause) {
+        for peripheral in &mut self.bus.peripherals {
+            peripheral.dev.on_peripheral_reset(cause);
+        }
     }
 
     /// Returns true (and clears the latch) if the registered SCB peripheral

@@ -3546,6 +3546,72 @@ fn test_system_bus_memory_observer() {
 }
 
 #[test]
+fn test_wide_ram_store_observation_is_explicit_and_exact() {
+    use std::sync::{Arc, Mutex};
+    #[derive(Debug)]
+    struct Observer(Arc<Mutex<Vec<(u64, u8, u8)>>>);
+    impl crate::SimulationObserver for Observer {
+        fn on_step_end(&self, _: u32, _: &[u32]) {}
+        fn on_memory_write(&self, addr: u64, old: u8, new: u8) {
+            self.0.lock().unwrap().push((addr, old, new));
+        }
+    }
+    let writes = Arc::new(Mutex::new(Vec::new()));
+    let mut bus = SystemBus::new();
+    bus.add_observer(Arc::new(Observer(writes.clone())));
+    let addr = bus.ram.base_addr;
+    assert!(!bus.config.observe_wide_ram_stores);
+    bus.write_u16(addr, 0x2211).unwrap();
+    bus.write_u32(addr + 4, 0x44332211).unwrap();
+    assert!(writes.lock().unwrap().is_empty());
+    bus.config.observe_wide_ram_stores = true;
+    bus.write_u16(addr, 0xbbaa).unwrap();
+    bus.write_u32(addr + 4, 0x88776655).unwrap();
+    assert_eq!(
+        *writes.lock().unwrap(),
+        vec![
+            (addr, 0x11, 0xaa),
+            (addr + 1, 0x22, 0xbb),
+            (addr + 4, 0x11, 0x55),
+            (addr + 5, 0x22, 0x66),
+            (addr + 6, 0x33, 0x77),
+            (addr + 7, 0x44, 0x88),
+        ]
+    );
+    assert_eq!(bus.ram.read_u16(addr), Some(0xbbaa));
+    assert_eq!(bus.ram.read_u32(addr + 4), Some(0x88776655));
+    writes.lock().unwrap().clear();
+    // Same-valued stores are committed stores too.
+    bus.write_u16(addr, 0xbbaa).unwrap();
+    bus.write_u32(addr + 4, 0x88776655).unwrap();
+    assert_eq!(writes.lock().unwrap().len(), 6);
+    assert!(writes
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|(_, old, new)| old == new));
+    writes.lock().unwrap().clear();
+    let last = addr + bus.ram.data.len() as u64 - 1;
+    assert!(bus.write_u16(last, 0xffff).is_err());
+    assert!(bus.write_u32(last, 0xffffffff).is_err());
+    // Existing byte fallback commits the in-range byte before the next byte
+    // faults. Report those real byte writes, never a fabricated wide commit.
+    assert_eq!(
+        *writes.lock().unwrap(),
+        vec![(last, 0, 0xff), (last, 0xff, 0xff)]
+    );
+    writes.lock().unwrap().clear();
+    // Flash keeps its existing behavior even with RAM tracing enabled.
+    bus.write_u16(bus.flash.base_addr, 0x1234).unwrap();
+    bus.write_u32(bus.flash.base_addr + 4, 0x56789abc).unwrap();
+    assert!(writes.lock().unwrap().is_empty());
+    bus.config.observe_wide_ram_stores = false;
+    bus.write_u16(addr, 0).unwrap();
+    bus.write_u32(addr + 4, 0).unwrap();
+    assert!(writes.lock().unwrap().is_empty());
+}
+
+#[test]
 fn test_flash_boot_alias_read_and_write() {
     let mut bus = SystemBus {
         flash: LinearMemory::new_erased(256, 0x0800_0000),

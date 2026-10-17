@@ -2665,6 +2665,24 @@ impl crate::Peripheral for GpioPort {
         fits
     }
 
+    /// F1 only: the timer channel outputs share their DEFAULT pads with
+    /// SPI1/USART/I²C, so the route is conditional — see
+    /// [`crate::peripherals::pad_routing::PadRoutes::bind_when_driving`].
+    fn bind_timer_output_pad(
+        &mut self,
+        cell: &std::sync::Arc<crate::peripherals::pad_lines::PadLines>,
+        pin: u8,
+        line: usize,
+        func: &'static str,
+    ) -> bool {
+        let fits = matches!(self.family, GpioFamily::Stm32F1(_)) && pin < 16;
+        if fits {
+            self.pad_routes
+                .bind_when_driving(cell, pin, None, line, func);
+        }
+        fits
+    }
+
     fn take_timer_input_edges(&mut self) -> Vec<TimerInputEdge> {
         std::mem::take(&mut self.timer_edges)
     }
