@@ -21,6 +21,16 @@ same-valued stores, existing partial byte-fallback faults and opt-out. Do not su
 byte events or read the bus through an aliased observer reference. This is
 diagnostic instrumentation, not a measured performance optimization.
 
+The retained first run also had one CPU batch per instruction at quantum64:
+the complete board manifest's NeoPixel resident requires per-cycle service.
+The new reset-only fixture explicitly clears external board devices in both
+quantums, retains the chip/core models, and reports that fixture identity and
+zero external-device count. It still requires actual multi-instruction windows;
+it does not claim batching or reset of the fully wired board. All nineteen
+earlier caller fixtures keep their unchanged board setup. Full-board resident
+timing and reset qualification remain separate work, not a reason to relax the
+reset-only fixture's batching assertion.
+
 The focused `CortexM::reset` correction clears prior masks, IT/PSR and LR
 according to [Arm's Cortex-M4 register summary](https://documentation-service.arm.com/static/5f2ac4ab60a93e65927bbdbf).
 This was a source-review finding, not a claimed earlier guest failure. Permanent

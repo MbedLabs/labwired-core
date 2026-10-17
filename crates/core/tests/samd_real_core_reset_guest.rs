@@ -291,8 +291,13 @@ fn actual_codal_core_reset_and_invalid_key() {
     for quantum in [1u32, 64] {
         let chip =
             ChipDescriptor::from_file(root.join("configs/chips/atsamd51-pybadge.yaml")).unwrap();
-        let manifest =
+        let mut manifest =
             SystemManifest::from_file(root.join("configs/systems/pybadge.yaml")).unwrap();
+        // Core-local reset, not external-device reset. The full board's
+        // NeoPixel resident requires per-cycle service and prevents the real
+        // multi-instruction CPU-window adversary. Earlier fixtures stay wired.
+        assert_eq!(manifest.external_devices.len(), 2);
+        manifest.external_devices.clear();
         let mut bus = SystemBus::from_config(&chip, &manifest).unwrap();
         let (cpu, _) = configure_cortex_m(&mut bus);
         let mut m = Machine::new(cpu, bus);
@@ -405,6 +410,7 @@ fn actual_codal_core_reset_and_invalid_key() {
             .map(|i| m.bus.read_u32(noinit.0 + i * 4).unwrap())
             .collect();
         let result = json!({"schema":1,"source":SOURCE,"core":CORE,"image":image,"provenance":provenance,
+            "fixture":"pybadge-core-reset-without-external-residents","external_devices":manifest.external_devices.len(),
             "profile":if event_scheduler_enabled(){"event-scheduler"}else{"default"},"quantum":quantum,"budget":BUDGET,"post":POST,
             "steps":state.step,"terminal":terminal,"cpu_batches":total_batches,"status":read("runtime_status"),"stage":read("runtime_reset_stage"),
             "data":read("runtime_reset_data"),"bss":read("runtime_reset_bss"),"persistent":persistent,
