@@ -353,6 +353,231 @@ impl EspSpiWire {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The shared per-chip GP-SPI test suite.
+//
+// ESP32-C3 GP-SPI2 and ESP32-S3 GP-SPI2/SPI3 are one Espressif IP block, and
+// their test modules carried separate copies of the same register-level suite
+// (11 same-name pairs, seven of them ≥0.97). This macro writes it once.
+//
+// Unqualified names (`CLOCK`, `CMD`, `USR_BIT`, `MS_DLEN`, `W0`, ...) resolve
+// at the invocation site, where `use super::*` gives each chip its own
+// constants. Per-chip facts that differ INSIDE a shared body are parameters:
+// the intr-matrix source, the reset-test name and the two C3-vs-S3 reset
+// values, and the two `miso_fills` preloads (the C3 engine merges MISO
+// byte-wise while the S3 overwrites the whole word — the preloads prove
+// exactly that difference, so they must not be flattened).
+// `s_name` is the test-local binding those fragments refer to (`s` on both
+// chips), passed as an ident so the fragments can see it across macro hygiene.
+// `int_st_pre/mid/post` are optional fragments carrying the C3's legacy-tick
+// membership assertions around the shared `int_st_masks_with_ena_and_emits_source`.
+#[cfg(test)]
+macro_rules! esp_gpspi_suite {
+    (
+        ctrl: $ctrl:ty,
+        s_name: $s:ident,
+        source: $source:expr,
+        reset_test: $reset_test:ident,
+        dma_conf_reset: $dma_conf_reset:expr,
+        date_reset: $date_reset:expr,
+        w0_preload: $w0_preload:expr,
+        w1_preload: $w1_preload:expr,
+        $( int_st_pre: { $($int_st_pre:tt)* }, )?
+        $( int_st_mid: { $($int_st_mid:tt)* }, )?
+        $( int_st_post: { $($int_st_post:tt)* }, )?
+    ) => {
+        struct ExternalCanPoller(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+        impl SpiDevice for ExternalCanPoller {
+            fn needs_external_bus_poll(&self) -> bool {
+                true
+            }
+            fn component_id(&self) -> Option<&str> {
+                Some("external-can")
+            }
+            fn poll_external_bus(&mut self) {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            fn transfer(&mut self, _mosi: u8) -> u8 {
+                0
+            }
+            fn cs_pin(&self) -> &str {
+                "GPIO10"
+            }
+        }
+
+        #[test]
+        fn scheduler_arms_recurring_external_can_poll() {
+            let polls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let mut spi = <$ctrl>::new($source);
+            spi.push_device(Box::new(ExternalCanPoller(polls.clone())));
+            spi.attach_cycle_clock(crate::CycleClock::default());
+
+            let events = spi.take_scheduled_events();
+            assert_eq!(
+                events.len(),
+                1,
+                "scheduler mode must arm external CAN polling"
+            );
+            let mut scheduler = crate::sched::EventScheduler::new();
+            let mut bus = crate::bus::SystemBus::new();
+            let result = spi.on_event(events[0].1, &mut scheduler, &mut bus);
+            assert_eq!(polls.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert_eq!(result.reschedule_delay, Some(1));
+
+            let legacy_polls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let mut legacy = <$ctrl>::new($source);
+            legacy.push_device(Box::new(ExternalCanPoller(legacy_polls.clone())));
+            assert!(legacy.take_scheduled_events().is_empty());
+            legacy.tick();
+            assert_eq!(legacy_polls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        }
+
+        #[test]
+        fn $reset_test() {
+            let s = <$ctrl>::new($source);
+            assert_eq!(s.read_u32(CLOCK).unwrap(), 0x8000_3043, "CLOCK");
+            assert_eq!(s.read_u32(CTRL).unwrap(), 0x003C_0000, "CTRL");
+            assert_eq!(s.read_u32(USER).unwrap(), 0x8000_00C0, "USER");
+            assert_eq!(s.read_u32(USER1).unwrap(), 0xB841_0007, "USER1");
+            assert_eq!(s.read_u32(USER2).unwrap(), 0x7800_0000, "USER2");
+            assert_eq!(s.read_u32(MISC).unwrap(), 0x0000_003E, "MISC");
+            assert_eq!(s.read_u32(DMA_CONF).unwrap(), $dma_conf_reset, "DMA_CONF");
+            assert_eq!(s.read_u32(SLAVE).unwrap(), 0x0280_0000, "SLAVE");
+            assert_eq!(s.read_u32(DATE).unwrap(), $date_reset, "DATE");
+        }
+
+        #[test]
+        fn unmapped_offsets_read_zero_and_ignore_writes() {
+            // Holes inside the map and offsets above DATE must NOT round-trip.
+            let mut s = <$ctrl>::new($source);
+            for off in [0x48u64, 0x90, 0xD8, 0xEC, 0xF4, 0xFFC] {
+                s.write_u32(off, 0xDEAD_BEEF).unwrap();
+                assert_eq!(s.read_u32(off).unwrap(), 0, "hole at {off:#x}");
+            }
+        }
+
+        #[test]
+        fn cmd_update_bit_self_clears() {
+            // ESP-IDF spi_master writes UPDATE then polls for it to clear; a
+            // round-tripping CMD would wedge the driver.
+            let mut s = <$ctrl>::new($source);
+            s.write_u32(CMD, UPDATE_BIT).unwrap();
+            assert_eq!(
+                s.read_u32(CMD).unwrap() & UPDATE_BIT,
+                0,
+                "UPDATE self-clears"
+            );
+        }
+
+        #[test]
+        fn dma_conf_afifo_rst_strobes_self_clear() {
+            let mut s = <$ctrl>::new($source);
+            s.write_u32(DMA_CONF, AFIFO_RST_BITS).unwrap();
+            assert_eq!(
+                s.read_u32(DMA_CONF).unwrap() & AFIFO_RST_BITS,
+                0,
+                "AFIFO reset strobes self-clear"
+            );
+        }
+
+        #[test]
+        fn slave_soft_reset_self_clears() {
+            let mut s = <$ctrl>::new($source);
+            s.write_u32(SLAVE, SOFT_RESET_BIT).unwrap();
+            assert_eq!(
+                s.read_u32(SLAVE).unwrap() & SOFT_RESET_BIT,
+                0,
+                "SOFT_RESET (WT) self-clears"
+            );
+        }
+
+        #[test]
+        fn w_buffer_round_trips() {
+            let mut s = <$ctrl>::new($source);
+            for w in 0..16u64 {
+                s.write_u32(W0 + w * 4, 0xA000_0000 | (w as u32)).unwrap();
+            }
+            for w in 0..16u64 {
+                assert_eq!(s.read_u32(W0 + w * 4).unwrap(), 0xA000_0000 | (w as u32));
+            }
+            assert_eq!(W15, W0 + 15 * 4, "W15 offset");
+        }
+
+        #[test]
+        fn usr_start_auto_clears_and_latches_trans_done() {
+            let mut s = <$ctrl>::new($source);
+            s.write_u32(MS_DLEN, 32 - 1).unwrap(); // 32-bit transfer
+            s.write_u32(CMD, USR_BIT).unwrap();
+            // USR auto-cleared so `!(CMD & USR)` poll exits.
+            assert_eq!(s.read_u32(CMD).unwrap() & USR_BIT, 0, "USR auto-clears");
+            // TRANS_DONE latched in INT_RAW.
+            assert_eq!(
+                s.read_u32(DMA_INT_RAW).unwrap() & TRANS_DONE,
+                TRANS_DONE,
+                "TRANS_DONE latched"
+            );
+        }
+
+        #[test]
+        fn miso_fills_0xff_for_no_device() {
+            let mut s = <$ctrl>::new($source);
+            s.write_u32(W0, $w0_preload).unwrap();
+            s.write_u32(W0 + 4, $w1_preload).unwrap();
+            // 5-byte (40-bit) transfer → W0 fully 0xFF, W1 low byte 0xFF only.
+            s.write_u32(MS_DLEN, 40 - 1).unwrap();
+            s.write_u32(CMD, USR_BIT).unwrap();
+            assert_eq!(
+                s.read_u32(W0).unwrap(),
+                0xFFFF_FFFF,
+                "first 4 MISO bytes 0xFF"
+            );
+            assert_eq!(
+                s.read_u32(W0 + 4).unwrap(),
+                0x0000_00FF,
+                "5th byte 0xFF, rest untouched"
+            );
+        }
+
+        #[test]
+        fn int_clr_is_w1c() {
+            let mut s = <$ctrl>::new($source);
+            s.write_u32(MS_DLEN, 8 - 1).unwrap();
+            s.write_u32(CMD, USR_BIT).unwrap();
+            assert_eq!(s.read_u32(DMA_INT_RAW).unwrap() & TRANS_DONE, TRANS_DONE);
+            // W1C: writing the bit clears it; writing 0 leaves others intact.
+            s.write_u32(DMA_INT_CLR, TRANS_DONE).unwrap();
+            assert_eq!(
+                s.read_u32(DMA_INT_RAW).unwrap() & TRANS_DONE,
+                0,
+                "W1C cleared"
+            );
+        }
+
+        #[test]
+        fn int_st_masks_with_ena_and_emits_source() {
+            let mut $s = <$ctrl>::new($source);
+            $( $($int_st_pre)* )?
+            $s.write_u32(MS_DLEN, 8 - 1).unwrap();
+            $s.write_u32(CMD, USR_BIT).unwrap();
+            // No enable yet → ST gated, no source emitted.
+            assert_eq!($s.read_u32(DMA_INT_ST).unwrap(), 0, "ST gated by ENA");
+            assert_eq!($s.tick().explicit_irqs, None, "no source while ST==0");
+            // Enable TRANS_DONE → ST asserts and the source is emitted.
+            $s.write_u32(DMA_INT_ENA, TRANS_DONE).unwrap();
+            assert_eq!($s.read_u32(DMA_INT_ST).unwrap() & TRANS_DONE, TRANS_DONE);
+            $( $($int_st_mid)* )?
+            assert_eq!($s.tick().explicit_irqs, Some(vec![$source]));
+            // Clear the raw bit → ST drops, source stops.
+            $s.write_u32(DMA_INT_CLR, TRANS_DONE).unwrap();
+            $( $($int_st_post)* )?
+            assert_eq!($s.tick().explicit_irqs, None);
+        }
+    };
+}
+
+#[cfg(test)]
+pub(crate) use esp_gpspi_suite;
+
 #[cfg(test)]
 mod tests {
     use super::*;

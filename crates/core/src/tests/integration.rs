@@ -23,6 +23,80 @@ pub mod integration_tests {
     }
     type VariableMachine = Machine<CortexM>;
 
+    /// The five profile tests share one scaffold: a 125 KiB flash / 20 KB RAM
+    /// Cortex-M chip whose single peripheral carries a one-key `config` map.
+    fn chip_with_peripheral(
+        chip_name: &str,
+        id: &str,
+        ty: &str,
+        base: u64,
+        config_key: &str,
+        profile: &str,
+    ) -> ChipDescriptor {
+        let mut config = HashMap::new();
+        config.insert(
+            config_key.to_string(),
+            serde_yaml::Value::String(profile.to_string()),
+        );
+        ChipDescriptor {
+            schema_version: "1.0".to_string(),
+            name: chip_name.to_string(),
+            cpu_hz: 0,
+            arch: Arch::Arm,
+            core: None,
+            flash: MemoryRange {
+                base: 0x0,
+                size: 125 * 1024,
+            },
+            ram: MemoryRange {
+                base: 0x2000_0000,
+                size: 20000,
+            },
+            reset_vector_offset: 0,
+            flash_boot_alias: true,
+            atomic_register_aliases: labwired_config::AtomicAliasFlavour::None,
+            ns_alias_offset: None,
+            memory_regions: Vec::new(),
+            peripherals: vec![PeripheralConfig {
+                id: id.to_string(),
+                r#type: ty.to_string(),
+                base_address: base,
+                size: None,
+                irq: None,
+                irq_controller: None,
+                clock: None,
+                config,
+            }],
+            pins: Default::default(),
+            analog_pins: Default::default(),
+            io_voltage_v: None,
+            gpio_input_thresholds: None,
+            supply_monitor: None,
+            include: None,
+        }
+    }
+
+    /// Manifest matching `chip_with_peripheral`: the system name is the chip
+    /// name with `chip` → `system`; `chip` points at the descriptor name.
+    fn manifest_for(chip_name: &str) -> SystemManifest {
+        SystemManifest {
+            parts: Vec::new(),
+            walk_deleted: Some(false),
+            schema_version: "1.0".to_string(),
+            name: chip_name.replacen("chip", "system", 1),
+            chip: chip_name.to_string(),
+            cpu_hz: None,
+            memory_overrides: HashMap::new(),
+            external_devices: Vec::new(),
+            cosim_models: Vec::new(),
+            motor_models: Vec::new(),
+            board_io: Vec::new(),
+            debug_uart: None,
+            wifi_ap: None,
+            peripherals: Vec::new(),
+        }
+    }
+
     #[derive(Debug)]
     struct RecordingPeripheral {
         regs: [u8; 16],
@@ -758,66 +832,15 @@ pub mod integration_tests {
 
     #[test]
     fn test_from_config_gpio_profile_stm32v2() {
-        let mut gpio_config = HashMap::new();
-        gpio_config.insert(
-            "profile".to_string(),
-            serde_yaml::Value::String("stm32v2".to_string()),
+        let chip = chip_with_peripheral(
+            "test-chip-gpio-v2",
+            "gpioa",
+            "gpio",
+            0x4001_0800,
+            "profile",
+            "stm32v2",
         );
-
-        let chip = ChipDescriptor {
-            schema_version: "1.0".to_string(),
-            name: "test-chip-gpio-v2".to_string(),
-            cpu_hz: 0,
-            arch: Arch::Arm,
-            core: None,
-            flash: MemoryRange {
-                base: 0x0,
-                size: 125 * 1024,
-            },
-            ram: MemoryRange {
-                base: 0x2000_0000,
-                size: 20000,
-            },
-            reset_vector_offset: 0,
-            flash_boot_alias: true,
-            atomic_register_aliases: labwired_config::AtomicAliasFlavour::None,
-            ns_alias_offset: None,
-            memory_regions: Vec::new(),
-            peripherals: vec![PeripheralConfig {
-                id: "gpioa".to_string(),
-                r#type: "gpio".to_string(),
-                base_address: 0x4001_0800,
-                size: None,
-                irq: None,
-                irq_controller: None,
-                clock: None,
-                config: gpio_config,
-            }],
-            pins: Default::default(),
-            analog_pins: Default::default(),
-            io_voltage_v: None,
-            gpio_input_thresholds: None,
-            supply_monitor: None,
-            include: None,
-        };
-
-        let manifest = SystemManifest {
-            parts: Vec::new(),
-            walk_deleted: Some(false),
-            schema_version: "1.0".to_string(),
-            name: "test-system-gpio-v2".to_string(),
-            chip: "test-chip-gpio-v2".to_string(),
-            cpu_hz: None,
-            memory_overrides: HashMap::new(),
-            external_devices: Vec::new(),
-            cosim_models: Vec::new(),
-            motor_models: Vec::new(),
-            board_io: Vec::new(),
-            debug_uart: None,
-            wifi_ap: None,
-            peripherals: Vec::new(),
-        };
-
+        let manifest = manifest_for("test-chip-gpio-v2");
         let mut bus = crate::bus::SystemBus::from_config(&chip, &manifest).unwrap();
         let base = 0x4001_0800;
 
@@ -836,66 +859,15 @@ pub mod integration_tests {
 
     #[test]
     fn test_from_config_uart_profile_stm32v2() {
-        let mut uart_config = HashMap::new();
-        uart_config.insert(
-            "profile".to_string(),
-            serde_yaml::Value::String("stm32v2".to_string()),
+        let chip = chip_with_peripheral(
+            "test-chip-uart-v2",
+            "uart3",
+            "uart",
+            0x4000_4800,
+            "profile",
+            "stm32v2",
         );
-
-        let chip = ChipDescriptor {
-            schema_version: "1.0".to_string(),
-            name: "test-chip-uart-v2".to_string(),
-            cpu_hz: 0,
-            arch: Arch::Arm,
-            core: None,
-            flash: MemoryRange {
-                base: 0x0,
-                size: 125 * 1024,
-            },
-            ram: MemoryRange {
-                base: 0x2000_0000,
-                size: 20000,
-            },
-            reset_vector_offset: 0,
-            flash_boot_alias: true,
-            atomic_register_aliases: labwired_config::AtomicAliasFlavour::None,
-            ns_alias_offset: None,
-            memory_regions: Vec::new(),
-            peripherals: vec![PeripheralConfig {
-                id: "uart3".to_string(),
-                r#type: "uart".to_string(),
-                base_address: 0x4000_4800,
-                size: None,
-                irq: None,
-                irq_controller: None,
-                clock: None,
-                config: uart_config,
-            }],
-            pins: Default::default(),
-            analog_pins: Default::default(),
-            io_voltage_v: None,
-            gpio_input_thresholds: None,
-            supply_monitor: None,
-            include: None,
-        };
-
-        let manifest = SystemManifest {
-            parts: Vec::new(),
-            walk_deleted: Some(false),
-            schema_version: "1.0".to_string(),
-            name: "test-system-uart-v2".to_string(),
-            chip: "test-chip-uart-v2".to_string(),
-            cpu_hz: None,
-            memory_overrides: HashMap::new(),
-            external_devices: Vec::new(),
-            cosim_models: Vec::new(),
-            motor_models: Vec::new(),
-            board_io: Vec::new(),
-            debug_uart: None,
-            wifi_ap: None,
-            peripherals: Vec::new(),
-        };
-
+        let manifest = manifest_for("test-chip-uart-v2");
         let mut bus = crate::bus::SystemBus::from_config(&chip, &manifest).unwrap();
         let sink = Arc::new(Mutex::new(Vec::new()));
         bus.attach_uart_tx_sink(sink.clone(), false);
@@ -1077,66 +1049,15 @@ pub mod integration_tests {
 
     #[test]
     fn test_from_config_rcc_profile_stm32v2() {
-        let mut rcc_config = HashMap::new();
-        rcc_config.insert(
-            "profile".to_string(),
-            serde_yaml::Value::String("stm32v2".to_string()),
+        let chip = chip_with_peripheral(
+            "test-chip-rcc-v2",
+            "rcc",
+            "rcc",
+            0x4402_0C00,
+            "profile",
+            "stm32v2",
         );
-
-        let chip = ChipDescriptor {
-            schema_version: "1.0".to_string(),
-            name: "test-chip-rcc-v2".to_string(),
-            cpu_hz: 0,
-            arch: Arch::Arm,
-            core: None,
-            flash: MemoryRange {
-                base: 0x0,
-                size: 125 * 1024,
-            },
-            ram: MemoryRange {
-                base: 0x2000_0000,
-                size: 20000,
-            },
-            reset_vector_offset: 0,
-            flash_boot_alias: true,
-            atomic_register_aliases: labwired_config::AtomicAliasFlavour::None,
-            ns_alias_offset: None,
-            memory_regions: Vec::new(),
-            peripherals: vec![PeripheralConfig {
-                id: "rcc".to_string(),
-                r#type: "rcc".to_string(),
-                base_address: 0x4402_0C00,
-                size: None,
-                irq: None,
-                irq_controller: None,
-                clock: None,
-                config: rcc_config,
-            }],
-            pins: Default::default(),
-            analog_pins: Default::default(),
-            io_voltage_v: None,
-            gpio_input_thresholds: None,
-            supply_monitor: None,
-            include: None,
-        };
-
-        let manifest = SystemManifest {
-            parts: Vec::new(),
-            walk_deleted: Some(false),
-            schema_version: "1.0".to_string(),
-            name: "test-system-rcc-v2".to_string(),
-            chip: "test-chip-rcc-v2".to_string(),
-            cpu_hz: None,
-            memory_overrides: HashMap::new(),
-            external_devices: Vec::new(),
-            cosim_models: Vec::new(),
-            motor_models: Vec::new(),
-            board_io: Vec::new(),
-            debug_uart: None,
-            wifi_ap: None,
-            peripherals: Vec::new(),
-        };
-
+        let manifest = manifest_for("test-chip-rcc-v2");
         let mut bus = crate::bus::SystemBus::from_config(&chip, &manifest).unwrap();
         let base = 0x4402_0C00;
 
@@ -1152,66 +1073,15 @@ pub mod integration_tests {
 
     #[test]
     fn test_from_config_rcc_profile_stm32f4() {
-        let mut rcc_config = HashMap::new();
-        rcc_config.insert(
-            "profile".to_string(),
-            serde_yaml::Value::String("stm32f4".to_string()),
+        let chip = chip_with_peripheral(
+            "test-chip-rcc-f4",
+            "rcc",
+            "rcc",
+            0x4002_3800,
+            "profile",
+            "stm32f4",
         );
-
-        let chip = ChipDescriptor {
-            schema_version: "1.0".to_string(),
-            name: "test-chip-rcc-f4".to_string(),
-            cpu_hz: 0,
-            arch: Arch::Arm,
-            core: None,
-            flash: MemoryRange {
-                base: 0x0,
-                size: 125 * 1024,
-            },
-            ram: MemoryRange {
-                base: 0x2000_0000,
-                size: 20000,
-            },
-            reset_vector_offset: 0,
-            flash_boot_alias: true,
-            atomic_register_aliases: labwired_config::AtomicAliasFlavour::None,
-            ns_alias_offset: None,
-            memory_regions: Vec::new(),
-            peripherals: vec![PeripheralConfig {
-                id: "rcc".to_string(),
-                r#type: "rcc".to_string(),
-                base_address: 0x4002_3800,
-                size: None,
-                irq: None,
-                irq_controller: None,
-                clock: None,
-                config: rcc_config,
-            }],
-            pins: Default::default(),
-            analog_pins: Default::default(),
-            io_voltage_v: None,
-            gpio_input_thresholds: None,
-            supply_monitor: None,
-            include: None,
-        };
-
-        let manifest = SystemManifest {
-            parts: Vec::new(),
-            walk_deleted: Some(false),
-            schema_version: "1.0".to_string(),
-            name: "test-system-rcc-f4".to_string(),
-            chip: "test-chip-rcc-f4".to_string(),
-            cpu_hz: None,
-            memory_overrides: HashMap::new(),
-            external_devices: Vec::new(),
-            cosim_models: Vec::new(),
-            motor_models: Vec::new(),
-            board_io: Vec::new(),
-            debug_uart: None,
-            wifi_ap: None,
-            peripherals: Vec::new(),
-        };
-
+        let manifest = manifest_for("test-chip-rcc-f4");
         let mut bus = crate::bus::SystemBus::from_config(&chip, &manifest).unwrap();
         let base = 0x4002_3800;
 
@@ -1227,66 +1097,15 @@ pub mod integration_tests {
 
     #[test]
     fn test_from_config_profile_register_layout_alias_still_supported() {
-        let mut gpio_config = HashMap::new();
-        gpio_config.insert(
-            "register_layout".to_string(),
-            serde_yaml::Value::String("stm32v2".to_string()),
+        let chip = chip_with_peripheral(
+            "test-chip-gpio-v2-alias",
+            "gpioa",
+            "gpio",
+            0x4001_0800,
+            "register_layout",
+            "stm32v2",
         );
-
-        let chip = ChipDescriptor {
-            schema_version: "1.0".to_string(),
-            name: "test-chip-gpio-v2-alias".to_string(),
-            cpu_hz: 0,
-            arch: Arch::Arm,
-            core: None,
-            flash: MemoryRange {
-                base: 0x0,
-                size: 125 * 1024,
-            },
-            ram: MemoryRange {
-                base: 0x2000_0000,
-                size: 20000,
-            },
-            reset_vector_offset: 0,
-            flash_boot_alias: true,
-            atomic_register_aliases: labwired_config::AtomicAliasFlavour::None,
-            ns_alias_offset: None,
-            memory_regions: Vec::new(),
-            peripherals: vec![PeripheralConfig {
-                id: "gpioa".to_string(),
-                r#type: "gpio".to_string(),
-                base_address: 0x4001_0800,
-                size: None,
-                irq: None,
-                irq_controller: None,
-                clock: None,
-                config: gpio_config,
-            }],
-            pins: Default::default(),
-            analog_pins: Default::default(),
-            io_voltage_v: None,
-            gpio_input_thresholds: None,
-            supply_monitor: None,
-            include: None,
-        };
-
-        let manifest = SystemManifest {
-            parts: Vec::new(),
-            walk_deleted: Some(false),
-            schema_version: "1.0".to_string(),
-            name: "test-system-gpio-v2-alias".to_string(),
-            chip: "test-chip-gpio-v2-alias".to_string(),
-            cpu_hz: None,
-            memory_overrides: HashMap::new(),
-            external_devices: Vec::new(),
-            cosim_models: Vec::new(),
-            motor_models: Vec::new(),
-            board_io: Vec::new(),
-            debug_uart: None,
-            wifi_ap: None,
-            peripherals: Vec::new(),
-        };
-
+        let manifest = manifest_for("test-chip-gpio-v2-alias");
         let mut bus = crate::bus::SystemBus::from_config(&chip, &manifest).unwrap();
         let base = 0x4001_0800;
         bus.write_u32(base + 0x14, 0x0000_0002).unwrap();
