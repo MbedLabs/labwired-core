@@ -123,9 +123,7 @@ macro_rules! scheduler_mode {
     () => {
         #[inline]
         fn scheduler_mode(&self) -> bool {
-            self.clock
-                .as_ref()
-                .is_some_and($crate::cycle_clock::CycleClock::scheduler_enabled)
+            crate::cycle_clock::event_scheduler_enabled() && self.clock.is_some()
         }
     };
 }

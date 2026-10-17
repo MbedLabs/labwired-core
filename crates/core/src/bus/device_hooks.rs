@@ -140,15 +140,19 @@ impl SystemBus {
     #[inline]
     pub(crate) fn reconcile_level_after_read(&self, idx: usize) {
         let p = &self.peripherals[idx];
-        let Some(irq) = p.irq else {
-            return;
-        };
         if !p.dev.reads_can_deassert_irq() {
             return;
         }
-        if p.dev.irq_line_level() == Some(false) {
-            super::reconcile_nvic_level(&self.nvic, irq, false);
+        if let Some(irq) = p.irq {
+            if p.dev.irq_line_level() == Some(false) {
+                super::reconcile_nvic_level(&self.nvic, irq, false);
+            }
         }
+        p.dev.irq_line_levels(&mut |irq, level| {
+            if !level {
+                super::reconcile_nvic_level(&self.nvic, irq, false);
+            }
+        });
     }
 
     /// Drive an external input level on `pin` of the GPIO peripheral at bus

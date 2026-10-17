@@ -930,6 +930,29 @@ fn declares_test_fn(src: &str, name: &str) -> bool {
     attr_blocks(&masked, name)
         .iter()
         .any(|block| block.iter().any(|l| is_test_attr(l)))
+        || declares_macro_generated_test_fn(&masked, name)
+}
+
+/// True when the masked source invokes `survival_gate!(<name>, …)` — the macro
+/// expands to a `#[test] fn <name>`, so the generated test is a real,
+/// cargo-filterable gate even though the literal `fn <name>(` never appears as
+/// text. The first macro argument is the generated function name by
+/// construction, so matching it here cannot admit a name that names no test.
+fn declares_macro_generated_test_fn(masked: &str, name: &str) -> bool {
+    const MACRO: &str = "survival_gate!(";
+    let mut rest = masked;
+    while let Some(pos) = rest.find(MACRO) {
+        let after = rest[pos + MACRO.len()..].trim_start();
+        let ident: String = after
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if ident == name {
+            return true;
+        }
+        rest = after;
+    }
+    false
 }
 
 /// True when `src` declares `fn name(` whose attribute block marks it ignored —
