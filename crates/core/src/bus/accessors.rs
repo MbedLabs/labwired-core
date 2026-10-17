@@ -1467,12 +1467,12 @@ impl crate::Bus for SystemBus {
             if contains(self.ram.base_addr, self.ram.data.len(), address) {
                 return true;
             }
-            !contains(self.flash.base_addr, self.flash.data.len(), address)
-                && !(self.flash_boot_alias && address < self.flash.data.len() as u64)
-                && !self
+            !(contains(self.flash.base_addr, self.flash.data.len(), address)
+                || (self.flash_boot_alias && address < self.flash.data.len() as u64)
+                || self
                     .extra_mem
                     .iter()
-                    .any(|memory| contains(memory.base_addr, memory.data.len(), address))
+                    .any(|memory| contains(memory.base_addr, memory.data.len(), address)))
         })
     }
 

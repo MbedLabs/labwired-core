@@ -221,7 +221,7 @@ impl SamDmacByte {
                             c.control = new;
                         }
                     }
-                    4 | 5 | 6 if requested != 0 => {
+                    4..=6 if requested != 0 => {
                         return Err(SimulationError::NotImplemented(
                             "sam_dmac_byte: commands, priority and events excluded".into(),
                         ));
