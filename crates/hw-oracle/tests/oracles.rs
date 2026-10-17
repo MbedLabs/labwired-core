@@ -929,7 +929,9 @@ fn call4_entry_retw_no_overflow() -> OracleCase {
 /// below is still kept as the canonical hardware spec for the `_hw`
 /// variant; the sim variant (`entry_window_overflow_of4_sim`) was removed
 /// by the test-suite trim — entry-overflow vectoring does not exist on the
-/// sim path, so it could never pass.
+/// sim path, so it could never pass. The spec still backs the `_hw` variant,
+/// so it is gated with it rather than left dangling in default builds.
+#[cfg(feature = "hw-oracle")]
 fn entry_window_overflow_of4_inner_spec() -> OracleCase {
     // Oracle program lays out BREAKs at all three OF vectors (0x000, 0x080,
     // 0x100) so the CPU halts cleanly regardless of which OFx the rotation
