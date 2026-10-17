@@ -192,3 +192,14 @@ This is a UART-local subset grounded in the [nRF5340 DPPI specification](https:/
 General DPPI delivery, cross-instance routes, channel groups and SPU security
 attributes remain outside this model's qualified boundary. nRF52 boards without
 a DPPIC keep ENDTX and explicit STOPTX separate. No silicon result is claimed.
+
+Classic nRF52 PPI uses the same bounded local-stop rule. The factory resolves
+both the controller and UART bases; only an enabled configurable channel whose
+EEP names this UART's ENDTX and whose primary or fork task names this UART's
+STOPTX may stop it. Configurable channels 0–19 follow the [nRF52840 PPI specification](https://docs.nordicsemi.com/r/bundle/ps_nrf52840/page/ppi.html).
+Fixed channels have other event sources and are not treated as arbitrary UART
+routes. General event publication and cross-instance delivery are not added.
+The nRF52840 Zephyr JIT/interpreter comparisons retain their full markers,
+instruction budget, architectural/cycle/memory assertions and event ceiling.
+Failure-only observations report UART/PPI state and rethrow the original panic;
+successful execution performs no extra diagnostic reads.

@@ -170,6 +170,8 @@ pub struct Nrf52Uarte {
     /// Resolved sibling DPPIC base, present only on a chip that declares it.
     /// Only this instance's ENDTX -> STOPTX route is implemented.
     dppic_base: Option<u64>,
+    /// Local classic-PPI stop context: controller base, own ENDTX and STOPTX.
+    ppi_local_stop: Option<(u64, u32, u32)>,
     // ── Dynamic EasyDMA TX state (not part of the register surface) ──────
     /// Set by a STARTTX task write; consumed by the EasyDMA engine
     /// (`do_easydma_tx`). The scheduler wake waits one frame per byte. The
@@ -266,6 +268,23 @@ impl std::fmt::Debug for Nrf52Uarte {
 }
 
 impl Nrf52Uarte {
+    pub fn with_interconnects(
+        own_base: u64,
+        ppi_base: Option<u64>,
+        dppic_base: Option<u64>,
+    ) -> Self {
+        let ppi_local_stop = ppi_base.and_then(|controller| {
+            controller.checked_add(0x95c)?;
+            let event = u32::try_from(own_base.checked_add(OFF_EVENTS_ENDTX)?).ok()?;
+            let task = u32::try_from(own_base.checked_add(OFF_TASKS_STOPTX)?).ok()?;
+            Some((controller, event, task))
+        });
+        Self {
+            ppi_local_stop,
+            ..Self::with_dppic(dppic_base)
+        }
+    }
+
     pub fn with_dppic(dppic_base: Option<u64>) -> Self {
         Self {
             dppic_base,
@@ -907,7 +926,7 @@ impl Nrf52Uarte {
         // A configured DPPI route really requests STOPTX. This is distinct
         // from inventing a stop on every completed nRF52 buffer. Both endpoint
         // enable bits, their matching channel and DPPIC.CHEN must admit it.
-        if self.endtx_stoptx_dppi_enabled(bus) {
+        if self.endtx_stoptx_dppi_enabled(bus) || self.endtx_stoptx_ppi_enabled(bus) {
             self.stop_transmitter();
         }
     }
@@ -916,6 +935,24 @@ impl Nrf52Uarte {
         self.events_txstopped = 1;
         self.legacy_tx_armed = false;
         self.legacy_shift_busy = false;
+    }
+
+    fn endtx_stoptx_ppi_enabled(&self, bus: &dyn Bus) -> bool {
+        let Some((base, event, task)) = self.ppi_local_stop else {
+            return false;
+        };
+        let Ok(enabled) = bus.read_u32(base + 0x500) else {
+            return false;
+        };
+        // nRF52 has 20 configurable PPI channels. Fixed channels 20..31
+        // have no UARTE ENDTX event source, so cannot provide this local route.
+        (0u32..20).any(|channel| {
+            let index = u64::from(channel);
+            enabled & (1 << channel) != 0
+                && bus.read_u32(base + 0x510 + index * 8).ok() == Some(event)
+                && (bus.read_u32(base + 0x514 + index * 8).ok() == Some(task)
+                    || bus.read_u32(base + 0x910 + index * 4).ok() == Some(task))
+        })
     }
 
     fn endtx_stoptx_dppi_enabled(&self, bus: &dyn Bus) -> bool {
@@ -1326,6 +1363,80 @@ mod tests {
             );
             assert_eq!(u.irq_line_level(), Some(want), "INTEN {inten:#x}: line");
         }
+    }
+
+    #[test]
+    fn local_ppi_stop_requires_own_event_and_enabled_primary_or_fork() {
+        use crate::bus::SystemBus;
+        use crate::memory::LinearMemory;
+        use crate::sched::EventScheduler;
+        const PPI: u64 = 0x6000_0000;
+        const UART: u64 = 0x5000_4000;
+        const END: u32 = (UART + OFF_EVENTS_ENDTX) as u32;
+        const STOP: u32 = (UART + OFF_TASKS_STOPTX) as u32;
+        for (name, channel, enabled, event, primary, fork, want) in [
+            ("primary", 0u32, true, END, STOP, 0, true),
+            ("fork", 3, true, END, 0, STOP, true),
+            ("disabled", 0, false, END, STOP, 0, false),
+            ("wrong-event", 0, true, END + 4, STOP, 0, false),
+            ("wrong-primary", 0, true, END, STOP + 4, 0, false),
+            ("wrong-fork", 0, true, END, 0, STOP + 4, false),
+            ("fork-wrong-event", 0, true, END + 4, 0, STOP, false),
+            ("last-configurable", 19, true, END, STOP, 0, true),
+            (
+                "fixed-channel-not-a-uart-event",
+                20,
+                true,
+                END,
+                STOP,
+                0,
+                false,
+            ),
+        ] {
+            for scheduled in [false, true] {
+                let mut bus = SystemBus::empty();
+                bus.ram = LinearMemory::new(4096, PPI);
+                let index = u64::from(channel);
+                bus.write_u32(PPI + 0x500, if enabled { 1 << channel } else { 0 })
+                    .unwrap();
+                bus.write_u32(PPI + 0x510 + index * 8, event).unwrap();
+                bus.write_u32(PPI + 0x514 + index * 8, primary).unwrap();
+                bus.write_u32(PPI + 0x910 + index * 4, fork).unwrap();
+                bus.write_u8(PPI + 0x100, b'P').unwrap();
+                let mut u = Nrf52Uarte::with_interconnects(UART, Some(PPI), None);
+                let sink = Arc::new(Mutex::new(Vec::new()));
+                u.set_sink(Some(sink.clone()), false);
+                u.write_u32(OFF_ENABLE, ENABLE_UARTE).unwrap();
+                u.write_u32(OFF_INTENSET, 1 << 22).unwrap();
+                u.write_u32(OFF_TXD_PTR, (PPI + 0x100) as u32).unwrap();
+                u.write_u32(OFF_TXD_MAXCNT, 1).unwrap();
+                u.write_u32(OFF_TASKS_STARTTX, 1).unwrap();
+                if scheduled {
+                    let wakes = u.take_scheduled_events();
+                    assert_eq!(wakes, vec![(0, 4), (u.frame_cycles(), 1)]);
+                    u.on_event(4, &mut EventScheduler::new(), &mut bus);
+                    assert!(sink.lock().unwrap().is_empty());
+                    assert_eq!(u.read_u32(OFF_EVENTS_TXSTOPPED).unwrap(), 0);
+                    u.on_event(1, &mut EventScheduler::new(), &mut bus);
+                } else {
+                    u.tick_with_bus(&mut bus);
+                }
+                assert_eq!(&*sink.lock().unwrap(), b"P");
+                assert_eq!(u.read_u32(OFF_EVENTS_ENDTX).unwrap(), 1);
+                assert_eq!(
+                    u.read_u32(OFF_EVENTS_TXSTOPPED).unwrap(),
+                    u32::from(want),
+                    "{name}, scheduler={scheduled}"
+                );
+                assert_eq!(u.irq_line_level(), Some(want));
+            }
+        }
+        assert!(Nrf52Uarte::with_interconnects(UART, None, None)
+            .ppi_local_stop
+            .is_none());
+        assert!(Nrf52Uarte::with_interconnects(u64::MAX, Some(PPI), None)
+            .ppi_local_stop
+            .is_none());
     }
 
     #[test]
