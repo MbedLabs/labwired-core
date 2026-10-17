@@ -5939,3 +5939,53 @@ fn uds_tester_waits_the_step_delay_before_sending() {
     assert_eq!(bus.can_uds_testers[0].state, CanUdsTesterState::AwaitResp);
     assert_eq!(bus.can_uds_testers[0].transcript[1].request_cycle, 120);
 }
+
+#[test]
+fn cpu_store_to_fault_flash_faults_and_records() {
+    let mut bus = SystemBus::new();
+    bus.flash = LinearMemory::new_erased(64 * 1024, 0x0800_0000);
+    bus.ram = LinearMemory::new(16 * 1024, 0x2000_0000);
+    bus.memory_policy.flash = crate::bus::CpuWritePolicy::Fault;
+    bus.memory_policy.note_pc(0x0800_006C);
+    let err = bus.write_u8(0x0800_1000, 0xAB).unwrap_err();
+    assert!(matches!(
+        err,
+        crate::SimulationError::MemoryViolation(0x0800_1000)
+    ));
+    assert_eq!(bus.memory_policy.violations_flash, 1);
+    // The byte was NOT committed (flash is erased-filled 0xFF).
+    assert_eq!(bus.flash.read_u8(0x0800_1000), Some(0xFF));
+    // Both wider widths gate too.
+    assert!(bus.write_u16(0x0800_1002, 0x1234).is_err());
+    assert!(bus.write_u32(0x0800_1004, 0x1234_5678).is_err());
+}
+
+#[test]
+fn cpu_store_to_warn_flash_commits_and_records() {
+    let mut bus = SystemBus::new();
+    bus.flash = LinearMemory::new_erased(64 * 1024, 0x0800_0000);
+    bus.ram = LinearMemory::new(16 * 1024, 0x2000_0000);
+    bus.memory_policy.flash = crate::bus::CpuWritePolicy::Warn;
+    bus.write_u8(0x0800_1000, 0xAB).unwrap();
+    assert_eq!(bus.flash.read_u8(0x0800_1000), Some(0xAB));
+    assert_eq!(bus.memory_policy.violations_flash, 1);
+}
+
+#[test]
+fn default_policy_remains_byte_identical() {
+    let mut bus = SystemBus::new();
+    bus.flash = LinearMemory::new_erased(64 * 1024, 0x0800_0000);
+    bus.ram = LinearMemory::new(16 * 1024, 0x2000_0000);
+    bus.write_u8(0x0800_1000, 0xAB).unwrap();
+    assert!(bus.memory_policy.report().is_none());
+}
+
+#[test]
+fn host_writes_bypass_the_policy() {
+    let mut bus = SystemBus::new();
+    bus.flash = LinearMemory::new_erased(64 * 1024, 0x0800_0000);
+    bus.ram = LinearMemory::new(16 * 1024, 0x2000_0000);
+    bus.memory_policy.flash = crate::bus::CpuWritePolicy::Fault;
+    bus.flash.write_u8(0x0800_1000, 0xAB); // loader path — direct LinearMemory
+    assert_eq!(bus.flash.read_u8(0x0800_1000), Some(0xAB));
+}
