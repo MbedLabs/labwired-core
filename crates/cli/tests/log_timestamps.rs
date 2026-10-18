@@ -79,11 +79,40 @@ fn run(mode: Option<&str>, log: Option<&str>) -> (std::process::Output, serde_js
         )
     });
     let result: serde_json::Value = serde_json::from_str(&result_json).expect("parse result.json");
+    // Scratch dir removed only after result.json has been read and parsed. A
+    // failed run panics above and intentionally leaves the dir in place so its
+    // stderr and leftover artifacts stay readable for diagnosis; the returned
+    // `Output` keeps its captured stderr either way.
+    let _ = std::fs::remove_dir_all(&dir);
     (out, result)
 }
 
 fn ts_lines(stderr: &str) -> Vec<&str> {
     stderr.lines().filter(|l| l.starts_with("[t=")).collect()
+}
+
+/// The verdict banner embeds the run's wall duration (`{:.2}s`), which is
+/// explicitly NOT stable under load (0.00s–0.02s observed). Mask exactly that
+/// trailing `\d+\.\d{2}s` token so the rest of the line — virtual prefix,
+/// counts, subject, steps — is still compared byte-for-byte.
+fn normalize_banner_duration(line: &str) -> String {
+    match line.rsplit_once(' ') {
+        Some((head, token)) if is_centisecond_duration(token) => format!("{head} <DUR>s"),
+        _ => line.to_string(),
+    }
+}
+
+fn is_centisecond_duration(token: &str) -> bool {
+    let Some(secs) = token.strip_suffix('s') else {
+        return false;
+    };
+    let Some((int_part, frac)) = secs.split_once('.') else {
+        return false;
+    };
+    !int_part.is_empty()
+        && int_part.bytes().all(|b| b.is_ascii_digit())
+        && frac.len() == 2
+        && frac.bytes().all(|b| b.is_ascii_digit())
 }
 
 #[test]
@@ -133,10 +162,14 @@ fn virtual_prefixes_are_stable_across_runs() {
         la.iter().all(|l| l.starts_with("[t=virt=")),
         "every `[t=` line must start with the virtual prefix; lines: {la:?}"
     );
+    let normalized = |lines: &[&str]| -> Vec<String> {
+        lines.iter().map(|l| normalize_banner_duration(l)).collect()
+    };
     assert_eq!(
-        la, lb,
-        "virtual event lines must be byte-identical across runs; \
-         run A: {la:?}\nrun B: {lb:?}"
+        normalized(&la),
+        normalized(&lb),
+        "virtual event lines must be byte-identical across runs (banner wall \
+         duration masked); run A: {la:?}\nrun B: {lb:?}"
     );
 
     // Pin the formatter wiring, not just the `eventln!` macro: an INFO tracing
@@ -239,9 +272,10 @@ fn run_command_prefixes_too() {
     assert!(
         lines.iter().any(|l| {
             l.strip_prefix("[t=virt=")
-                .and_then(|rest| rest.split('s').next())
+                .and_then(|rest| rest.split(']').next())
+                .and_then(|ts| ts.strip_suffix('s'))
                 .and_then(|n| n.parse::<f64>().ok())
-                .is_some_and(|ns| ns > 0.0)
+                .is_some_and(|secs| secs > 0.0)
         }),
         "at least one run event line must carry a NON-ZERO virtual time \
          (cycles have advanced by the final `[batched]` line); lines: {lines:?}"

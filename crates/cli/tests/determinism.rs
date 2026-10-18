@@ -12,10 +12,14 @@ fn get_labwired_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_labwired"))
 }
 
+fn sha256_bytes(b: &[u8]) -> String {
+    let hash = Sha256::digest(b);
+    format!("{:x}", hash)
+}
+
 fn sha256_file(path: &std::path::Path) -> String {
     let data = std::fs::read(path).unwrap_or_else(|e| panic!("Failed to read {:?}: {}", path, e));
-    let hash = Sha256::digest(&data);
-    format!("{:x}", hash)
+    sha256_bytes(&data)
 }
 
 #[test]
@@ -56,21 +60,28 @@ assertions: []
     let script_path = temp_dir.join("script.yaml");
     std::fs::write(&script_path, script_content).unwrap();
 
-    let mut results: Vec<serde_json::Value> = Vec::new();
-    let mut trace_hashes: Vec<String> = Vec::new();
-
-    for i in 0..runs {
-        let output_dir = temp_dir.join(format!("run_{}", i));
-        let output = Command::new(get_labwired_bin())
+    // One run of the same script; `extra` carries the phase-specific flags.
+    let run_once = |output_dir: &std::path::Path, extra: &[&str]| -> std::process::Output {
+        Command::new(get_labwired_bin())
             .arg("test")
             .arg("--script")
             .arg(&script_path)
             .arg("--output-dir")
-            .arg(&output_dir)
+            .arg(output_dir)
             .arg("--trace")
             .arg("--no-uart-stdout")
+            .args(extra)
             .output()
-            .expect("Failed to run labwired");
+            .expect("Failed to run labwired")
+    };
+
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    let mut trace_hashes: Vec<String> = Vec::new();
+    let mut stdout_hashes: Vec<String> = Vec::new();
+
+    for i in 0..runs {
+        let output_dir = temp_dir.join(format!("run_{}", i));
+        let output = run_once(&output_dir, &[]);
 
         let result_json_path = output_dir.join("result.json");
         if !result_json_path.exists() {
@@ -100,6 +111,8 @@ assertions: []
         } else {
             panic!("Run {} failed to produce trace.json (--trace was set)", i);
         }
+
+        stdout_hashes.push(sha256_bytes(&output.stdout));
     }
 
     // Compare result.json across all runs
@@ -114,6 +127,17 @@ assertions: []
         assert_eq!(
             first_hash, hash,
             "Run {} trace.json hash differs from Run 0 (non-deterministic instruction trace)",
+            i
+        );
+    }
+
+    // Compare stdout hashes across all runs: stdout must be byte-identical
+    // run to run (it carries UART echo when enabled and any agent payload).
+    let first_stdout_hash = &stdout_hashes[0];
+    for (i, hash) in stdout_hashes.iter().enumerate().skip(1) {
+        assert_eq!(
+            first_stdout_hash, hash,
+            "Run {} stdout differs from Run 0; stdout must be byte-identical across runs",
             i
         );
     }
@@ -139,4 +163,59 @@ assertions: []
         "firmware_hash should be a 64-char hex SHA-256, got: {firmware_hash:?}"
     );
     eprintln!("[determinism] steps_executed={steps}, firmware_hash={firmware_hash}");
+
+    // ── Phase 2: `--log-timestamps virtual` ────────────────────────────────
+    //
+    // The flag prefixes human-readable stderr lines only: the instruction
+    // trace must stay deterministic under it, and stdout must not move at all
+    // (the prefixes go to stderr). Three runs are enough to catch a per-run
+    // clock or ordering leak.
+    let virtual_runs = 3;
+    let mut virtual_trace_hashes: Vec<String> = Vec::new();
+    let mut virtual_stdout_hashes: Vec<String> = Vec::new();
+    for i in 0..virtual_runs {
+        let output_dir = temp_dir.join(format!("virtual_{}", i));
+        let output = run_once(&output_dir, &["--log-timestamps", "virtual"]);
+        assert!(
+            output.status.success(),
+            "Virtual run {} failed. Exit: {:?}\nStdout: {}\nStderr: {}",
+            i,
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let trace_json_path = output_dir.join("trace.json");
+        if !trace_json_path.exists() {
+            panic!(
+                "Virtual run {} failed to produce trace.json (--trace was set)",
+                i
+            );
+        }
+        virtual_trace_hashes.push(sha256_file(&trace_json_path));
+        virtual_stdout_hashes.push(sha256_bytes(&output.stdout));
+    }
+
+    let first_virtual_trace_hash = &virtual_trace_hashes[0];
+    for (i, hash) in virtual_trace_hashes.iter().enumerate().skip(1) {
+        assert_eq!(
+            first_virtual_trace_hash, hash,
+            "Virtual run {} trace.json hash differs from Virtual Run 0 (non-deterministic instruction trace)",
+            i
+        );
+    }
+
+    let first_virtual_stdout_hash = &virtual_stdout_hashes[0];
+    for (i, hash) in virtual_stdout_hashes.iter().enumerate().skip(1) {
+        assert_eq!(
+            first_virtual_stdout_hash, hash,
+            "Virtual run {} stdout differs from Virtual Run 0; stdout must be byte-identical across runs",
+            i
+        );
+    }
+
+    assert_eq!(
+        first_stdout_hash, first_virtual_stdout_hash,
+        "`--log-timestamps virtual` must not move stdout: the `[t=...]` prefixes go to stderr only"
+    );
 }
