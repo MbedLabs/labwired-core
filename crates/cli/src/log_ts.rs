@@ -116,7 +116,6 @@ pub(crate) fn init(mode: LogTimestamps) {
 }
 
 /// The machine's declared core clock; call after the machine is built.
-#[allow(dead_code)] // TODO(A2 Task 3-6): called after the machine is built
 pub(crate) fn set_hz(hz: u64) {
     if let Some(ctx) = CONTEXT.get() {
         ctx.hz.store(hz, Ordering::Relaxed);
@@ -127,7 +126,6 @@ pub(crate) fn set_hz(hz: u64) {
 /// once per loop iteration (not per printed line) — the probe pays nothing
 /// when the context is absent or the mode is `None`.
 #[inline]
-#[allow(dead_code)] // TODO(A2 Task 3-6): called once per run-loop iteration
 pub(crate) fn refresh_cycles(cycles: u64) {
     if let Some(ctx) = CONTEXT.get() {
         if ctx.mode != LogTimestamps::None {
