@@ -160,6 +160,12 @@ pub fn prefix() -> String {
 /// `tracing-subscriber` event formatter that prepends the `[t=…]` prefix,
 /// then delegates to the subscriber's default format. Empty prefix (mode
 /// `none`, or any non-run/test command) leaves existing output byte-identical.
+///
+/// With a prefix active the delegated format runs `without_time()`: the
+/// `[t=…]` header IS the timestamp, and the default format's own RFC 3339
+/// wall-clock stamp would otherwise sit inside the `virtual` stream and make
+/// two runs of the same firmware differ byte-for-byte. `none` keeps the
+/// default stamp, exactly as before the flag existed.
 pub struct LogTsFormat;
 
 impl<S, N> tracing_subscriber::fmt::FormatEvent<S, N> for LogTsFormat
@@ -174,10 +180,14 @@ where
         event: &tracing::Event<'_>,
     ) -> std::fmt::Result {
         let prefix = prefix();
-        if !prefix.is_empty() {
-            write!(writer, "{prefix}")?;
+        if prefix.is_empty() {
+            return tracing_subscriber::fmt::format::Format::default()
+                .format_event(ctx, writer, event);
         }
-        tracing_subscriber::fmt::format::Format::default().format_event(ctx, writer, event)
+        write!(writer, "{prefix}")?;
+        tracing_subscriber::fmt::format::Format::default()
+            .without_time()
+            .format_event(ctx, writer, event)
     }
 }
 
