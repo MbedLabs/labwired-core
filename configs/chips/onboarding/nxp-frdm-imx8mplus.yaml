@@ -142,27 +142,33 @@ peripherals:
   bus: sysbus
   base_address: 817823744
 - id: i2c1
-  type: nxp_imx_i2c
+  type: stub
+  renode_type: nxp_imx_i2c
   bus: sysbus
   base_address: 815923200
 - id: i2c2
-  type: nxp_imx_i2c
+  type: stub
+  renode_type: nxp_imx_i2c
   bus: sysbus
   base_address: 815988736
 - id: i2c3
-  type: nxp_imx_i2c
+  type: stub
+  renode_type: nxp_imx_i2c
   bus: sysbus
   base_address: 816054272
 - id: i2c4
-  type: nxp_imx_i2c
+  type: stub
+  renode_type: nxp_imx_i2c
   bus: sysbus
   base_address: 816119808
 - id: i2c5
-  type: nxp_imx_i2c
+  type: stub
+  renode_type: nxp_imx_i2c
   bus: sysbus
   base_address: 816644096
 - id: i2c6
-  type: nxp_imx_i2c
+  type: stub
+  renode_type: nxp_imx_i2c
   bus: sysbus
   base_address: 816709632
 - id: apis1_gpc
@@ -170,15 +176,18 @@ peripherals:
   bus: sysbus
   base_address: 809107456
 - id: ecspi1
-  type: nxp_ecspi
+  type: stub
+  renode_type: nxp_ecspi
   bus: sysbus
   base_address: 813826048
 - id: ecspi2
-  type: nxp_ecspi
+  type: stub
+  renode_type: nxp_ecspi
   bus: sysbus
   base_address: 813891584
 - id: ecspi3
-  type: nxp_ecspi
+  type: stub
+  renode_type: nxp_ecspi
   bus: sysbus
   base_address: 813957120
 provenance:

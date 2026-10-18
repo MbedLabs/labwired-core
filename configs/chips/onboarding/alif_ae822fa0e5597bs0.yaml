@@ -78,19 +78,23 @@ peripherals:
   bus: sysbus
   base_address: 1107304448
 - id: i2c0
-  type: designware_apb_i2c
+  type: stub
+  renode_type: designware_apb_i2c
   bus: sysbus
   base_address: 1224802304
 - id: i2c1
-  type: designware_apb_i2c
+  type: stub
+  renode_type: designware_apb_i2c
   bus: sysbus
   base_address: 1224806400
 - id: i2c2
-  type: designware_apb_i2c
+  type: stub
+  renode_type: designware_apb_i2c
   bus: sysbus
   base_address: 1224810496
 - id: i2c3
-  type: designware_apb_i2c
+  type: stub
+  renode_type: designware_apb_i2c
   bus: sysbus
   base_address: 1224814592
 - id: uart0
@@ -126,7 +130,8 @@ peripherals:
   bus: sysbus
   base_address: 1224863744
 - id: fdcan
-  type: cast_canctrl
+  type: stub
+  renode_type: cast_canctrl
   bus: sysbus
   base_address: 1224957952
 - id: dwt

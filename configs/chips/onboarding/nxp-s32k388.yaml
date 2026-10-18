@@ -94,31 +94,38 @@ peripherals:
   bus: sysbus
   base_address: 1077231616
 - id: lpspi0
-  type: imxrt_lpspi
+  type: stub
+  renode_type: imxrt_lpspi
   bus: sysbus
   base_address: 1077248000
 - id: lpspi1
-  type: imxrt_lpspi
+  type: stub
+  renode_type: imxrt_lpspi
   bus: sysbus
   base_address: 1077264384
 - id: lpspi2
-  type: imxrt_lpspi
+  type: stub
+  renode_type: imxrt_lpspi
   bus: sysbus
   base_address: 1077280768
 - id: lpspi3
-  type: imxrt_lpspi
+  type: stub
+  renode_type: imxrt_lpspi
   bus: sysbus
   base_address: 1077297152
 - id: lpspi4
-  type: imxrt_lpspi
+  type: stub
+  renode_type: imxrt_lpspi
   bus: sysbus
   base_address: 1078706176
 - id: lpspi5
-  type: imxrt_lpspi
+  type: stub
+  renode_type: imxrt_lpspi
   bus: sysbus
   base_address: 1078722560
 - id: flex_io
-  type: s32k3xx_flexio
+  type: stub
+  renode_type: s32k3xx_flexio
   bus: sysbus
   base_address: 1077035008
 - id: lpuart0
@@ -218,11 +225,13 @@ peripherals:
   bus: sysbus
   base_address: 1077018624
 - id: gmac0
-  type: s32k3xx_gmac
+  type: stub
+  renode_type: s32k3xx_gmac
   bus: sysbus
   base_address: 1078476800
 - id: gmac1
-  type: s32k3xx_gmac
+  type: stub
+  renode_type: s32k3xx_gmac
   bus: sysbus
   base_address: 1078493184
 - id: dma
@@ -246,27 +255,33 @@ peripherals:
   bus: sysbus
   base_address: 1076379648
 - id: xrdc
-  type: nxp_xrdc
+  type: stub
+  renode_type: nxp_xrdc
   bus: sysbus
   base_address: 1076330496
 - id: emios0
-  type: s32k3xx_emios
+  type: stub
+  renode_type: s32k3xx_emios
   bus: sysbus
   base_address: 1074298880
 - id: emios1
-  type: s32k3xx_emios
+  type: stub
+  renode_type: s32k3xx_emios
   bus: sysbus
   base_address: 1074315264
 - id: emios2
-  type: s32k3xx_emios
+  type: stub
+  renode_type: s32k3xx_emios
   bus: sysbus
   base_address: 1074331648
 - id: mc_cgm
-  type: s32k3xx_mc_cgm
+  type: stub
+  renode_type: s32k3xx_mc_cgm
   bus: sysbus
   base_address: 1076723712
 - id: plldig
-  type: s32k3xx_plldig
+  type: stub
+  renode_type: s32k3xx_plldig
   bus: sysbus
   base_address: 1076756480
 provenance:

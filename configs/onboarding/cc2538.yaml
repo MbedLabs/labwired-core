@@ -1,10 +1,15 @@
+# LabWired - Firmware Simulation Platform
+# Copyright (C) 2026 Andrii Shylenko
+#
+# This software is released under the MIT License.
+# See the LICENSE file in the project root for full license information.
+
 name: cc2538
-description: 'TI CC2538 Wireless MCU for IEEE 802.15.4 / Zigbee. Architecture: ARM
-  Cortex-M3.'
+description: 'TI CC2538 Wireless MCU for IEEE 802.15.4 / Zigbee. Architecture: ARM Cortex-M3.'
 url: https://www.ti.com/product/CC2538
 family: Texas Instruments CC
-code_example: "/* LabWired Hardware Initialization */\nint main(void) {\n    // Initialize\
-  \ hardware...\n    while(1) {\n        // Idle loop\n    }\n    return 0;\n}"
+code_example: "/* LabWired Hardware Initialization */\nint main(void) {\n    // Initialize hardware...\n\
+  \    while(1) {\n        // Idle loop\n    }\n    return 0;\n}"
 pass_rate: 100
 verified: true
 system: systems/onboarding/cc2538.yaml

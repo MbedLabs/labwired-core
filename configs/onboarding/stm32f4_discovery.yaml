@@ -1,20 +1,24 @@
+# LabWired - Firmware Simulation Platform
+# Copyright (C) 2026 Andrii Shylenko
+#
+# This software is released under the MIT License.
+# See the LICENSE file in the project root for full license information.
+
 name: stm32f4_discovery
-description: 'STMicroelectronics STM32F407G-DISC1 reference evaluation board. Architecture:
-  ARMv7E-M.'
+description: 'STMicroelectronics STM32F407G-DISC1 reference evaluation board. Architecture: ARMv7E-M.'
 family: STM32F4
 url: https://www.st.com/en/evaluation-tools/stm32f407g-disc1.html
-code_example: "/* Zephyr Blinky for STM32 */\n#include <zephyr/kernel.h>\n#include\
-  \ <zephyr/drivers/gpio.h>\n\nvoid main(void) {\n    const struct gpio_dt_spec led\
-  \ = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);\n    gpio_pin_configure_dt(&led, GPIO_OUTPUT_ACTIVE);\n\
-  \    while (1) {\n        gpio_pin_toggle_dt(&led);\n        k_msleep(500);\n  \
-  \  }\n}"
+code_example: "/* Zephyr Blinky for STM32 */\n#include <zephyr/kernel.h>\n#include <zephyr/drivers/gpio.h>\n\
+  \nvoid main(void) {\n    const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);\n\
+  \    gpio_pin_configure_dt(&led, GPIO_OUTPUT_ACTIVE);\n    while (1) {\n        gpio_pin_toggle_dt(&led);\n\
+  \        k_msleep(500);\n    }\n}"
 pass_rate: 67
 verified: false
 system: systems/onboarding/stm32f4_discovery.yaml
 validation:
   method: ci-arm-fixture-simulation
-  reason: "\e[2m2026-10-18T00:53:39.629136Z\e[0m \e[31mERROR\e[0m \e[2mlabwired_cli\e\
-    [0m\e[2m:\e[0m unknown peripheral type 'stm32_rng' for"
+  reason: "\e[2m2026-10-18T00:53:39.629136Z\e[0m \e[31mERROR\e[0m \e[2mlabwired_cli\e[0m\e[2m:\e[0m unknown\
+    \ peripheral type 'stm32_rng' for"
   checks:
     system_manifest: true
     chip_descriptor: true

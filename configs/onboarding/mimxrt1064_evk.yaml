@@ -1,17 +1,23 @@
+# LabWired - Firmware Simulation Platform
+# Copyright (C) 2026 Andrii Shylenko
+#
+# This software is released under the MIT License.
+# See the LICENSE file in the project root for full license information.
+
 name: mimxrt1064_evk
-description: 'NXP MIMXRT1064-EVK official development board for the i.MX RT1064 Crossover
-  MCU. Architecture: ARMv7E-M.'
+description: 'NXP MIMXRT1064-EVK official development board for the i.MX RT1064 Crossover MCU. Architecture:
+  ARMv7E-M.'
 family: NXP i.MX RT
 url: https://www.nxp.com/design/development-boards/i-mx-evaluation-and-development-boards/i-mx-rt1064-evaluation-kit:MIMXRT1064-EVK
-code_example: "/* LabWired Hardware Initialization */\nint main(void) {\n    // Initialize\
-  \ hardware...\n    while(1) {\n        // Idle loop\n    }\n    return 0;\n}"
+code_example: "/* LabWired Hardware Initialization */\nint main(void) {\n    // Initialize hardware...\n\
+  \    while(1) {\n        // Idle loop\n    }\n    return 0;\n}"
 pass_rate: 67
 verified: false
 system: systems/onboarding/mimxrt1064_evk.yaml
 validation:
   method: ci-arm-fixture-simulation
-  reason: "\e[2m2026-10-18T00:53:15.610853Z\e[0m \e[31mERROR\e[0m \e[2mlabwired_cli\e\
-    [0m\e[2m:\e[0m Peripheral 'lpspi1' (type 'imxrt_lpspi'"
+  reason: "\e[2m2026-10-18T00:53:15.610853Z\e[0m \e[31mERROR\e[0m \e[2mlabwired_cli\e[0m\e[2m:\e[0m Peripheral\
+    \ 'lpspi1' (type 'imxrt_lpspi'"
   checks:
     system_manifest: true
     chip_descriptor: true

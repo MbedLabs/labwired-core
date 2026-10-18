@@ -1,12 +1,17 @@
+# LabWired - Firmware Simulation Platform
+# Copyright (C) 2026 Andrii Shylenko
+#
+# This software is released under the MIT License.
+# See the LICENSE file in the project root for full license information.
+
 name: nrf52840dk_nrf52840
 description: 'Nordic Semiconductor nRF52840 Development Kit. Architecture: ARM Cortex-M4F.'
 family: Nordic nRF52
 url: https://www.nordicsemi.com/Products/Development-hardware/nrf52840-dk
-code_example: "/* Zephyr Blinky for nRF52 */\n#include <zephyr/kernel.h>\n#include\
-  \ <zephyr/drivers/gpio.h>\n\nvoid main(void) {\n    const struct gpio_dt_spec led\
-  \ = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);\n    gpio_pin_configure_dt(&led, GPIO_OUTPUT_ACTIVE);\n\
-  \    while (1) {\n        gpio_pin_toggle_dt(&led);\n        k_msleep(1000);\n \
-  \   }\n}"
+code_example: "/* Zephyr Blinky for nRF52 */\n#include <zephyr/kernel.h>\n#include <zephyr/drivers/gpio.h>\n\
+  \nvoid main(void) {\n    const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);\n\
+  \    gpio_pin_configure_dt(&led, GPIO_OUTPUT_ACTIVE);\n    while (1) {\n        gpio_pin_toggle_dt(&led);\n\
+  \        k_msleep(1000);\n    }\n}"
 pass_rate: 100
 verified: true
 system: systems/onboarding/nrf52840dk_nrf52840.yaml

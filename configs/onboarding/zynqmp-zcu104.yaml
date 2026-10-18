@@ -1,17 +1,23 @@
+# LabWired - Firmware Simulation Platform
+# Copyright (C) 2026 Andrii Shylenko
+#
+# This software is released under the MIT License.
+# See the LICENSE file in the project root for full license information.
+
 name: zynqmp-zcu104
-description: 'AMD Xilinx ZCU104 Evaluation Board emphasizing Video/Vision features
-  on Zynq UltraScale+ MPSoC. Architecture: Quad ARM Cortex-A53.'
+description: 'AMD Xilinx ZCU104 Evaluation Board emphasizing Video/Vision features on Zynq UltraScale+
+  MPSoC. Architecture: Quad ARM Cortex-A53.'
 family: AMD Xilinx Zynq UltraScale+
 url: https://www.xilinx.com/products/boards-and-kits/zcu104.html
-code_example: "/* LabWired Hardware Initialization */\nint main(void) {\n    // Initialize\
-  \ hardware...\n    while(1) {\n        // Idle loop\n    }\n    return 0;\n}"
+code_example: "/* LabWired Hardware Initialization */\nint main(void) {\n    // Initialize hardware...\n\
+  \    while(1) {\n        // Idle loop\n    }\n    return 0;\n}"
 pass_rate: 67
 verified: false
 system: systems/onboarding/zynqmp-zcu104.yaml
 validation:
   method: ci-arm-fixture-simulation
-  reason: "\e[2m2026-10-18T00:54:00.599429Z\e[0m \e[31mERROR\e[0m \e[2mlabwired_cli\e\
-    [0m\e[2m:\e[0m Peripheral 'i2c0' (type 'cadence_i2c') "
+  reason: "\e[2m2026-10-18T00:54:00.599429Z\e[0m \e[31mERROR\e[0m \e[2mlabwired_cli\e[0m\e[2m:\e[0m Peripheral\
+    \ 'i2c0' (type 'cadence_i2c') "
   checks:
     system_manifest: true
     chip_descriptor: true

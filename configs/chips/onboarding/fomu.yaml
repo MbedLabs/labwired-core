@@ -22,7 +22,8 @@ peripherals:
   bus: sysbus
   base_address: 1610631168
 - id: spi
-  type: picorv_spi
+  type: stub
+  renode_type: picorv_spi
   bus: sysbus
   base_address: 1610633216
 provenance:

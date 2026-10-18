@@ -142,19 +142,23 @@ peripherals:
   bus: sysbus
   base_address: 1076510720
 - id: lpspi1
-  type: imxrt_lpspi
+  type: stub
+  renode_type: imxrt_lpspi
   bus: sysbus
   base_address: 1077493760
 - id: lpspi2
-  type: imxrt_lpspi
+  type: stub
+  renode_type: imxrt_lpspi
   bus: sysbus
   base_address: 1077510144
 - id: lpspi3
-  type: imxrt_lpspi
+  type: stub
+  renode_type: imxrt_lpspi
   bus: sysbus
   base_address: 1077526528
 - id: lpspi4
-  type: imxrt_lpspi
+  type: stub
+  renode_type: imxrt_lpspi
   bus: sysbus
   base_address: 1077542912
 - id: adc1

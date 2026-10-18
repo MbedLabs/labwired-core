@@ -1,17 +1,22 @@
+# LabWired - Firmware Simulation Platform
+# Copyright (C) 2026 Andrii Shylenko
+#
+# This software is released under the MIT License.
+# See the LICENSE file in the project root for full license information.
+
 name: sam4s16c
-description: 'Microchip (Atmel) SAM4S16C ARM Cortex-M4 microcontroller with 1MB Flash.
-  Architecture: ARMv7E-M.'
+description: 'Microchip (Atmel) SAM4S16C ARM Cortex-M4 microcontroller with 1MB Flash. Architecture: ARMv7E-M.'
 family: Microchip SAM4S
 url: https://www.microchip.com/en-us/product/ATSAM4S16C
-code_example: "/* LabWired Hardware Initialization */\nint main(void) {\n    // Initialize\
-  \ hardware...\n    while(1) {\n        // Idle loop\n    }\n    return 0;\n}"
+code_example: "/* LabWired Hardware Initialization */\nint main(void) {\n    // Initialize hardware...\n\
+  \    while(1) {\n        // Idle loop\n    }\n    return 0;\n}"
 pass_rate: 67
 verified: false
 system: systems/onboarding/sam4s16c.yaml
 validation:
   method: ci-arm-fixture-simulation
-  reason: "\e[2m2026-10-18T00:53:32.627567Z\e[0m \e[31mERROR\e[0m \e[2mlabwired_cli\e\
-    [0m\e[2m:\e[0m Peripheral 'adc' (type 'sam4s_adc') has"
+  reason: "\e[2m2026-10-18T00:53:32.627567Z\e[0m \e[31mERROR\e[0m \e[2mlabwired_cli\e[0m\e[2m:\e[0m Peripheral\
+    \ 'adc' (type 'sam4s_adc') has"
   checks:
     system_manifest: true
     chip_descriptor: true
