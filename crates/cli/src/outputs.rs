@@ -46,6 +46,8 @@ pub(crate) fn write_outputs<C: labwired_core::Cpu>(
     footprint: Option<artifacts::FootprintReport>,
     memory: Option<labwired_core::stack_paint::MainStackReport>,
     memory_policy: Option<labwired_core::bus::MemoryPolicyReport>,
+    virtual_time_ns: Option<u64>,
+    host_time_ns: Option<u64>,
     metrics_block: Option<artifacts::ExecutionMetrics>,
     can_bridges: Vec<(
         labwired_core::network::can_bridge::CanBridgeReport,
@@ -127,6 +129,8 @@ pub(crate) fn write_outputs<C: labwired_core::Cpu>(
         footprint,
         memory,
         memory_policy,
+        virtual_time_ns,
+        host_time_ns,
         metrics: metrics_block,
         rtt: rtt_status,
         semihosting: semihost_status.clone(),
@@ -511,6 +515,9 @@ pub(crate) fn write_config_error_outputs(
         memory: None,
         // Config error: no machine ran, so no CPU-write policy was exercised.
         memory_policy: None,
+        // Config error: no machine ran, so there are no run-level times either.
+        virtual_time_ns: None,
+        host_time_ns: None,
         metrics: None,
         // Config error: no machine, so no RTT model and no diagnostics.
         rtt: None,

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- `--log-timestamps {none,virtual,real,both}` on `labwired run` and
+  `labwired test` (default `none`): human-readable stderr event/log lines are
+  prefixed `[t=virt=1.500000000s|real=+0.123456789s]` — only the components
+  the selected mode asks for. Virtual time derives from committed
+  cycles and the declared `cpu_hz` and is byte-stable across runs; real time
+  is wall-clock and explicitly not comparable. `result.json` carries
+  `virtual_time_ns` / `host_time_ns` only when the flag requests them, so
+  default artifacts stay byte-identical (locked by the determinism guard,
+  which now hashes stdout too).
 - Read-only memory regions: `cpu_writes: allow|warn|fault` on a chip YAML
   `flash:` / `ram:` region (default `allow`). A CPU store into a `fault`
   region raises the existing precise BusFault and the fault verdict names the
