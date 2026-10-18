@@ -94,7 +94,7 @@ fn apply_run_speed_opts<C: labwired_core::Cpu>(machine: &mut labwired_core::Mach
     // Only say so when the setting can actually do something, so the line is
     // never a claim the build cannot honour.
     if cfg!(feature = "event-scheduler") {
-        eprintln!(
+        crate::log_ts::eventln!(
             "labwired-cli test: idle_ff={} (event_scheduler=on{})",
             if opted_out { "off" } else { "on" },
             if opted_out {
@@ -2017,7 +2017,7 @@ pub(crate) fn run_test(
                 if wide > 1 && machine.bus.per_cycle_tick_is_trivial() {
                     machine.config.peripheral_tick_interval = wide;
                     machine.exact_batch_boundaries = true;
-                    eprintln!(
+                    crate::log_ts::eventln!(
                         "labwired-cli test: hosted fast path (exact windows up to {wide} cycles)"
                     );
                 }

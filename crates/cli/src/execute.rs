@@ -1235,11 +1235,16 @@ pub(crate) fn execute_test_loop<C: labwired_core::Cpu>(
     // whose JIT engine was created, `None` otherwise (interpreter-only).
     if ctx.jit_eligible && std::env::var("LABWIRED_JIT_STATS").is_ok() {
         match ctx.machine.cpu.jit_engine_stats() {
-            Some(s) => eprintln!(
+            Some(s) => crate::log_ts::eventln!(
                 "[jit-stats] compiled={} block_runs={} block_instrs={} interpreted={}",
-                s.compiled, s.block_runs, s.block_instrs, s.interpreted
+                s.compiled,
+                s.block_runs,
+                s.block_instrs,
+                s.interpreted
             ),
-            None => eprintln!("[jit-stats] JIT engine never created (interpreter-only run)"),
+            None => crate::log_ts::eventln!(
+                "[jit-stats] JIT engine never created (interpreter-only run)"
+            ),
         }
     }
 
@@ -1250,7 +1255,7 @@ pub(crate) fn execute_test_loop<C: labwired_core::Cpu>(
     // clamped to nothing, which is indistinguishable from working unless the
     // number is visible. `steps_executed + skipped == machine.total_cycles`.
     if ctx.machine.idle_fast_forward_cycles_skipped > 0 {
-        eprintln!(
+        crate::log_ts::eventln!(
             "labwired-cli test: idle_ff skipped {} of {} device cycles ({} interpreted)",
             ctx.machine.idle_fast_forward_cycles_skipped,
             ctx.machine.total_cycles,
@@ -1705,7 +1710,7 @@ pub(crate) fn execute_test_loop<C: labwired_core::Cpu>(
             .or_else(|| ctx.firmware_path.file_stem())
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "run".to_string());
-        crate::eventln!(
+        crate::log_ts::eventln!(
             "{label}  {passed}/{checked} checks · {subject} · {steps_executed} steps · {:.2}s",
             duration.as_secs_f64()
         );

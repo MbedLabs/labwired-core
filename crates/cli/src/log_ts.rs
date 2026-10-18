@@ -40,8 +40,8 @@ pub(crate) struct PrefixNs {
     pub host_ns: Option<u64>,
 }
 
-/// Pure formatter: `""` when `None`, else a fixed-width bracket so columns
-/// line up and two deterministic runs compare equal byte-for-byte.
+/// Pure formatter: `""` when `None`, else a stable fixed-format bracket;
+/// two deterministic runs compare equal byte-for-byte.
 pub(crate) fn prefix_now(mode: LogTimestamps, ns: &PrefixNs) -> String {
     match mode {
         LogTimestamps::None => String::new(),
@@ -72,7 +72,7 @@ pub(crate) fn virtual_ns_from_cycles(cycles: u64, hz: u64) -> u64 {
     if hz == 0 {
         return 0;
     }
-    ((u128::from(cycles) * 1_000_000_000) / u128::from(hz)) as u64
+    u64::try_from((u128::from(cycles) * 1_000_000_000) / u128::from(hz)).unwrap_or(u64::MAX)
 }
 
 /// The `result.json` pair for this run, gated by the active mode: virtual for
@@ -191,15 +191,16 @@ where
     }
 }
 
-/// `eprintln!` with the timestamp prefix. Use for human-readable event lines
-/// emitted while a run is active (progress, bridges, verdicts). Startup and
-/// usage errors keep plain `eprintln!` — there is no simulation clock yet.
-#[macro_export]
+/// `eprintln!` with the timestamp prefix. Crate-internal: use for
+/// human-readable event lines emitted while a run is active (progress,
+/// bridges, verdicts). Startup and usage errors keep plain `eprintln!` —
+/// there is no simulation clock yet.
 macro_rules! eventln {
     ($($arg:tt)*) => {
         eprintln!("{}{}", $crate::log_ts::prefix(), format_args!($($arg)*))
     };
 }
+pub(crate) use eventln;
 
 #[cfg(test)]
 mod tests {

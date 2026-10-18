@@ -5,9 +5,11 @@
 // See the LICENSE file in the project root for full license information.
 
 //! `--log-timestamps`: the default run stays byte-silent about time (no `[t=`
-//! prefix, no `result.json` keys); `virtual` prefixes are byte-stable across
-//! runs; `both` adds real time that is present but explicitly not stable; and
-//! `labwired run` carries the same prefixes as `labwired test`.
+//! prefix, no `result.json` keys, but the tracing formatter keeps its own RFC
+//! 3339 wall stamp); `virtual` prefixes are byte-stable across runs; `real`
+//! carries only the non-comparable wall clock; `both` adds real time that is
+//! present but explicitly not stable; and `labwired run` carries the same
+//! prefixes as `labwired test`.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -29,6 +31,16 @@ fn workspace_root() -> PathBuf {
 /// with ABSOLUTE firmware/system paths because script `inputs` resolve
 /// relative to the script file, and this one lives in a temp dir.
 fn run(mode: Option<&str>, log: Option<&str>) -> (std::process::Output, serde_json::Value) {
+    run_env(mode, log, &[])
+}
+
+/// [`run`] plus explicit child-environment overrides, for the diagnostics
+/// that are gated by env vars rather than flags (`LABWIRED_JIT_STATS`).
+fn run_env(
+    mode: Option<&str>,
+    log: Option<&str>,
+    envs: &[(&str, &str)],
+) -> (std::process::Output, serde_json::Value) {
     let root = workspace_root();
     let dir = labwired_cli::test_support::unique_temp_dir(&format!(
         "labwired-logts-{}",
@@ -68,6 +80,9 @@ fn run(mode: Option<&str>, log: Option<&str>) -> (std::process::Output, serde_js
     }
     if let Some(filter) = log {
         cmd.env("RUST_LOG", filter);
+    }
+    for (key, value) in envs {
+        cmd.env(key, value);
     }
     let out = cmd.output().expect("spawn labwired");
 
@@ -115,6 +130,19 @@ fn is_centisecond_duration(token: &str) -> bool {
         && frac.bytes().all(|b| b.is_ascii_digit())
 }
 
+/// Manual `\d{4}-\d{2}-\d{2}T` scan (this crate has no regex dependency).
+fn contains_rfc3339_date(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    bytes.windows(11).any(|w| {
+        w[0..4].iter().all(u8::is_ascii_digit)
+            && w[4] == b'-'
+            && w[5..7].iter().all(u8::is_ascii_digit)
+            && w[7] == b'-'
+            && w[8..10].iter().all(u8::is_ascii_digit)
+            && w[10] == b'T'
+    })
+}
+
 #[test]
 fn default_runs_have_no_timestamp_prefix_and_no_result_keys() {
     let (out, result) = run(None, None);
@@ -135,6 +163,36 @@ fn default_runs_have_no_timestamp_prefix_and_no_result_keys() {
     assert!(
         result.get("host_time_ns").is_none(),
         "default result.json must not gain host_time_ns"
+    );
+}
+
+/// The `none` delegate must keep the tracing subscriber's own RFC 3339 wall
+/// stamp — dropping it with `without_time()` is for prefixed modes only. Kept
+/// in a separate test with `RUST_LOG=info` so the default-env silence
+/// assertion above stays representative.
+#[test]
+fn none_mode_keeps_rfc3339_timestamps() {
+    let (out, _result) = run(None, Some("info"));
+    assert!(
+        out.status.success(),
+        "default run with RUST_LOG=info must succeed; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        ts_lines(&stderr).is_empty(),
+        "no `[t=` line without the flag, even with tracing on; stderr:\n{stderr}"
+    );
+    let info_line = stderr
+        .lines()
+        .find(|l| l.contains("INFO"))
+        .unwrap_or_else(|| {
+            panic!("RUST_LOG=info must produce at least one INFO line; stderr:\n{stderr}")
+        });
+    assert!(
+        contains_rfc3339_date(info_line),
+        "the `none` delegate must keep the default RFC 3339 timestamp on \
+         tracing lines; line: {info_line:?}"
     );
 }
 
@@ -193,6 +251,41 @@ fn virtual_prefixes_are_stable_across_runs() {
     );
 }
 
+/// `real` mode is the mirror image of `virtual`: every prefixed line carries
+/// only the wall-clock component (explicitly not comparable between runs), and
+/// `result.json` writes only `host_time_ns`.
+#[test]
+fn real_mode_has_host_time_only() {
+    let (out, result) = run(Some("real"), None);
+    assert!(
+        out.status.success(),
+        "real run must succeed; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let lines = ts_lines(&stderr);
+    assert!(
+        !lines.is_empty(),
+        "real mode must prefix at least the verdict line; stderr:\n{stderr}"
+    );
+    assert!(
+        lines.iter().all(|l| l.starts_with("[t=real=+")),
+        "every `[t=` line must start with `[t=real=+`; lines: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|l| l.contains("virt=")),
+        "real mode must not carry a virtual component; lines: {lines:?}"
+    );
+    assert!(
+        result["host_time_ns"].as_u64().expect("host_time_ns") > 0,
+        "real mode must write a positive host_time_ns"
+    );
+    assert!(
+        result.get("virtual_time_ns").is_none(),
+        "real mode must not write virtual_time_ns"
+    );
+}
+
 #[test]
 fn both_mode_adds_real_time_that_is_present_but_not_stable() {
     let (a, ra) = run(Some("both"), Some("info"));
@@ -219,6 +312,16 @@ fn both_mode_adds_real_time_that_is_present_but_not_stable() {
     assert!(
         rb["host_time_ns"].as_u64().expect("host_time_ns") > 0,
         "both mode must write a positive host_time_ns"
+    );
+    let va = ra["virtual_time_ns"]
+        .as_u64()
+        .expect("both mode must write virtual_time_ns");
+    let vb = rb["virtual_time_ns"]
+        .as_u64()
+        .expect("both mode must write virtual_time_ns");
+    assert_eq!(
+        va, vb,
+        "the deterministic virtual_time_ns must not move between runs; A={va} B={vb}"
     );
 
     // The real component is explicitly not comparable, so full lines cannot be
@@ -288,4 +391,44 @@ fn run_command_prefixes_too() {
         !plain_stderr.lines().any(|l| l.starts_with("[t=")),
         "without the flag, `run` must not prefix any line; stderr:\n{plain_stderr}"
     );
+}
+
+/// The `test` command's run-event lines written directly by the command and
+/// `execute_test_loop` must carry the prefix too — they were plain `eprintln!`
+/// (the A2 consistency gap). The `[jit-stats]` diagnostic needs
+/// `--features jit-core` plus a RISC-V ELF and cannot fire in this
+/// default-features test build, so the assertion pins the idle report line:
+/// `apply_run_speed_opts` emits `labwired-cli test: idle_ff=on …` on every
+/// default (`event-scheduler`) test run. `LABWIRED_JIT_STATS=1` keeps the run
+/// representative of the env-gated diagnostics around it, and a `[jit-stats]`
+/// line, should one appear here, must be prefixed as well.
+#[test]
+fn test_command_event_lines_are_prefixed() {
+    let (out, _result) = run_env(
+        Some("virtual"),
+        Some("info"),
+        &[("LABWIRED_JIT_STATS", "1")],
+    );
+    assert!(
+        out.status.success(),
+        "run with LABWIRED_JIT_STATS=1 must succeed; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    let idle = stderr
+        .lines()
+        .find(|l| l.contains("labwired-cli test: idle_ff=on"))
+        .unwrap_or_else(|| {
+            panic!("the idle report line must be emitted on a default test run; stderr:\n{stderr}")
+        });
+    assert!(
+        idle.starts_with("[t=virt="),
+        "the test-command idle event line must carry the prefix; line: {idle:?}"
+    );
+    if let Some(jit) = stderr.lines().find(|l| l.contains("[jit-stats]")) {
+        assert!(
+            jit.starts_with("[t=virt="),
+            "when present, the `[jit-stats]` diagnostic must carry the prefix; line: {jit:?}"
+        );
+    }
 }

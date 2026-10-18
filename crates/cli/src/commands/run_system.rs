@@ -342,7 +342,7 @@ pub(crate) fn run_firmware_with_system(
             })
             .collect::<Vec<_>>()
             .join("; ");
-        crate::eventln!(
+        crate::log_ts::eventln!(
             "labwired-cli run (system): warning: {list} never fired before the run ended"
         );
     }
@@ -356,11 +356,11 @@ pub(crate) fn run_firmware_with_system(
     }
     let pc = machine.cpu.get_pc();
     if steps >= max_steps {
-        crate::eventln!(
+        crate::log_ts::eventln!(
             "labwired-cli run (system): reached --max-steps {max_steps}; pc=0x{pc:08x}"
         );
     } else {
-        crate::eventln!("labwired-cli run (system): halted at step {steps}; pc=0x{pc:08x}");
+        crate::log_ts::eventln!("labwired-cli run (system): halted at step {steps}; pc=0x{pc:08x}");
     }
     ExitCode::from(EXIT_PASS)
 }
