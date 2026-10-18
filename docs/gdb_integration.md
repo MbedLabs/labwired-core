@@ -64,10 +64,11 @@ For VS Code users preferring the GDB workflow (e.g., for extensive peripheral vi
 - `Z2`/`Z3`/`Z4` arm a write / read / access watch on a byte range; `z2`/`z3`/`z4` disarm the exact same request.
 - The `kind` field is the watched length in bytes and accepts `1` through `4096` — a single 2 KiB-object request (`Z2,20000000,800`) fits; an empty or >4 KiB range answers `E16` (NonFatal) and does not disarm what was armed before it.
 - Up to 16 concurrent ranges; a 17th request is refused the same way.
-- Ranges are software-tracked by the bus accessors (no hardware DWT comparators consumed) and fire on CPU accesses only: memory the debugger itself reads or writes (`m`/`M`/`x`) is bypassed, so inspecting a watched object cannot trip its own watchpoint.
+- Ranges are software-tracked by the bus accessors (no hardware DWT comparators consumed) and fire on CPU accesses (DWT-style comparators: DMA and debugger transfers do not trip them): memory the debugger itself reads or writes (`m`/`M`/`x`) is bypassed, so inspecting a watched object cannot trip its own watchpoint.
+- Matching uses the access's base address: an access that begins outside a range and ends inside it does not latch.
 - A hit stops the target with a bare SIGTRAP (`T05`/`S05`): there is no `watch:` annotation in the stop reply, and the hit is located through `g` (read PC back; for a Thumb-16 store the stop is post-retirement, so `PC = store + 2` and the stored value is already visible in memory).
 
-**Known `gdbstub_arch` CPSR raw-id quirk**: the `g` reply ordering puts `cpsr` after 25 FPU placeholder words (the `xx` bytes between PC and CPSR), so a client that addresses CPSR by the raw id its own `g` layout implies (`P 41`) gets NonFatal — raw ids outside the stub's `0..=25` space do not map to a register. PC (15) and r0–r15 are unaffected; the `reset $pc` path (`P f=...`) works.
+**Known `gdbstub_arch` CPSR raw-id quirk**: the `g` reply ordering puts `cpsr` after 25 FPU placeholder words (the `xx` bytes between PC and CPSR), so a client that addresses CPSR by the raw id its own `g` layout implies (decimal raw id 41, sent as `P 29`) gets NonFatal — raw ids outside the stub's `0..=25` space do not map to a register. PC (15) and r0–r15 are unaffected; the `reset $pc` path (`P f=...`) works.
 
 ## 6. Conformance matrix
 

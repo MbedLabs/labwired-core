@@ -373,9 +373,9 @@ pub struct SystemBus {
     /// Address of the first watched access since the last
     /// [`SystemBus::take_debug_watch_hit`]. `Cell` because loads run on `&self`.
     pub(crate) debug_watch_hit: Cell<Option<u64>>,
-    /// While true the accessors skip watch tracking: host/debugger accesses
-    /// must not fire the target's own watchpoints. `Cell` because debugger
-    /// memory reads run on `&self`.
+    /// While true the accessors skip watch tracking: the watches are DWT-style
+    /// comparators for CPU accesses, so host, debugger and DMA transfers must
+    /// not fire them. `Cell` because debugger memory reads run on `&self`.
     pub(crate) debug_watch_host_bypass: Cell<bool>,
     pub ram: LinearMemory,
     /// Extra CPU-visible RAM/ROM windows beyond `flash`/`ram` (e.g. ESP32 IRAM

@@ -38,6 +38,18 @@ impl crate::bus::SystemBus {
         true
     }
 
+    /// Runs `f` with debug-watch latching disabled. The CPU watches are
+    /// DWT-style comparators for CPU accesses; host, debugger and DMA
+    /// transfers are not CPU accesses and must not trip them. Nesting-safe;
+    /// restores the previous value on every path (the closure's `Err` is a
+    /// value here, not an early return).
+    pub(crate) fn with_debug_watch_bypass<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let saved = self.debug_watch_host_bypass.replace(true);
+        let r = f(self);
+        self.debug_watch_host_bypass.set(saved);
+        r
+    }
+
     /// Disarm the exact watch `add_debug_watch` armed; false when absent.
     ///
     /// A pending hit only outlives its watch while some remaining range still

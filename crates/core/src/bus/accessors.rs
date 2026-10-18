@@ -404,9 +404,10 @@ impl crate::Bus for SystemBus {
         // store is what the debugger watches for, so a store a gate rejects
         // still latches — uniformly across all four widths. Unlike the
         // byte/half/word stores there is no C3 PMS gate on the 64-bit path.
-        // When the step then faults, the machine discards the latch (see
-        // `Machine::advance`), so a rejected store can never leave a stale
-        // stop behind.
+        // An attempt-latch is delivered as the watch stop: on an erroring
+        // step path `Machine::advance` discards the pending hit, but a CPU
+        // that escalates the fault to a handler keeps it and the stop fires
+        // on the window boundary (PC on the faulting store).
         if !self.debug_watches.is_empty() && !self.debug_watch_host_bypass.get() {
             self.note_debug_watch_store(addr);
         }

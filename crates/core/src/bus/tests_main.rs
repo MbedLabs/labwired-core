@@ -6335,6 +6335,53 @@ fn debug_watch_host_bypass_suppresses_latching() {
 }
 
 #[test]
+fn dma_transfers_do_not_latch_debug_watches() {
+    let mut bus = SystemBus::new();
+    assert!(bus.add_debug_watch(0x2000_0100, 8, true, true));
+
+    // A DMA store into the watched range: the controller is its own bus
+    // master, not the CPU, so the DWT-style watch must ignore it.
+    let write = crate::DmaRequest {
+        src_addr: 0,
+        addr: 0x2000_0100,
+        val: 0xAB,
+        direction: crate::DmaDirection::Write,
+        transform: None,
+        remaining: None,
+    };
+    bus.execute_dma_request(&write).unwrap();
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        None,
+        "a DMA store must not latch a store watch"
+    );
+
+    // A DMA load from the watched range: same rule for the read side.
+    let read = crate::DmaRequest {
+        src_addr: 0,
+        addr: 0x2000_0100,
+        val: 0,
+        direction: crate::DmaDirection::Read,
+        transform: None,
+        remaining: None,
+    };
+    bus.execute_dma_request(&read).unwrap();
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        None,
+        "a DMA load must not latch a read watch"
+    );
+
+    // The bypass must be restored: a CPU store still latches.
+    bus.write_u8(0x2000_0100, 0xCD).unwrap();
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        Some(0x2000_0100),
+        "the DMA bypass must not leak into the CPU path"
+    );
+}
+
+#[test]
 fn debug_watch_default_bus_has_no_hit() {
     let mut bus = SystemBus::new();
     bus.write_u8(0x2000_0100, 0xAB).unwrap();
