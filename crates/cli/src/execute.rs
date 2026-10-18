@@ -1726,6 +1726,8 @@ pub(crate) fn execute_test_loop<C: labwired_core::Cpu>(
             observable: ctx.machine.cpu.supports_semihosting(),
             bytes_drained: ctx.machine.bus.semihost_bytes_appended(),
         });
+    let (virtual_time_ns, host_time_ns) =
+        crate::log_ts::result_times(ctx.machine.total_cycles, ctx.machine.bus.cpu_hz, duration);
     write_outputs(
         ctx.args,
         verdict,
@@ -1769,6 +1771,8 @@ pub(crate) fn execute_test_loop<C: labwired_core::Cpu>(
         footprint,
         Some(memory),
         ctx.machine.bus.memory_policy_report(),
+        virtual_time_ns,
+        host_time_ns,
         Some(execution_metrics),
         ctx.machine
             .bus

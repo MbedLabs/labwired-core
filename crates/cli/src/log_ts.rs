@@ -25,12 +25,10 @@ pub enum LogTimestamps {
 }
 
 impl LogTimestamps {
-    #[allow(dead_code)] // TODO(A2 Task 3-6): used by `prefix` once eventln! lands
     fn wants_virtual(self) -> bool {
         matches!(self, Self::Virtual | Self::Both)
     }
 
-    #[allow(dead_code)] // TODO(A2 Task 3-6): used by `prefix` once eventln! lands
     fn wants_real(self) -> bool {
         matches!(self, Self::Real | Self::Both)
     }
@@ -44,7 +42,6 @@ pub(crate) struct PrefixNs {
 
 /// Pure formatter: `""` when `None`, else a fixed-width bracket so columns
 /// line up and two deterministic runs compare equal byte-for-byte.
-#[allow(dead_code)] // TODO(A2 Task 3-6): used by `prefix` once eventln! lands
 pub(crate) fn prefix_now(mode: LogTimestamps, ns: &PrefixNs) -> String {
     match mode {
         LogTimestamps::None => String::new(),
@@ -71,12 +68,31 @@ pub(crate) fn prefix_now(mode: LogTimestamps, ns: &PrefixNs) -> String {
 /// `cycles * 1e9 / cpu_hz`, integer, floor — the same derived clock the
 /// simulator documents for `sim_time_us` (`cycles * 1_000_000 / cpu_hz`),
 /// at ns resolution. `hz == 0` (no machine yet) reads as 0.
-#[allow(dead_code)] // TODO(A2 Task 3-6): used by `prefix` once eventln! lands
 pub(crate) fn virtual_ns_from_cycles(cycles: u64, hz: u64) -> u64 {
     if hz == 0 {
         return 0;
     }
     ((u128::from(cycles) * 1_000_000_000) / u128::from(hz)) as u64
+}
+
+/// The `result.json` pair for this run, gated by the active mode: virtual for
+/// `virtual|both`, host for `real|both`; `(None, None)` for `none`.
+pub(crate) fn result_times(
+    total_cycles: u64,
+    cpu_hz: u64,
+    run: std::time::Duration,
+) -> (Option<u64>, Option<u64>) {
+    let Some(ctx) = CONTEXT.get() else {
+        return (None, None);
+    };
+    (
+        ctx.mode
+            .wants_virtual()
+            .then(|| virtual_ns_from_cycles(total_cycles, cpu_hz)),
+        ctx.mode
+            .wants_real()
+            .then(|| run.as_nanos().min(u128::from(u64::MAX)) as u64),
+    )
 }
 
 struct Context {

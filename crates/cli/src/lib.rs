@@ -1479,6 +1479,9 @@ fn handle_load_error<C: labwired_core::Cpu>(
         None,
         // No machine: no policy report either.
         None,
+        // No machine: no run-level times either.
+        None,
+        None,
         None,
         // No machine: no CAN bridges ran.
         Vec::new(),
@@ -2995,6 +2998,8 @@ mod test_outcome_golden_tests {
             footprint: None,
             memory: None,
             memory_policy: None,
+            virtual_time_ns: None,
+            host_time_ns: None,
             metrics: None,
             rtt: None,
             semihosting: None,
@@ -3083,6 +3088,24 @@ mod test_outcome_golden_tests {
             })
         );
         assert!(json["memory_policy"]["flash"]["first"]["addr"].is_number());
+    }
+
+    /// The run-level `--log-timestamps` pair on disk: both keys present and
+    /// numeric when set, both absent (not null) when `None`, so a default run
+    /// stays byte-identical to the pre-`--log-timestamps` artifact.
+    #[test]
+    fn golden_log_timestamp_block() {
+        let mut outcome = synthetic_outcome();
+        outcome.virtual_time_ns = Some(1_500_000_000);
+        outcome.host_time_ns = Some(123_456_789);
+        let json = serde_json::to_value(&outcome).unwrap();
+        assert_eq!(json["virtual_time_ns"], 1_500_000_000u64);
+        assert_eq!(json["host_time_ns"], 123_456_789u64);
+        outcome.virtual_time_ns = None;
+        outcome.host_time_ns = None;
+        let json = serde_json::to_value(&outcome).unwrap();
+        assert!(json.get("virtual_time_ns").is_none());
+        assert!(json.get("host_time_ns").is_none());
     }
 
     #[test]
