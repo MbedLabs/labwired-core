@@ -10,7 +10,7 @@
 //! (explicitly NOT deterministic). Default `none` prints nothing, so every
 //! existing artifact and log stream is byte-identical.
 
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -83,7 +83,7 @@ struct Context {
     mode: LogTimestamps,
     start: Instant,
     cycles: AtomicU64,
-    hz: AtomicU32,
+    hz: AtomicU64,
 }
 
 static CONTEXT: OnceLock<Context> = OnceLock::new();
@@ -96,7 +96,7 @@ pub(crate) fn init(mode: LogTimestamps) {
         mode,
         start: Instant::now(),
         cycles: AtomicU64::new(0),
-        hz: AtomicU32::new(0),
+        hz: AtomicU64::new(0),
     });
 }
 
@@ -104,8 +104,7 @@ pub(crate) fn init(mode: LogTimestamps) {
 #[allow(dead_code)] // TODO(A2 Task 3-6): called after the machine is built
 pub(crate) fn set_hz(hz: u64) {
     if let Some(ctx) = CONTEXT.get() {
-        ctx.hz
-            .store(hz.min(u64::from(u32::MAX)) as u32, Ordering::Relaxed);
+        ctx.hz.store(hz, Ordering::Relaxed);
     }
 }
 
@@ -135,7 +134,7 @@ pub fn prefix() -> String {
         virtual_ns: ctx.mode.wants_virtual().then(|| {
             virtual_ns_from_cycles(
                 ctx.cycles.load(Ordering::Relaxed),
-                u64::from(ctx.hz.load(Ordering::Relaxed)),
+                ctx.hz.load(Ordering::Relaxed),
             )
         }),
         host_ns: ctx
@@ -179,6 +178,55 @@ mod tests {
             prefix_now(LogTimestamps::Both, &ns),
             "[t=virt=1.500000000s|real=+0.123456789s] "
         );
+
+        let carry = PrefixNs {
+            virtual_ns: Some(999_999_999),
+            host_ns: Some(1),
+        };
+        assert_eq!(
+            prefix_now(LogTimestamps::Virtual, &carry),
+            "[t=virt=0.999999999s] "
+        );
+        assert_eq!(
+            prefix_now(LogTimestamps::Both, &carry),
+            "[t=virt=0.999999999s|real=+0.000000001s] "
+        );
+    }
+
+    #[test]
+    fn clap_parses_every_mode_and_rejects_typos() {
+        use clap::Parser;
+        for (s, want) in [
+            ("none", LogTimestamps::None),
+            ("virtual", LogTimestamps::Virtual),
+            ("real", LogTimestamps::Real),
+            ("both", LogTimestamps::Both),
+        ] {
+            let cli = crate::Cli::try_parse_from([
+                "labwired",
+                "test",
+                "--script",
+                "s.yaml",
+                "--log-timestamps",
+                s,
+            ])
+            .unwrap();
+            match cli.command {
+                Some(crate::dispatch::Commands::Test(a)) => {
+                    assert_eq!(a.log_timestamps, want)
+                }
+                _ => panic!("expected test command"),
+            }
+        }
+        let err = crate::Cli::try_parse_from([
+            "labwired",
+            "test",
+            "--script",
+            "s.yaml",
+            "--log-timestamps",
+            "faul",
+        ]);
+        assert!(err.is_err(), "typo must not parse");
     }
 
     #[test]

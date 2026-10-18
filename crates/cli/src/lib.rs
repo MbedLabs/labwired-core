@@ -444,6 +444,13 @@ pub struct RunArgs {
     /// sleeps when virtual time (`cycles/cpu_hz`) is at least 1 ms ahead of wall.
     #[arg(long = "time-mode", value_name = "MODE", default_value_t = labwired_core::HostTimeMode::MaxSpeed)]
     pub time_mode: labwired_core::HostTimeMode,
+
+    /// Prefix human-readable stderr event/log lines with virtual and/or real
+    /// timestamps: `[t=virt=<sim time>|real=<wall since start>]`. Virtual time
+    /// is deterministic (cycles / cpu_hz); real time is not. Default `none`
+    /// leaves all outputs byte-identical.
+    #[arg(long, value_enum, default_value_t = crate::log_ts::LogTimestamps::None)]
+    pub log_timestamps: crate::log_ts::LogTimestamps,
 }
 
 impl RunArgs {
@@ -746,6 +753,13 @@ struct TestArgs {
     /// advancing from one that is hung. No flag → no writes, no clock reads.
     #[arg(long = "heartbeat-file", value_name = "PATH")]
     heartbeat_file: Option<PathBuf>,
+
+    /// Prefix human-readable stderr event/log lines with virtual and/or real
+    /// timestamps: `[t=virt=<sim time>|real=<wall since start>]`. Virtual time
+    /// is deterministic (cycles / cpu_hz); real time is not. Default `none`
+    /// leaves all outputs byte-identical.
+    #[arg(long, value_enum, default_value_t = crate::log_ts::LogTimestamps::None)]
+    pub log_timestamps: crate::log_ts::LogTimestamps,
 }
 
 /// Unified error response for agent consumption
