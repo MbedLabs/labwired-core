@@ -13,10 +13,6 @@ ram:
   base: 536870912
   size: 1048576B
 peripherals:
-- id: calibrationAdc
-  type: pythonperipheral
-  bus: sysbus
-  base_address: 1073770496
 - id: timer1
   type: stm32_timer
   bus: sysbus
@@ -25,5 +21,3 @@ peripherals:
   type: stm32_timer
   bus: sysbus
   base_address: 1073803264
-provenance:
-  generated_by: scripts/onboard_hw_targets.py

@@ -19,8 +19,6 @@
 
 | Peripheral ID | Base Address | Type |
 |---|---|---|
-| `uart` | `0xf0003000` | `litex_uart` |
-| `timer0` | `0xf0002800` | `litex_timer` |
 | `cfu0` | `0x00000000` | `cosimulatedcfu` |
 
-**Total Peripherals:** 3
+**Total Peripherals:** 1

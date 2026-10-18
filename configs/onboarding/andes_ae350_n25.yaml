@@ -18,6 +18,6 @@ validation:
     chip_descriptor: true
     flash_base_present: true
     ram_base_present: true
-  timestamp_utc: '2026-10-18T11:37:18.850993+00:00'
+  timestamp_utc: '2026-10-18T14:39:50.146269+00:00'
   run_url: ''
   artifacts_url: https://github.com/w1ne/labwired-core/blob/main/docs/boards/andes_ae350_n25.md

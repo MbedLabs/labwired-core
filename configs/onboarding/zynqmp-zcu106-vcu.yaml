@@ -16,6 +16,6 @@ validation:
     system_manifest: true
     chip_descriptor: true
     simulation: true
-  timestamp_utc: '2026-10-18T11:37:40.762134+00:00'
+  timestamp_utc: '2026-10-18T14:40:46.170216+00:00'
   run_url: ''
   artifacts_url: https://github.com/w1ne/labwired-core/blob/main/docs/boards/zynqmp-zcu106-vcu.md

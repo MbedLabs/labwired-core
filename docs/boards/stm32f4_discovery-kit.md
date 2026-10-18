@@ -6,21 +6,21 @@
 **Status:** ✅ Passed (simulation-ok)
 
 ```text
-[2m2026-10-18T11:37:33.541598Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting LabWired Simulator
-[2m2026-10-18T11:37:33.541705Z[0m [32m INFO[0m [2mlabwired_core::system::builder[0m[2m:[0m Loading chip descriptor: ../../chips/onboarding/stm32f4_discovery-kit.yaml
-[2m2026-10-18T11:37:33.544094Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Loading firmware: "/home/andrii/Projects/labwired-renode/core/tests/fixtures/uart-ok-thumbv7m.elf"
-[2m2026-10-18T11:37:33.544153Z[0m [32m INFO[0m [2mlabwired_loader[0m[2m:[0m ELF Entry Point: 0x401
-[2m2026-10-18T11:37:33.544175Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Firmware Loaded Successfully!
-[2m2026-10-18T11:37:33.544178Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Entry Point: 0x401
-[2m2026-10-18T11:37:33.545136Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting Simulation (ARM Cortex-M)...
-[2m2026-10-18T11:37:33.545143Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Initial PC: 0x400, SP: 0x20020000
-[2m2026-10-18T11:37:33.545148Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Running for 20000 steps...
-[2m2026-10-18T11:37:33.546996Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Progress: 10000 steps, current IPS: 3557357.95
-[2m2026-10-18T11:37:33.548694Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Simulation loop finished.
-[2m2026-10-18T11:37:33.548697Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Final PC: 0x466
-[2m2026-10-18T11:37:33.548700Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Instructions: 19999
-[2m2026-10-18T11:37:33.548702Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Cycles: 20002
-[2m2026-10-18T11:37:33.548704Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Average IPS: 4424702.40
+[2m2026-10-18T14:40:27.477564Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting LabWired Simulator
+[2m2026-10-18T14:40:27.482556Z[0m [32m INFO[0m [2mlabwired_core::system::builder[0m[2m:[0m Loading chip descriptor: ../../chips/onboarding/stm32f4_discovery-kit.yaml
+[2m2026-10-18T14:40:27.496711Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Loading firmware: "/home/andrii/Projects/labwired-renode/core/tests/fixtures/uart-ok-thumbv7m.elf"
+[2m2026-10-18T14:40:27.496808Z[0m [32m INFO[0m [2mlabwired_loader[0m[2m:[0m ELF Entry Point: 0x401
+[2m2026-10-18T14:40:27.496823Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Firmware Loaded Successfully!
+[2m2026-10-18T14:40:27.496827Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Entry Point: 0x401
+[2m2026-10-18T14:40:27.498624Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting Simulation (ARM Cortex-M)...
+[2m2026-10-18T14:40:27.498643Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Initial PC: 0x400, SP: 0x20020000
+[2m2026-10-18T14:40:27.498650Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Running for 20000 steps...
+[2m2026-10-18T14:40:27.512943Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Progress: 10000 steps, current IPS: 620825.41
+[2m2026-10-18T14:40:27.520266Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Simulation loop finished.
+[2m2026-10-18T14:40:27.520287Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Final PC: 0x466
+[2m2026-10-18T14:40:27.520292Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Instructions: 19999
+[2m2026-10-18T14:40:27.520296Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Cycles: 20002
+[2m2026-10-18T14:40:27.520300Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Average IPS: 852152.03
 ```
 
 
@@ -28,9 +28,6 @@
 
 | Peripheral ID | Base Address | Type |
 |---|---|---|
-| `phy` | `0x00000000` | `ethernetphysicallayer` |
-| `phy1` | `0x00000001` | `ethernetphysicallayer` |
-| `flash_controller` | `0x40023c00` | `stm32f4_flashcontroller` |
 | `usart1` | `0x40011000` | `stm32_uart` |
 | `usart2` | `0x40004400` | `stm32_uart` |
 | `usart3` | `0x40004800` | `stm32_uart` |
@@ -80,5 +77,7 @@
 | `timer14` | `0x40002000` | `stm32_timer` |
 | `bitbandPeripherals` | `0x42000000` | `bitbanding` |
 | `bitbandSram` | `0x22000000` | `bitbanding` |
+| `phy` | `0x00000000` | `ethernetphysicallayer` |
+| `phy1` | `0x00000001` | `ethernetphysicallayer` |
 
-**Total Peripherals:** 52
+**Total Peripherals:** 51

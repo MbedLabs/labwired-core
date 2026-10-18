@@ -109,5 +109,3 @@ peripherals:
   type: stm32wba_rcc
   bus: sysbus
   base_address: 1174539264
-provenance:
-  generated_by: scripts/onboard_hw_targets.py

@@ -5,7 +5,7 @@
 # See the LICENSE file in the project root for full license information.
 
 name: msp430f2619
-arch: unknown
+arch: arm
 flash:
   base: 3072
   size: 1024B
@@ -13,22 +13,6 @@ ram:
   base: 512
   size: 2048B
 peripherals:
-- id: ram
-  type: arraymemory
-  bus: sysbus
-  base_address: 512
-- id: wdt
-  type: msp430f2xxx_watchdog
-  bus: sysbus
-  base_address: 288
-- id: usci_a0
-  type: msp430_uscia
-  bus: sysbus
-  base_address: 93
-- id: usci_a1
-  type: msp430_uscia
-  bus: sysbus
-  base_address: 205
 - id: mpy
   type: msp430f2xxx_mpy
   bus: sysbus
@@ -49,5 +33,3 @@ peripherals:
   type: arraymemory
   bus: sysbus
   base_address: 4096
-provenance:
-  generated_by: scripts/onboard_hw_targets.py

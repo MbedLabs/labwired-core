@@ -7,7 +7,7 @@
 name: brd4162a
 arch: arm
 flash:
-  base: 0
+  base: 134217728
   size: 262144B
 ram:
   base: 553648128
@@ -53,16 +53,16 @@ peripherals:
   base_address: 1074659328
 - id: wtimer0
   type: efr32_timer
+  config:
+    counter_bits: 16
   bus: sysbus
   base_address: 1073848320
-  config:
-    counter_bits: 16
 - id: wtimer1
   type: efr32_timer
-  bus: sysbus
-  base_address: 1073849344
   config:
     counter_bits: 16
+  bus: sysbus
+  base_address: 1073849344
 - id: emu_pwrcfg
   type: pythonperipheral
   bus: sysbus
@@ -112,16 +112,16 @@ peripherals:
   base_address: 570425344
 - id: timer0
   type: efr32_timer
+  config:
+    counter_bits: 16
   bus: sysbus
   base_address: 1073840128
-  config:
-    counter_bits: 16
 - id: timer1
   type: efr32_timer
-  bus: sysbus
-  base_address: 1073841152
   config:
     counter_bits: 16
+  bus: sysbus
+  base_address: 1073841152
 - id: cmu
   type: stub
   renode_type: efr32_cmu
@@ -131,5 +131,3 @@ peripherals:
   type: efr32mg12_ldma
   bus: sysbus
   base_address: 1074667520
-provenance:
-  generated_by: scripts/onboard_hw_targets.py

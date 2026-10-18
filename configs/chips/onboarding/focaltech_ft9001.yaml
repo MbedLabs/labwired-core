@@ -7,8 +7,8 @@
 name: focaltech_ft9001
 arch: arm
 flash:
-  base: 268435456
-  size: 2097152B
+  base: 524288
+  size: 4096B
 ram:
   base: 536838144
   size: 32768B
@@ -33,5 +33,3 @@ peripherals:
   type: dwt
   bus: sysbus
   base_address: 3758100480
-provenance:
-  generated_by: scripts/onboard_hw_targets.py

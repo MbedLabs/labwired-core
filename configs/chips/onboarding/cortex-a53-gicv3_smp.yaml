@@ -7,12 +7,28 @@
 name: cortex-a53-gicv3_smp
 arch: arm
 flash:
-  base: 0
+  base: 134217728
   size: 134217728B
 ram:
   base: 1073741824
   size: 2147483648B
 peripherals:
+- id: timer1
+  type: arm_generictimer
+  bus: cpu1
+  base_address: 15
+- id: timer2
+  type: arm_generictimer
+  bus: cpu2
+  base_address: 15
+- id: timer3
+  type: arm_generictimer
+  bus: cpu3
+  base_address: 15
+- id: timer
+  type: arm_generictimer
+  bus: cpu
+  base_address: 15
 - id: uart0
   type: pl011
   bus: sysbus
@@ -21,5 +37,3 @@ peripherals:
   type: pl031
   bus: sysbus
   base_address: 151060480
-provenance:
-  generated_by: scripts/onboard_hw_targets.py

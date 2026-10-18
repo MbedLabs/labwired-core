@@ -6,21 +6,29 @@
 **Status:** ✅ Passed (simulation-ok)
 
 ```text
-[2m2026-10-18T11:37:31.692279Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting LabWired Simulator
-[2m2026-10-18T11:37:31.692445Z[0m [32m INFO[0m [2mlabwired_core::system::builder[0m[2m:[0m Loading chip descriptor: ../../chips/onboarding/renesas_rz_g2l.yaml
-[2m2026-10-18T11:37:31.692751Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Loading firmware: "/home/andrii/Projects/labwired-renode/core/tests/fixtures/uart-ok-thumbv7m.elf"
-[2m2026-10-18T11:37:31.692819Z[0m [32m INFO[0m [2mlabwired_loader[0m[2m:[0m ELF Entry Point: 0x401
-[2m2026-10-18T11:37:31.692832Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Firmware Loaded Successfully!
-[2m2026-10-18T11:37:31.692836Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Entry Point: 0x401
-[2m2026-10-18T11:37:31.693218Z[0m [33m WARN[0m [2mlabwired_core[0m[2m:[0m Failed to load segment at 0x0 - outside of memory map
-[2m2026-10-18T11:37:31.693232Z[0m [33m WARN[0m [2mlabwired_core[0m[2m:[0m Failed to load segment at 0x400 - outside of memory map
-[2m2026-10-18T11:37:31.693271Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting Simulation (ARM Cortex-M)...
-[2m2026-10-18T11:37:31.693276Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Initial PC: 0x400, SP: 0x20000000
-[2m2026-10-18T11:37:31.693281Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Running for 20000 steps...
-[2m2026-10-18T11:37:31.693304Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Simulation Error at step 0: Memory access violation at 0x400
-[2m2026-10-18T11:37:31.693322Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Simulation loop finished.
-[2m2026-10-18T11:37:31.693326Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Final PC: 0x400
-[2m2026-10-18T11:37:31.693330Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Instructions: 0
-[2m2026-10-18T11:37:31.693333Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Cycles: 0
-[2m2026-10-18T11:37:31.693337Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Average IPS: 0.00
+[2m2026-10-18T14:40:21.395146Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting LabWired Simulator
+[2m2026-10-18T14:40:21.398256Z[0m [32m INFO[0m [2mlabwired_core::system::builder[0m[2m:[0m Loading chip descriptor: ../../chips/onboarding/renesas_rz_g2l.yaml
+[2m2026-10-18T14:40:21.399008Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Loading firmware: "/home/andrii/Projects/labwired-renode/core/tests/fixtures/uart-ok-thumbv7m.elf"
+[2m2026-10-18T14:40:21.399126Z[0m [32m INFO[0m [2mlabwired_loader[0m[2m:[0m ELF Entry Point: 0x401
+[2m2026-10-18T14:40:21.399148Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Firmware Loaded Successfully!
+[2m2026-10-18T14:40:21.399152Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Entry Point: 0x401
+[2m2026-10-18T14:40:21.399756Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting Simulation (ARM Cortex-M)...
+[2m2026-10-18T14:40:21.399764Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Initial PC: 0x400, SP: 0x20020000
+[2m2026-10-18T14:40:21.399769Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Running for 20000 steps...
+[2m2026-10-18T14:40:21.399852Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Simulation Error at step 2: Memory access violation at 0x2001ffe0
+[2m2026-10-18T14:40:21.399869Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Simulation loop finished.
+[2m2026-10-18T14:40:21.399873Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Final PC: 0x45c
+[2m2026-10-18T14:40:21.399877Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Instructions: 2
+[2m2026-10-18T14:40:21.399880Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Cycles: 2
+[2m2026-10-18T14:40:21.399884Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Average IPS: 2747.34
 ```
+
+
+## Hardware Coverage Report
+
+| Peripheral ID | Base Address | Type |
+|---|---|---|
+| `timer0` | `0x0000000f` | `arm_generictimer` |
+| `timer1` | `0x0000000f` | `arm_generictimer` |
+
+**Total Peripherals:** 2

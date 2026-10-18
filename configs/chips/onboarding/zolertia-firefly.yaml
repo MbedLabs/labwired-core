@@ -7,8 +7,8 @@
 name: zolertia-firefly
 arch: arm
 flash:
-  base: 2097152
-  size: 1048576B
+  base: 134217728
+  size: 131072B
 ram:
   base: 536870912
   size: 262144B
@@ -77,5 +77,3 @@ peripherals:
   type: cc2538_ssi
   bus: sysbus
   base_address: 1073778688
-provenance:
-  generated_by: scripts/onboard_hw_targets.py

@@ -7,7 +7,7 @@
 name: sam4s8b
 arch: arm
 flash:
-  base: 4194304
+  base: 134217728
   size: 4194304B
 ram:
   base: 536870912
@@ -110,5 +110,3 @@ peripherals:
   renode_type: sam4s_twi
   bus: sysbus
   base_address: 1073840128
-provenance:
-  generated_by: scripts/onboard_hw_targets.py

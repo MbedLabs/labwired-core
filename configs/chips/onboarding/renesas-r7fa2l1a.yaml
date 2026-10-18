@@ -7,24 +7,12 @@
 name: renesas-r7fa2l1a
 arch: arm
 flash:
-  base: 0
+  base: 134217728
   size: 131072B
 ram:
   base: 536887296
   size: 16384B
 peripherals:
-- id: port6
-  type: renesasra2_gpio
-  bus: sysbus
-  base_address: 1074004160
-- id: port7
-  type: renesasra2_gpio
-  bus: sysbus
-  base_address: 1074004192
-- id: port8
-  type: renesasra2_gpio
-  bus: sysbus
-  base_address: 1074004224
 - id: sci3
   type: renesasra6m5_sci
   bus: sysbus
@@ -38,34 +26,6 @@ peripherals:
   type: renesasra_gpiomisc
   bus: sysbus
   base_address: 1074007296
-- id: port0
-  type: renesasra2_gpio
-  bus: sysbus
-  base_address: 1074003968
-- id: port1
-  type: renesasra2_gpio
-  bus: sysbus
-  base_address: 1074004000
-- id: port2
-  type: renesasra2_gpio
-  bus: sysbus
-  base_address: 1074004032
-- id: port3
-  type: renesasra2_gpio
-  bus: sysbus
-  base_address: 1074004064
-- id: port4
-  type: renesasra2_gpio
-  bus: sysbus
-  base_address: 1074004096
-- id: port5
-  type: renesasra2_gpio
-  bus: sysbus
-  base_address: 1074004128
-- id: port9
-  type: renesasra2_gpio
-  bus: sysbus
-  base_address: 1074004256
 - id: gpt
   type: renesasra_gpt
   bus: sysbus
@@ -103,5 +63,3 @@ peripherals:
   renode_type: renesasra_iic
   bus: sysbus
   base_address: 1074081792
-provenance:
-  generated_by: scripts/onboard_hw_targets.py

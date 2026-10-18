@@ -7,7 +7,7 @@
 name: renesas-ck_ra6m5
 arch: arm
 flash:
-  base: 0
+  base: 134217728
   size: 2097152B
 ram:
   base: 536870912
@@ -129,54 +129,6 @@ peripherals:
   type: renesasra_gpiomisc
   bus: sysbus
   base_address: 1074269440
-- id: port0
-  type: renesasra6_gpio
-  bus: sysbus
-  base_address: 1074266112
-- id: port1
-  type: renesasra6_gpio
-  bus: sysbus
-  base_address: 1074266144
-- id: port2
-  type: renesasra6_gpio
-  bus: sysbus
-  base_address: 1074266176
-- id: port3
-  type: renesasra6_gpio
-  bus: sysbus
-  base_address: 1074266208
-- id: port4
-  type: renesasra6_gpio
-  bus: sysbus
-  base_address: 1074266240
-- id: port5
-  type: renesasra6_gpio
-  bus: sysbus
-  base_address: 1074266272
-- id: port6
-  type: renesasra6_gpio
-  bus: sysbus
-  base_address: 1074266304
-- id: port7
-  type: renesasra6_gpio
-  bus: sysbus
-  base_address: 1074266336
-- id: port8
-  type: renesasra6_gpio
-  bus: sysbus
-  base_address: 1074266368
-- id: port9
-  type: renesasra6_gpio
-  bus: sysbus
-  base_address: 1074266400
-- id: portA
-  type: renesasra6_gpio
-  bus: sysbus
-  base_address: 1074266432
-- id: portB
-  type: renesasra6_gpio
-  bus: sysbus
-  base_address: 1074266464
 - id: iic0
   type: stub
   renode_type: renesasra_iic
@@ -192,5 +144,3 @@ peripherals:
   renode_type: renesasra_iic
   bus: sysbus
   base_address: 1074393600
-provenance:
-  generated_by: scripts/onboard_hw_targets.py

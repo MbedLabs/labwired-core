@@ -6,21 +6,21 @@
 **Status:** ✅ Passed (simulation-ok)
 
 ```text
-[2m2026-10-18T11:37:30.758456Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting LabWired Simulator
-[2m2026-10-18T11:37:30.758625Z[0m [32m INFO[0m [2mlabwired_core::system::builder[0m[2m:[0m Loading chip descriptor: ../../chips/onboarding/nxp-s32k388evb.yaml
-[2m2026-10-18T11:37:30.768997Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Loading firmware: "/home/andrii/Projects/labwired-renode/core/tests/fixtures/uart-ok-thumbv7m.elf"
-[2m2026-10-18T11:37:30.769199Z[0m [32m INFO[0m [2mlabwired_loader[0m[2m:[0m ELF Entry Point: 0x401
-[2m2026-10-18T11:37:30.769250Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Firmware Loaded Successfully!
-[2m2026-10-18T11:37:30.769286Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Entry Point: 0x401
-[2m2026-10-18T11:37:30.771448Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting Simulation (ARM Cortex-M)...
-[2m2026-10-18T11:37:30.771468Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Initial PC: 0x400, SP: 0x20020000
-[2m2026-10-18T11:37:30.771479Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Running for 20000 steps...
-[2m2026-10-18T11:37:30.771549Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Simulation Error at step 2: Memory access violation at 0x2001ffe0
-[2m2026-10-18T11:37:30.771571Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Simulation loop finished.
-[2m2026-10-18T11:37:30.771576Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Final PC: 0x45c
-[2m2026-10-18T11:37:30.771579Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Instructions: 2
-[2m2026-10-18T11:37:30.771583Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Cycles: 2
-[2m2026-10-18T11:37:30.771587Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Average IPS: 884.65
+[2m2026-10-18T14:40:19.309892Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting LabWired Simulator
+[2m2026-10-18T14:40:19.310422Z[0m [32m INFO[0m [2mlabwired_core::system::builder[0m[2m:[0m Loading chip descriptor: ../../chips/onboarding/nxp-s32k388evb.yaml
+[2m2026-10-18T14:40:19.330057Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Loading firmware: "/home/andrii/Projects/labwired-renode/core/tests/fixtures/uart-ok-thumbv7m.elf"
+[2m2026-10-18T14:40:19.330170Z[0m [32m INFO[0m [2mlabwired_loader[0m[2m:[0m ELF Entry Point: 0x401
+[2m2026-10-18T14:40:19.330183Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Firmware Loaded Successfully!
+[2m2026-10-18T14:40:19.330188Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Entry Point: 0x401
+[2m2026-10-18T14:40:19.336493Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting Simulation (ARM Cortex-M)...
+[2m2026-10-18T14:40:19.336513Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Initial PC: 0x400, SP: 0x20020000
+[2m2026-10-18T14:40:19.336524Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Running for 20000 steps...
+[2m2026-10-18T14:40:19.336600Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Simulation Error at step 2: Memory access violation at 0x2001ffe0
+[2m2026-10-18T14:40:19.336626Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Simulation loop finished.
+[2m2026-10-18T14:40:19.336630Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Final PC: 0x45c
+[2m2026-10-18T14:40:19.336634Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Instructions: 2
+[2m2026-10-18T14:40:19.336639Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Cycles: 2
+[2m2026-10-18T14:40:19.336643Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Average IPS: 310.05
 ```
 
 
@@ -40,7 +40,6 @@
 | `mscm` | `0x40260000` | `s32k3xx_miscellaneoussystemcontrolmodule` |
 | `siul2` | `0x40290000` | `s32k3xx_systemintegrationunitlite2` |
 | `mc_me` | `0x402dc000` | `s32kxx_modeentrymodule` |
-| `sema4` | `0x40460000` | `sema42` |
 | `swt0` | `0x40270000` | `s32k3xx_softwarewatchdogtimer` |
 | `swt1` | `0x4046c000` | `s32k3xx_softwarewatchdogtimer` |
 | `swt2` | `0x40470000` | `s32k3xx_softwarewatchdogtimer` |
@@ -79,26 +78,32 @@
 | `lpuart13` | `0x404a0000` | `nxp_lpuart` |
 | `lpuart14` | `0x404a4000` | `nxp_lpuart` |
 | `lpuart15` | `0x404a8000` | `nxp_lpuart` |
-| `can0` | `0x40304000` | `nxp_flexcan` |
-| `can1` | `0x40308000` | `nxp_flexcan` |
-| `can2` | `0x4030c000` | `nxp_flexcan` |
-| `can3` | `0x40310000` | `nxp_flexcan` |
-| `can4` | `0x40314000` | `nxp_flexcan` |
-| `can5` | `0x40318000` | `nxp_flexcan` |
-| `can6` | `0x4031c000` | `nxp_flexcan` |
-| `can7` | `0x40320000` | `nxp_flexcan` |
+| `mc_cgm_mux_0_css` | `0x402d8304` | `pythonperipheral` |
+| `mc_cgm_mux_1_css` | `0x402d8344` | `pythonperipheral` |
+| `mc_cgm_mux_2_css` | `0x402d8384` | `pythonperipheral` |
+| `mc_cgm_mux_3_css` | `0x402d83c4` | `pythonperipheral` |
+| `mc_cgm_mux_4_css` | `0x402d8404` | `pythonperipheral` |
+| `mc_cgm_mux_5_css` | `0x402d8444` | `pythonperipheral` |
+| `mc_cgm_mux_6_css` | `0x402d8484` | `pythonperipheral` |
+| `mc_cgm_mux_7_css` | `0x402d84c4` | `pythonperipheral` |
+| `mc_cgm_mux_8_css` | `0x402d8504` | `pythonperipheral` |
+| `mc_cgm_mux_9_css` | `0x402d8544` | `pythonperipheral` |
+| `mc_cgm_mux_10_css` | `0x402d8584` | `pythonperipheral` |
+| `mc_cgm_mux_11_css` | `0x402d85c4` | `pythonperipheral` |
+| `mc_cgm_mux_12_css` | `0x402d8604` | `pythonperipheral` |
+| `mc_cgm_mux_13_css` | `0x402d8644` | `pythonperipheral` |
+| `mc_cgm_mux_14_css` | `0x402d8684` | `pythonperipheral` |
+| `mc_cgm_mux_15_css` | `0x402d86c4` | `pythonperipheral` |
+| `mc_cgm_mux_16_css` | `0x402d8704` | `pythonperipheral` |
+| `mc_cgm_mux_17_css` | `0x402d8744` | `pythonperipheral` |
+| `mc_cgm_mux_18_css` | `0x402d8784` | `pythonperipheral` |
+| `mc_cgm_mux_19_css` | `0x402d87c4` | `pythonperipheral` |
 | `gmac0` | `0x40484000` | `stub` |
 | `gmac1` | `0x40488000` | `stub` |
-| `dma` | `0x4020c000` | `nxp_edma` |
 | `dma_channels0_11` | `0x40210000` | `nxp_edma_channels` |
 | `dma_channels12_32` | `0x40410000` | `nxp_edma_channels` |
 | `dma_mux0` | `0x40280000` | `s32k3xx_dmamux` |
 | `dma_mux1` | `0x40284000` | `s32k3xx_dmamux` |
 | `xrdc` | `0x40278000` | `stub` |
-| `emios0` | `0x40088000` | `stub` |
-| `emios1` | `0x4008c000` | `stub` |
-| `emios2` | `0x40090000` | `stub` |
-| `mc_cgm` | `0x402d8000` | `stub` |
-| `plldig` | `0x402e0000` | `stub` |
 
-**Total Peripherals:** 72
+**Total Peripherals:** 77

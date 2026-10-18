@@ -5,7 +5,7 @@
 # See the LICENSE file in the project root for full license information.
 
 name: core-v-mcu
-arch: riscv
+arch: arm
 flash:
   base: 436207616
   size: 8192B
@@ -43,5 +43,3 @@ peripherals:
   type: pulp_udma_camera
   bus: sysbus
   base_address: 437265024
-provenance:
-  generated_by: scripts/onboard_hw_targets.py

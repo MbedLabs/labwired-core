@@ -5,7 +5,7 @@
 # See the LICENSE file in the project root for full license information.
 
 name: litex_common
-arch: unknown
+arch: arm
 flash:
   base: 536870912
   size: 33554432B
@@ -13,22 +13,7 @@ ram:
   base: 268435456
   size: 262144B
 peripherals:
-- id: uart
-  type: litex_uart
-  bus: sysbus
-  base_address: 1610618880
-- id: eth
-  type: litex_ethernet
-  bus: sysbus
-  base_address: 1610643456
 - id: phy
   type: ethernetphysicallayer
   bus: eth
   base_address: 0
-- id: spi
-  type: stub
-  renode_type: litex_spi_flash
-  bus: sysbus
-  base_address: 1610633216
-provenance:
-  generated_by: scripts/onboard_hw_targets.py

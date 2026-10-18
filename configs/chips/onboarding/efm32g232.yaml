@@ -7,7 +7,7 @@
 name: efm32g232
 arch: arm
 flash:
-  base: 0
+  base: 134217728
   size: 131072B
 ram:
   base: 536870912
@@ -65,5 +65,3 @@ peripherals:
   type: pythonperipheral
   bus: sysbus
   base_address: 1073741832
-provenance:
-  generated_by: scripts/onboard_hw_targets.py

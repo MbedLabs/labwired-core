@@ -7,11 +7,11 @@
 name: nuvoton_npcx9
 arch: arm
 flash:
-  base: 1677721600
-  size: 1048576B
-ram:
-  base: 0
+  base: 134217728
   size: 65536B
+ram:
+  base: 537657344
+  size: 96256B
 peripherals:
 - id: dwt
   type: dwt
@@ -241,7 +241,3 @@ peripherals:
   type: arraymemory
   bus: sysbus
   base_address: 1074589696
-provenance:
-  generated_by: scripts/onboard_hw_targets.py
-  parse_fallbacks:
-  - ram=rom

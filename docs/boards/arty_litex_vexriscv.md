@@ -19,7 +19,6 @@
 
 | Peripheral ID | Base Address | Type |
 |---|---|---|
-| `cas` | `0x60006800` | `litex_controlandstatus` |
 | `led0` | `0x00000000` | `led` |
 | `led1` | `0x00000001` | `led` |
 | `led2` | `0x00000002` | `led` |
@@ -33,10 +32,6 @@
 | `button2` | `0x00000042` | `button` |
 | `button3` | `0x00000043` | `button` |
 | `clock0` | `0xe0004800` | `litex_mmcm_csr32` |
-| `timer` | `0x60002800` | `litex_timer_csr32` |
-| `uart` | `0x60001800` | `litex_uart` |
-| `eth` | `0x60007800` | `litex_ethernet` |
 | `phy` | `0x00000000` | `ethernetphysicallayer` |
-| `spi` | `0x60005000` | `stub` |
 
-**Total Peripherals:** 19
+**Total Peripherals:** 14

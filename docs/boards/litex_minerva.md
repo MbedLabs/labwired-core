@@ -21,7 +21,6 @@
 |---|---|---|
 | `boot_flash` | `0x20228000` | `arraymemory` |
 | `uart` | `0xe0001800` | `litex_uart` |
-| `eth` | `0xe0003800` | `litex_ethernet` |
 | `timer0` | `0xe0002800` | `litex_timer` |
 
-**Total Peripherals:** 4
+**Total Peripherals:** 3

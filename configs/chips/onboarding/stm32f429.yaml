@@ -17,10 +17,6 @@ peripherals:
   type: stm32ltdc
   bus: sysbus
   base_address: 1073833984
-- id: flash_controller
-  type: stm32f4_flashcontroller
-  bus: sysbus
-  base_address: 1073888256
 - id: usart1
   type: stm32_uart
   bus: sysbus
@@ -217,5 +213,3 @@ peripherals:
   type: bitbanding
   bus: sysbus
   base_address: 570425344
-provenance:
-  generated_by: scripts/onboard_hw_targets.py

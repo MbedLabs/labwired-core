@@ -23,8 +23,9 @@
 | `sram` | `0x01000000` | `arraymemory` |
 | `main_ram` | `0x40000000` | `arraymemory` |
 | `stack` | `0xf0000000` | `arraymemory` |
+| `cpu` | `0x0000000c` | `stub` |
 | `ctrl` | `0x82000000` | `litex_soc_controller` |
 | `uart` | `0x82002000` | `litex_uart` |
 | `timer0` | `0x82002800` | `litex_timer_csr32` |
 
-**Total Peripherals:** 7
+**Total Peripherals:** 8

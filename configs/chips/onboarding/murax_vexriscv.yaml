@@ -5,7 +5,7 @@
 # See the LICENSE file in the project root for full license information.
 
 name: murax_vexriscv
-arch: riscv
+arch: arm
 flash:
   base: 2147483648
   size: 262144B
@@ -25,8 +25,3 @@ peripherals:
   type: murax_timer
   bus: sysbus
   base_address: 4026662912
-provenance:
-  generated_by: scripts/onboard_hw_targets.py
-  parse_fallbacks:
-  - flash=mem
-  - ram=mem2

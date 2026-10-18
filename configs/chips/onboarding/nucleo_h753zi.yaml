@@ -33,22 +33,62 @@ peripherals:
   type: ethernetphysicallayer
   bus: ethernet
   base_address: 0
-- id: dwt
-  type: dwt
-  bus: sysbus
-  base_address: 3758100480
 - id: flashController
   type: stm32h7_flashcontroller
   bus: sysbus
   base_address: 1375739904
 - id: adc3
-  type: stm32h7_adc
+  type: stm32f0_adc
   bus: sysbus
   base_address: 1476550656
 - id: bdma
   type: stm32ldma
   bus: sysbus
   base_address: 1476547584
+- id: gpioPortK
+  type: stm32_gpioport
+  bus: sysbus
+  base_address: 1476536320
+- id: gpioPortJ
+  type: stm32_gpioport
+  bus: sysbus
+  base_address: 1476535296
+- id: gpioPortI
+  type: stm32_gpioport
+  bus: sysbus
+  base_address: 1476534272
+- id: gpioPortH
+  type: stm32_gpioport
+  bus: sysbus
+  base_address: 1476533248
+- id: gpioPortG
+  type: stm32_gpioport
+  bus: sysbus
+  base_address: 1476532224
+- id: gpioPortF
+  type: stm32_gpioport
+  bus: sysbus
+  base_address: 1476531200
+- id: gpioPortE
+  type: stm32_gpioport
+  bus: sysbus
+  base_address: 1476530176
+- id: gpioPortD
+  type: stm32_gpioport
+  bus: sysbus
+  base_address: 1476529152
+- id: gpioPortC
+  type: stm32_gpioport
+  bus: sysbus
+  base_address: 1476528128
+- id: gpioPortB
+  type: stm32_gpioport
+  bus: sysbus
+  base_address: 1476527104
+- id: gpioPortA
+  type: stm32_gpioport
+  bus: sysbus
+  base_address: 1476526080
 - id: rtc
   type: stm32f4_rtc
   bus: sysbus
@@ -78,7 +118,7 @@ peripherals:
   bus: sysbus
   base_address: 1342181376
 - id: adcM1S2
-  type: stm32h7_adc
+  type: stm32f0_adc
   bus: sysbus
   base_address: 1073881088
 - id: rng
@@ -245,10 +285,6 @@ peripherals:
   type: stm32h7_hardwaresemaphore
   bus: sysbus
   base_address: 1476551680
-- id: ethernet
-  type: synopsysdwcethernetqualityofservice
-  bus: sysbus
-  base_address: 1073905664
 - id: qspi
   type: stm32h7_quadspi
   bus: sysbus
@@ -257,21 +293,3 @@ peripherals:
   type: stm32hsdmmc
   bus: sysbus
   base_address: 1375760384
-- id: pwr
-  type: pythonperipheral
-  bus: sysbus
-  base_address: 1476544512
-- id: fmc
-  type: pythonperipheral
-  bus: sysbus
-  base_address: 1375748096
-- id: usb1
-  type: designware_usb_otg
-  bus: sysbus
-  base_address: 1074003968
-- id: usb2
-  type: designware_usb_otg
-  bus: sysbus
-  base_address: 1074266112
-provenance:
-  generated_by: scripts/onboard_hw_targets.py

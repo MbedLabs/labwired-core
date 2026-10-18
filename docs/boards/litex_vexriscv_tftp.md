@@ -22,7 +22,6 @@
 | `ctrl` | `0x82000000` | `litex_soc_controller` |
 | `uart` | `0x82002000` | `litex_uart` |
 | `timer0` | `0x82002800` | `litex_timer` |
-| `ethmac` | `0x82006000` | `litex_ethernet` |
 | `ethphy` | `0x00000000` | `ethernetphysicallayer` |
 
-**Total Peripherals:** 5
+**Total Peripherals:** 4

@@ -7,10 +7,10 @@
 name: at91rm9200
 arch: arm
 flash:
-  base: 0
+  base: 134217728
   size: 196608B
 ram:
-  base: 0
+  base: 536870912
   size: 196608B
 peripherals:
 - id: uart0
@@ -33,7 +33,3 @@ peripherals:
   type: pythonperipheral
   bus: sysbus
   base_address: 4294966320
-provenance:
-  generated_by: scripts/onboard_hw_targets.py
-  parse_fallbacks:
-  - flash=internalmemory

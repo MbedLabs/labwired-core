@@ -85,26 +85,10 @@ peripherals:
   type: stm32ldma
   bus: sysbus
   base_address: 1073872896
-- id: dma2
-  type: stm32ldma
-  bus: sysbus
-  base_address: 1073873920
-- id: dmamux
-  type: stm32_dmamux
-  bus: sysbus
-  base_address: 1073874944
 - id: i2c1
   type: stm32f1_i2c
   bus: sysbus
   base_address: 1073763328
-- id: fdcanRAM
-  type: arraymemory
-  bus: sysbus
-  base_address: 1073785856
-- id: fdcan1
-  type: stm32_fdcan
-  bus: sysbus
-  base_address: 1073783808
 - id: timer1
   type: stm32_timer
   bus: sysbus
@@ -149,33 +133,3 @@ peripherals:
   type: stm32_timer
   bus: sysbus
   base_address: 1073825792
-- id: rcc
-  type: stm32l5_rcc
-  bus: sysbus
-  base_address: 1073876992
-- id: flashController
-  type: stm32wba_flashcontroller
-  bus: sysbus
-  base_address: 1073881088
-- id: rng
-  type: stm32_rng
-  bus: sysbus
-  base_address: 1108084736
-- id: adc1
-  type: stm32l5_adc
-  bus: sysbus
-  base_address: 1107460096
-- id: iwdg
-  type: stm32_independentwatchdog
-  bus: sysbus
-  base_address: 1073754112
-- id: usb
-  type: stm32_usb
-  bus: sysbus
-  base_address: 1073796096
-- id: usb_sram
-  type: arraymemory
-  bus: sysbus
-  base_address: 1073797120
-provenance:
-  generated_by: scripts/onboard_hw_targets.py

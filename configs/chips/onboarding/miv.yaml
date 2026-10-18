@@ -5,10 +5,10 @@
 # See the LICENSE file in the project root for full license information.
 
 name: miv
-arch: riscv
+arch: arm
 flash:
-  base: 1610612736
-  size: 262144B
+  base: 4096
+  size: 61440B
 ram:
   base: 2147483648
   size: 67108864B
@@ -33,5 +33,3 @@ peripherals:
   type: miv_coretimer
   bus: sysbus
   base_address: 1879064576
-provenance:
-  generated_by: scripts/onboard_hw_targets.py

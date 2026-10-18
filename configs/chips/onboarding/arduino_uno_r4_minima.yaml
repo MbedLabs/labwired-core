@@ -7,7 +7,7 @@
 name: arduino_uno_r4_minima
 arch: arm
 flash:
-  base: 0
+  base: 134217728
   size: 262144B
 ram:
   base: 536870912
@@ -45,46 +45,6 @@ peripherals:
   type: renesasra_gpiomisc
   bus: sysbus
   base_address: 1074007296
-- id: port0
-  type: renesasra4_gpio
-  bus: sysbus
-  base_address: 1074003968
-- id: port1
-  type: renesasra4_gpio
-  bus: sysbus
-  base_address: 1074004000
-- id: port2
-  type: renesasra4_gpio
-  bus: sysbus
-  base_address: 1074004032
-- id: port3
-  type: renesasra4_gpio
-  bus: sysbus
-  base_address: 1074004064
-- id: port4
-  type: renesasra4_gpio
-  bus: sysbus
-  base_address: 1074004096
-- id: port5
-  type: renesasra4_gpio
-  bus: sysbus
-  base_address: 1074004128
-- id: port6
-  type: renesasra4_gpio
-  bus: sysbus
-  base_address: 1074004160
-- id: port7
-  type: renesasra4_gpio
-  bus: sysbus
-  base_address: 1074004192
-- id: port8
-  type: renesasra4_gpio
-  bus: sysbus
-  base_address: 1074004224
-- id: port9
-  type: renesasra4_gpio
-  bus: sysbus
-  base_address: 1074004256
 - id: sysc_oscsf
   type: pythonperipheral
   bus: sysbus
@@ -103,5 +63,3 @@ peripherals:
   renode_type: renesasra_iic
   bus: sysbus
   base_address: 1074082048
-provenance:
-  generated_by: scripts/onboard_hw_targets.py

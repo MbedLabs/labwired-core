@@ -23,7 +23,7 @@
 | `spi1` | `0xb0001400` | `stub` |
 | `uartA` | `0xb0002000` | `ns16550` |
 | `uartB` | `0xb0002400` | `ns16550` |
-| `gpio` | `0xb0000c00` | `designware_apb_gpio` |
+| `gpio` | `0xb0000c00` | `quark_gpiocontroller` |
 | `pwm` | `0xb0000800` | `stub` |
 | `scss` | `0xb0800000` | `stub` |
 

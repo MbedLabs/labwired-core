@@ -7,7 +7,7 @@
 name: ezr32hg320
 arch: arm
 flash:
-  base: 0
+  base: 134217728
   size: 65536B
 ram:
   base: 536870912
@@ -45,5 +45,3 @@ peripherals:
   type: bitbanding
   bus: sysbus
   base_address: 1107296256
-provenance:
-  generated_by: scripts/onboard_hw_targets.py

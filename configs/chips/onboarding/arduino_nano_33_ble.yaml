@@ -7,7 +7,7 @@
 name: arduino_nano_33_ble
 arch: arm
 flash:
-  base: 0
+  base: 134217728
   size: 1048576B
 ram:
   base: 8388608
@@ -71,6 +71,11 @@ peripherals:
   base_address: 1073754112
 - id: spi2
   type: nrf52840_spi
+  # Nordic SPIM, stated explicitly. SpiRegisterLayout derives Default = Stm32,
+  # so omitting this did not mean "pick the right one" -- this nRF52 peripheral
+  # was answering reads with the STM32 SPI register map, silently.
+  config:
+    profile: "nrf52_spim"
   bus: sysbus
   base_address: 1073885184
 - id: gpio0
@@ -129,29 +134,3 @@ peripherals:
   type: nrf52840_ecb
   bus: sysbus
   base_address: 1073799168
-- id: egu0
-  type: nrf52840_egu
-  bus: sysbus
-  base_address: 1073823744
-- id: egu1
-  type: nrf52840_egu
-  bus: sysbus
-  base_address: 1073827840
-- id: egu2
-  type: nrf52840_egu
-  bus: sysbus
-  base_address: 1073831936
-- id: egu3
-  type: nrf52840_egu
-  bus: sysbus
-  base_address: 1073836032
-- id: egu4
-  type: nrf52840_egu
-  bus: sysbus
-  base_address: 1073840128
-- id: egu5
-  type: nrf52840_egu
-  bus: sysbus
-  base_address: 1073844224
-provenance:
-  generated_by: scripts/onboard_hw_targets.py

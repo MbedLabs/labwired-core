@@ -5,10 +5,10 @@
 # See the LICENSE file in the project root for full license information.
 
 name: sifive-fu540
-arch: riscv
+arch: arm
 flash:
-  base: 536870912
-  size: 33554432B
+  base: 16777216
+  size: 8192B
 ram:
   base: 2147483648
   size: 8589934592B
@@ -52,5 +52,3 @@ peripherals:
   type: opencoresi2c
   bus: sysbus
   base_address: 268632064
-provenance:
-  generated_by: scripts/onboard_hw_targets.py

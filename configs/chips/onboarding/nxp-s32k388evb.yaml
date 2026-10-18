@@ -61,10 +61,6 @@ peripherals:
   type: s32kxx_modeentrymodule
   bus: sysbus
   base_address: 1076740096
-- id: sema4
-  type: sema42
-  bus: sysbus
-  base_address: 1078329344
 - id: swt0
   type: s32k3xx_softwarewatchdogtimer
   bus: sysbus
@@ -224,38 +220,86 @@ peripherals:
   type: nxp_lpuart
   bus: sysbus
   base_address: 1078624256
-- id: can0
-  type: nxp_flexcan
+- id: mc_cgm_mux_0_css
+  type: pythonperipheral
   bus: sysbus
-  base_address: 1076903936
-- id: can1
-  type: nxp_flexcan
+  base_address: 1076724484
+- id: mc_cgm_mux_1_css
+  type: pythonperipheral
   bus: sysbus
-  base_address: 1076920320
-- id: can2
-  type: nxp_flexcan
+  base_address: 1076724548
+- id: mc_cgm_mux_2_css
+  type: pythonperipheral
   bus: sysbus
-  base_address: 1076936704
-- id: can3
-  type: nxp_flexcan
+  base_address: 1076724612
+- id: mc_cgm_mux_3_css
+  type: pythonperipheral
   bus: sysbus
-  base_address: 1076953088
-- id: can4
-  type: nxp_flexcan
+  base_address: 1076724676
+- id: mc_cgm_mux_4_css
+  type: pythonperipheral
   bus: sysbus
-  base_address: 1076969472
-- id: can5
-  type: nxp_flexcan
+  base_address: 1076724740
+- id: mc_cgm_mux_5_css
+  type: pythonperipheral
   bus: sysbus
-  base_address: 1076985856
-- id: can6
-  type: nxp_flexcan
+  base_address: 1076724804
+- id: mc_cgm_mux_6_css
+  type: pythonperipheral
   bus: sysbus
-  base_address: 1077002240
-- id: can7
-  type: nxp_flexcan
+  base_address: 1076724868
+- id: mc_cgm_mux_7_css
+  type: pythonperipheral
   bus: sysbus
-  base_address: 1077018624
+  base_address: 1076724932
+- id: mc_cgm_mux_8_css
+  type: pythonperipheral
+  bus: sysbus
+  base_address: 1076724996
+- id: mc_cgm_mux_9_css
+  type: pythonperipheral
+  bus: sysbus
+  base_address: 1076725060
+- id: mc_cgm_mux_10_css
+  type: pythonperipheral
+  bus: sysbus
+  base_address: 1076725124
+- id: mc_cgm_mux_11_css
+  type: pythonperipheral
+  bus: sysbus
+  base_address: 1076725188
+- id: mc_cgm_mux_12_css
+  type: pythonperipheral
+  bus: sysbus
+  base_address: 1076725252
+- id: mc_cgm_mux_13_css
+  type: pythonperipheral
+  bus: sysbus
+  base_address: 1076725316
+- id: mc_cgm_mux_14_css
+  type: pythonperipheral
+  bus: sysbus
+  base_address: 1076725380
+- id: mc_cgm_mux_15_css
+  type: pythonperipheral
+  bus: sysbus
+  base_address: 1076725444
+- id: mc_cgm_mux_16_css
+  type: pythonperipheral
+  bus: sysbus
+  base_address: 1076725508
+- id: mc_cgm_mux_17_css
+  type: pythonperipheral
+  bus: sysbus
+  base_address: 1076725572
+- id: mc_cgm_mux_18_css
+  type: pythonperipheral
+  bus: sysbus
+  base_address: 1076725636
+- id: mc_cgm_mux_19_css
+  type: pythonperipheral
+  bus: sysbus
+  base_address: 1076725700
 - id: gmac0
   type: stub
   renode_type: s32k3xx_gmac
@@ -266,10 +310,6 @@ peripherals:
   renode_type: s32k3xx_gmac
   bus: sysbus
   base_address: 1078493184
-- id: dma
-  type: nxp_edma
-  bus: sysbus
-  base_address: 1075888128
 - id: dma_channels0_11
   type: nxp_edma_channels
   bus: sysbus
@@ -291,30 +331,3 @@ peripherals:
   renode_type: nxp_xrdc
   bus: sysbus
   base_address: 1076330496
-- id: emios0
-  type: stub
-  renode_type: s32k3xx_emios
-  bus: sysbus
-  base_address: 1074298880
-- id: emios1
-  type: stub
-  renode_type: s32k3xx_emios
-  bus: sysbus
-  base_address: 1074315264
-- id: emios2
-  type: stub
-  renode_type: s32k3xx_emios
-  bus: sysbus
-  base_address: 1074331648
-- id: mc_cgm
-  type: stub
-  renode_type: s32k3xx_mc_cgm
-  bus: sysbus
-  base_address: 1076723712
-- id: plldig
-  type: stub
-  renode_type: s32k3xx_plldig
-  bus: sysbus
-  base_address: 1076756480
-provenance:
-  generated_by: scripts/onboard_hw_targets.py

@@ -20,9 +20,6 @@
 | Peripheral ID | Base Address | Type |
 |---|---|---|
 | `timer0` | `0xe0002000` | `litex_timer` |
-| `uart` | `0x60001800` | `litex_uart` |
-| `eth` | `0x60007800` | `litex_ethernet` |
 | `phy` | `0x00000000` | `ethernetphysicallayer` |
-| `spi` | `0x60005000` | `stub` |
 
-**Total Peripherals:** 5
+**Total Peripherals:** 2

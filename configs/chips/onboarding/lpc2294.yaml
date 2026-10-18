@@ -7,10 +7,10 @@
 name: lpc2294
 arch: arm
 flash:
-  base: 0
+  base: 134217728
   size: 65536B
 ram:
-  base: 0
+  base: 536870912
   size: 65536B
 peripherals:
 - id: can1
@@ -41,7 +41,3 @@ peripherals:
   type: lpc_ctimer
   bus: sysbus
   base_address: 3758112768
-provenance:
-  generated_by: scripts/onboard_hw_targets.py
-  parse_fallbacks:
-  - flash=internal_sram

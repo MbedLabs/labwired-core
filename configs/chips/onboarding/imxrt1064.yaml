@@ -7,10 +7,10 @@
 name: imxrt1064
 arch: arm
 flash:
-  base: 0
+  base: 134217728
   size: 524288B
 ram:
-  base: 0
+  base: 536870912
   size: 524288B
 peripherals:
 - id: wdog1
@@ -129,34 +129,10 @@ peripherals:
   type: k6xf_ethernet
   bus: sysbus
   base_address: 1076707328
-- id: flex_spi
-  type: imxrt_flexspi
-  bus: sysbus
-  base_address: 1076527104
 - id: flex_spi2
   type: imxrt_flexspi
   bus: sysbus
   base_address: 1076510720
-- id: lpspi1
-  type: stub
-  renode_type: imxrt_lpspi
-  bus: sysbus
-  base_address: 1077493760
-- id: lpspi2
-  type: stub
-  renode_type: imxrt_lpspi
-  bus: sysbus
-  base_address: 1077510144
-- id: lpspi3
-  type: stub
-  renode_type: imxrt_lpspi
-  bus: sysbus
-  base_address: 1077526528
-- id: lpspi4
-  type: stub
-  renode_type: imxrt_lpspi
-  bus: sysbus
-  base_address: 1077542912
 - id: adc1
   type: imxrt_adc
   bus: sysbus
@@ -181,7 +157,3 @@ peripherals:
   type: imxrt_pwm
   bus: sysbus
   base_address: 1077837824
-provenance:
-  generated_by: scripts/onboard_hw_targets.py
-  parse_fallbacks:
-  - flash=itcm

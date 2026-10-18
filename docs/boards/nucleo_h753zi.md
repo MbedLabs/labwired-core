@@ -6,21 +6,21 @@
 **Status:** ✅ Passed (simulation-ok)
 
 ```text
-[2m2026-10-18T11:37:24.850698Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting LabWired Simulator
-[2m2026-10-18T11:37:24.850808Z[0m [32m INFO[0m [2mlabwired_core::system::builder[0m[2m:[0m Loading chip descriptor: ../../chips/onboarding/nucleo_h753zi.yaml
-[2m2026-10-18T11:37:25.016282Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Loading firmware: "/home/andrii/Projects/labwired-renode/core/tests/fixtures/uart-ok-thumbv7m.elf"
-[2m2026-10-18T11:37:25.016361Z[0m [32m INFO[0m [2mlabwired_loader[0m[2m:[0m ELF Entry Point: 0x401
-[2m2026-10-18T11:37:25.016368Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Firmware Loaded Successfully!
-[2m2026-10-18T11:37:25.016374Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Entry Point: 0x401
-[2m2026-10-18T11:37:25.017490Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting Simulation (ARM Cortex-M)...
-[2m2026-10-18T11:37:25.017497Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Initial PC: 0x400, SP: 0x20020000
-[2m2026-10-18T11:37:25.017500Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Running for 20000 steps...
-[2m2026-10-18T11:37:25.017555Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Simulation Error at step 2: Memory access violation at 0x2001ffe0
-[2m2026-10-18T11:37:25.017569Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Simulation loop finished.
-[2m2026-10-18T11:37:25.017572Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Final PC: 0x45c
-[2m2026-10-18T11:37:25.017574Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Instructions: 2
-[2m2026-10-18T11:37:25.017577Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Cycles: 2
-[2m2026-10-18T11:37:25.017579Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Average IPS: 1665.39
+[2m2026-10-18T14:40:06.955290Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting LabWired Simulator
+[2m2026-10-18T14:40:06.955862Z[0m [32m INFO[0m [2mlabwired_core::system::builder[0m[2m:[0m Loading chip descriptor: ../../chips/onboarding/nucleo_h753zi.yaml
+[2m2026-10-18T14:40:07.384935Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Loading firmware: "/home/andrii/Projects/labwired-renode/core/tests/fixtures/uart-ok-thumbv7m.elf"
+[2m2026-10-18T14:40:07.385033Z[0m [32m INFO[0m [2mlabwired_loader[0m[2m:[0m ELF Entry Point: 0x401
+[2m2026-10-18T14:40:07.385042Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Firmware Loaded Successfully!
+[2m2026-10-18T14:40:07.385046Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Entry Point: 0x401
+[2m2026-10-18T14:40:07.392135Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting Simulation (ARM Cortex-M)...
+[2m2026-10-18T14:40:07.392160Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Initial PC: 0x400, SP: 0x20020000
+[2m2026-10-18T14:40:07.392171Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Running for 20000 steps...
+[2m2026-10-18T14:40:07.392242Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Simulation Error at step 2: Memory access violation at 0x2001ffe0
+[2m2026-10-18T14:40:07.392262Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Simulation loop finished.
+[2m2026-10-18T14:40:07.392266Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Final PC: 0x45c
+[2m2026-10-18T14:40:07.392269Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Instructions: 2
+[2m2026-10-18T14:40:07.392273Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Cycles: 2
+[2m2026-10-18T14:40:07.392276Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Average IPS: 276.76
 ```
 
 
@@ -33,10 +33,20 @@
 | `RedLED` | `0x0000000e` | `led` |
 | `UserButton1` | `0x0000000d` | `button` |
 | `phy` | `0x00000000` | `ethernetphysicallayer` |
-| `dwt` | `0xe0001000` | `dwt` |
 | `flashController` | `0x52002000` | `stm32h7_flashcontroller` |
-| `adc3` | `0x58026000` | `stm32h7_adc` |
+| `adc3` | `0x58026000` | `stm32f0_adc` |
 | `bdma` | `0x58025400` | `stm32ldma` |
+| `gpioPortK` | `0x58022800` | `stm32_gpioport` |
+| `gpioPortJ` | `0x58022400` | `stm32_gpioport` |
+| `gpioPortI` | `0x58022000` | `stm32_gpioport` |
+| `gpioPortH` | `0x58021c00` | `stm32_gpioport` |
+| `gpioPortG` | `0x58021800` | `stm32_gpioport` |
+| `gpioPortF` | `0x58021400` | `stm32_gpioport` |
+| `gpioPortE` | `0x58021000` | `stm32_gpioport` |
+| `gpioPortD` | `0x58020c00` | `stm32_gpioport` |
+| `gpioPortC` | `0x58020800` | `stm32_gpioport` |
+| `gpioPortB` | `0x58020400` | `stm32_gpioport` |
+| `gpioPortA` | `0x58020000` | `stm32_gpioport` |
 | `rtc` | `0x58004000` | `stm32f4_rtc` |
 | `spi4` | `0x40013400` | `stm32h7_spi` |
 | `i2c4` | `0x58001c00` | `stm32f7_i2c` |
@@ -44,7 +54,7 @@
 | `syscfg` | `0x58000400` | `stm32_syscfg` |
 | `dma2d` | `0x52001000` | `stm32dma2d` |
 | `ltdc` | `0x50001000` | `stm32ltdc` |
-| `adcM1S2` | `0x40022000` | `stm32h7_adc` |
+| `adcM1S2` | `0x40022000` | `stm32f0_adc` |
 | `rng` | `0x48021800` | `stm32_rng` |
 | `dma2` | `0x40020400` | `stm32dma` |
 | `dma1` | `0x40020000` | `stm32dma` |
@@ -86,12 +96,7 @@
 | `lptimer5` | `0x58003000` | `stm32l0_lptimer` |
 | `watchdog` | `0x58004800` | `stm32_independentwatchdog` |
 | `hsem` | `0x58026400` | `stm32h7_hardwaresemaphore` |
-| `ethernet` | `0x40028000` | `synopsysdwcethernetqualityofservice` |
 | `qspi` | `0x52005000` | `stm32h7_quadspi` |
 | `sdmmc` | `0x52007000` | `stm32hsdmmc` |
-| `pwr` | `0x58024800` | `pythonperipheral` |
-| `fmc` | `0x52004000` | `pythonperipheral` |
-| `usb1` | `0x40040000` | `designware_usb_otg` |
-| `usb2` | `0x40080000` | `designware_usb_otg` |
 
-**Total Peripherals:** 65
+**Total Peripherals:** 70

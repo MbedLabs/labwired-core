@@ -1,33 +1,9 @@
-# LabWired - Firmware Simulation Platform
-# Copyright (C) 2026 Andrii Shylenko
-#
-# This software is released under the MIT License.
-# See the LICENSE file in the project root for full license information.
-
 name: litex_nexys_video_vexriscv_linux
-arch: riscv
+arch: arm
 flash:
-  base: 0
-  size: 65536B
+  base: 536870912
+  size: 1048576
 ram:
   base: 268435456
   size: 8192B
-peripherals:
-- id: ctrl
-  type: litex_soc_controller_csr32
-  bus: sysbus
-  base_address: 4026531840
-- id: uart
-  type: litex_uart
-  bus: sysbus
-  base_address: 4026535936
-- id: timer0
-  type: litex_timer_csr32
-  bus: sysbus
-  base_address: 4026537984
-- id: mmc_controller
-  type: litesdcard_csr32
-  bus: sysbus
-  base_address: 4026552320
-provenance:
-  generated_by: scripts/onboard_hw_targets.py
+peripherals: []

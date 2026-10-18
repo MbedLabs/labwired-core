@@ -32,8 +32,6 @@
 | `i2c1` | `0x2010b000` | `stub` |
 | `can0` | `0x2010c000` | `stub` |
 | `can1` | `0x2010d000` | `stub` |
-| `mac0` | `0x20110000` | `cadencegem` |
-| `mac1` | `0x20112000` | `cadencegem` |
 | `gpio0` | `0x20120000` | `mpfs_gpio` |
 | `gpio1` | `0x20121000` | `mpfs_gpio` |
 | `gpio2` | `0x20122000` | `mpfs_gpio` |
@@ -47,7 +45,6 @@
 | `envmCfg` | `0x20200000` | `stub` |
 | `usb` | `0x20201000` | `stub` |
 | `pcie0` | `0x53004000` | `stub` |
-| `pcie1` | `0x53008000` | `stub` |
 | `pcieRC0` | `0x00000000` | `stub` |
 | `pcieRC1` | `0x00000000` | `stub` |
 | `pcieMem` | `0x00000001` | `stub` |
@@ -60,4 +57,4 @@
 | `CacheConfig_WayEnable` | `0x02010008` | `pythonperipheral` |
 | `TopSystemRegisters` | `0x20002000` | `stub` |
 
-**Total Peripherals:** 40
+**Total Peripherals:** 37

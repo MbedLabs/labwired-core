@@ -13,15 +13,3 @@
   "ram_base_present": true
 }
 ```
-
-
-## Hardware Coverage Report
-
-| Peripheral ID | Base Address | Type |
-|---|---|---|
-| `ctrl` | `0xf0000000` | `litex_soc_controller_csr32` |
-| `uart` | `0xf0001000` | `litex_uart` |
-| `timer0` | `0xf0001800` | `litex_timer_csr32` |
-| `mmc_controller` | `0xf0005000` | `litesdcard_csr32` |
-
-**Total Peripherals:** 4

@@ -13,14 +13,3 @@
   "ram_base_present": true
 }
 ```
-
-
-## Hardware Coverage Report
-
-| Peripheral ID | Base Address | Type |
-|---|---|---|
-| `timer0` | `0x60002800` | `litex_timer` |
-| `valenty` | `0x60004800` | `valentyusb` |
-| `spi` | `0x60005000` | `stub` |
-
-**Total Peripherals:** 3

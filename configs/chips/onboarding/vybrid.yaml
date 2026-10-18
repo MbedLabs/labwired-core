@@ -7,11 +7,11 @@
 name: vybrid
 arch: arm
 flash:
-  base: 0
+  base: 134217728
   size: 524288B
 ram:
-  base: 2147483648
-  size: 268435456B
+  base: 1056964608
+  size: 524288B
 peripherals:
 - id: uart0
   type: imxuart
@@ -69,5 +69,3 @@ peripherals:
   type: fslnand
   bus: sysbus
   base_address: 1074659328
-provenance:
-  generated_by: scripts/onboard_hw_targets.py
