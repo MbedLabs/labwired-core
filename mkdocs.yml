@@ -96,6 +96,7 @@ nav:
     - CI Integration Templates: integration-templates/README.md
     - Extend LabWired:
       - Add a peripheral block (YAML): howto/extend/add-a-peripheral.md
+      - Add an I2C sensor (data + Python): howto/extend/python-device.md
 
   - Reference:
     - Configuration (YAML): configuration_reference.md
