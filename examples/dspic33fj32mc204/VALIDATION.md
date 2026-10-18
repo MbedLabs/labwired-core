@@ -51,15 +51,49 @@ cargo test -p labwired-core --test strict_onboarding
 cargo test -p labwired-core --test board_coverage_ratchet      # 4 passed
 cargo test -p labwired-core --test session_catalog             # 1 passed (48-chip catalog incl. PIC24)
 cargo test -p labwired-core --test chip_conformance            # 8 passed (declared-only board regenerated)
+cargo test -p labwired-core --test cpu_trace_conformance       # 3 passed (Pic24 emits the full trace contract)
 cargo test -p labwired-core --test register_compliance         # 1 passed
 cargo test -p labwired-core --test register_coverage           # 1 passed
 cargo test -p labwired-core --lib one_arch_policy              # 8 passed
 cargo test -p labwired-core --lib cpu_hz                       # 4 passed
+cargo test -p labwired-core --lib bus_proof_matrix             # 10 passed (uart proven; spi/i2c declared none)
+python3 scripts/generate_firmware_exercise_matrix.py --check   # clean (entry added)
 ```
 
 (Environment note: strict_onboarding also builds firmware for every other chip;
 those builds need cross-targets not installed in the authoring sandbox — the
 failures listed there are environmental and do not involve this chip.)
+
+## Unsupported-instruction audit
+
+```bash
+core/scripts/unsupported_instruction_audit.sh \
+  --firmware examples/dspic33fj32mc204/firmware/dspic33fj32mc204-uart-smoke.elf \
+  --system   examples/dspic33fj32mc204/system.yaml \
+  --max-steps 64 --out-dir out/audit
+#   unknown_thumb16: 0 · unhandled_thumb32: 0 · unknown_riscv: 0
+#   unsupported_total: 0   (simulator exit 0)
+```
+
+The audit's Thumb/RISC-V counters are zero because the M0 core never degrades an
+unknown opcode silently: anything outside the modelled subset raises a
+`DecodeError`, which would fail the io-smoke rather than appear as a skipped
+instruction. Per-instruction telemetry for the audit's `instructions_executed`
+field is not emitted by the M0 core yet (M1 item).
+
+## Console evidence (`labwired run`)
+
+```bash
+labwired run --chip configs/chips/dspic33fj32mc204.yaml --firmware <elf> --max-steps 200
+#   UART: H
+#   labwired-cli run (pic24): reached --max-steps 200; pc=0x00000008
+
+labwired --firmware <elf> --system examples/dspic33fj32mc204/system.yaml --max-steps 64
+#   UART: H
+#   Final PC: 0x8
+#   Total Instructions: 64
+#   Total Cycles: 120   (56 self-loop BRA × 2 + 8 single-cycle instructions)
+```
 
 ## Method notes
 

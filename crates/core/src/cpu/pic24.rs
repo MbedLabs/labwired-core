@@ -121,6 +121,14 @@ impl Pic24 {
         }
     }
 
+    /// Load raw instruction-slot bytes at a word address (Harvard flash), the
+    /// PIC24 counterpart of `Avr::load_flash` for fixture harnesses.
+    pub fn load_flash(&mut self, addr_word: u32, bytes: &[u8]) {
+        let off = addr_word as usize * INSTR_SLOT_BYTES;
+        assert!(off + bytes.len() <= FLASH_BYTES, "fixture exceeds flash");
+        self.flash[off..off + bytes.len()].copy_from_slice(bytes);
+    }
+
     /// Load a program image (engine path). Segments are copied into flash at
     /// their start address; the entry point becomes the reset PC.
     pub fn load_program_image(&mut self, image: &crate::memory::ProgramImage) {
@@ -273,13 +281,41 @@ impl Cpu for Pic24 {
     fn step(
         &mut self,
         bus: &mut dyn Bus,
-        _observers: &[Arc<dyn SimulationObserver>],
+        observers: &[Arc<dyn SimulationObserver>],
         _config: &SimulationConfig,
     ) -> SimResult<()> {
+        // The per-instruction trace contract (see `SimulationObserver`): all
+        // three notifications, in order, gated on anyone observing.
+        let observed = !observers.is_empty();
+        let pc = self.pc;
         let word = self.fetch()?;
+        if observed {
+            for obs in observers {
+                obs.on_step_start(pc, word);
+            }
+        }
+
         let used = self.execute(word)?;
         self.cycles += u64::from(used);
         crate::advance_batch_cycle(bus, u64::from(used));
+
+        if observed {
+            // W0-W15, then the standard trailer: SP (W15), then PC.
+            let mut registers = [0u32; 18];
+            for (slot, value) in registers.iter_mut().take(16).zip(self.w.iter()) {
+                *slot = u32::from(*value);
+            }
+            registers[16] = u32::from(self.w[15]);
+            registers[17] = self.pc;
+
+            crate::emit_trace_event(
+                observers,
+                labwired_hw_trace::TraceEvent::InstructionRetired { pc, opcode: word },
+            );
+            for obs in observers {
+                obs.on_step_end(used, &registers);
+            }
+        }
         Ok(())
     }
 
