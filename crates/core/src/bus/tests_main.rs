@@ -3554,6 +3554,9 @@ fn test_flash_boot_alias_read_and_write() {
         flash: LinearMemory::new_erased(256, 0x0800_0000),
         memory_policy: crate::bus::memory_policy::MemoryPolicyState::default(),
         memory_policy_bypass: false,
+        debug_watches: Vec::new(),
+        debug_watch_hit: Cell::new(None),
+        debug_watch_host_bypass: std::cell::Cell::new(false),
         ram: LinearMemory::new(256, 0x2000_0000),
         extra_mem: Vec::new(),
         peripherals: Vec::new(),
@@ -3665,6 +3668,9 @@ fn h5_flash_bus(gate: bool) -> SystemBus {
         flash,
         memory_policy: crate::bus::memory_policy::MemoryPolicyState::default(),
         memory_policy_bypass: false,
+        debug_watches: Vec::new(),
+        debug_watch_hit: Cell::new(None),
+        debug_watch_host_bypass: std::cell::Cell::new(false),
         ram: LinearMemory::new(256, 0x2000_0000),
         extra_mem: Vec::new(),
         peripherals: vec![PeripheralEntry {
@@ -3942,6 +3948,9 @@ fn h5_rww_bus(gate: bool) -> SystemBus {
         flash,
         memory_policy: crate::bus::memory_policy::MemoryPolicyState::default(),
         memory_policy_bypass: false,
+        debug_watches: Vec::new(),
+        debug_watch_hit: Cell::new(None),
+        debug_watch_host_bypass: std::cell::Cell::new(false),
         ram: LinearMemory::new(0x1000, 0x2000_0000),
         extra_mem: Vec::new(),
         peripherals: vec![PeripheralEntry {
@@ -4209,6 +4218,9 @@ fn test_peripheral_range_index_lookup() {
         flash: LinearMemory::new_erased(256, 0x0800_0000),
         memory_policy: crate::bus::memory_policy::MemoryPolicyState::default(),
         memory_policy_bypass: false,
+        debug_watches: Vec::new(),
+        debug_watch_hit: Cell::new(None),
+        debug_watch_host_bypass: std::cell::Cell::new(false),
         ram: LinearMemory::new(256, 0x2000_0000),
         extra_mem: Vec::new(),
         peripherals: vec![
@@ -4349,6 +4361,9 @@ fn test_dma_tick_executes_copy_and_raises_irq() {
         flash: LinearMemory::new_erased(256, 0x0800_0000),
         memory_policy: crate::bus::memory_policy::MemoryPolicyState::default(),
         memory_policy_bypass: false,
+        debug_watches: Vec::new(),
+        debug_watch_hit: Cell::new(None),
+        debug_watch_host_bypass: std::cell::Cell::new(false),
         ram: LinearMemory::new(256, 0x2000_0000),
         extra_mem: Vec::new(),
         peripherals: vec![PeripheralEntry {
@@ -6104,4 +6119,272 @@ fn host_writes_bypass_the_policy() {
     bus.memory_policy.flash = crate::bus::CpuWritePolicy::Fault;
     bus.flash.write_u8(0x0800_1000, 0xAB); // loader path — direct LinearMemory
     assert_eq!(bus.flash.read_u8(0x0800_1000), Some(0xAB));
+}
+
+#[test]
+fn debug_watch_store_latches_and_is_taken_once() {
+    let mut bus = SystemBus::new();
+    assert!(bus.add_debug_watch(0x2000_0100, 4, false, true));
+    assert_eq!(bus.take_debug_watch_hit(), None);
+    bus.write_u32(0x2000_0104, 0xAABB_CCDD).unwrap();
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        None,
+        "a store past the watched range must not latch"
+    );
+    bus.write_u8(0x2000_0100, 0xAB).unwrap();
+    assert_eq!(bus.take_debug_watch_hit(), Some(0x2000_0100));
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        None,
+        "take consumes the hit exactly once"
+    );
+}
+
+#[test]
+fn debug_watch_u64_store_latches_too() {
+    let mut bus = SystemBus::new();
+    assert!(bus.add_debug_watch(0x2000_0100, 4, false, true));
+    crate::Bus::write_u64(&mut bus, 0x2000_0100, 0xDEAD_BEEF_DEAD_BEEF).unwrap();
+    assert_eq!(bus.take_debug_watch_hit(), Some(0x2000_0100));
+}
+
+#[test]
+fn debug_watch_u16_store_latches_too() {
+    let mut bus = SystemBus::new();
+    assert!(bus.add_debug_watch(0x2000_0100, 4, false, true));
+    bus.write_u16(0x2000_0102, 0xBEEF).unwrap();
+    assert_eq!(bus.take_debug_watch_hit(), Some(0x2000_0102));
+}
+
+#[test]
+fn debug_watch_latch_keeps_the_first_hit() {
+    let mut bus = SystemBus::new();
+    assert!(bus.add_debug_watch(0x2000_0100, 4, false, true));
+    assert!(bus.add_debug_watch(0x2000_0200, 4, false, true));
+    bus.write_u32(0x2000_0100, 1).unwrap();
+    bus.write_u32(0x2000_0200, 2).unwrap();
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        Some(0x2000_0100),
+        "a second in-range store must not overwrite the pending hit"
+    );
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        None,
+        "the latch holds exactly the first hit"
+    );
+}
+
+#[test]
+fn debug_watch_read_u64_latches() {
+    let mut bus = SystemBus::new();
+    assert!(bus.add_debug_watch(0x2000_0100, 8, true, false));
+    let _ = crate::Bus::read_u64(&bus, 0x2000_0100).unwrap();
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        Some(0x2000_0100),
+        "a 64-bit CPU load (Cortex-A7 w=8) is watched like any other width"
+    );
+}
+
+#[test]
+fn debug_watch_latches_a_policy_rejected_store() {
+    let mut bus = SystemBus::new();
+    assert!(bus.add_debug_watch(0x2000_0100, 4, false, true));
+    bus.memory_policy.ram = crate::bus::CpuWritePolicy::Fault;
+    assert!(bus.write_u32(0x2000_0100, 0xDEAD_BEEF).is_err());
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        Some(0x2000_0100),
+        "an attempted store latches even when the policy rejects it"
+    );
+}
+
+#[test]
+fn debug_watch_read_only_fires_on_loads() {
+    let mut bus = SystemBus::new();
+    assert!(bus.add_debug_watch(0x2000_0200, 8, true, false));
+    let _ = bus.read_u32(0x2000_0200).unwrap();
+    assert_eq!(bus.take_debug_watch_hit(), Some(0x2000_0200));
+    let _ = bus.read_u16(0x2000_0202).unwrap();
+    assert_eq!(bus.take_debug_watch_hit(), Some(0x2000_0202));
+    let _ = bus.read_u8(0x2000_0206).unwrap();
+    assert_eq!(bus.take_debug_watch_hit(), Some(0x2000_0206));
+    bus.write_u32(0x2000_0204, 0x1234_5678).unwrap();
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        None,
+        "a read-only watch must ignore stores inside its range"
+    );
+}
+
+#[test]
+fn debug_watch_2kib_range_is_one_watch() {
+    let mut bus = SystemBus::new();
+    assert!(bus.add_debug_watch(0x2000_0000, 2048, false, true));
+    bus.write_u32(0x2000_07FC, 0x1122_3344).unwrap();
+    assert_eq!(bus.take_debug_watch_hit(), Some(0x2000_07FC));
+}
+
+#[test]
+fn debug_watch_cap_is_16_and_remove_frees_a_slot() {
+    let mut bus = SystemBus::new();
+    for i in 0..16u64 {
+        assert!(bus.add_debug_watch(0x2000_1000 + i * 16, 4, false, true));
+    }
+    assert!(
+        !bus.add_debug_watch(0x2000_2000, 4, false, true),
+        "17th watch is rejected at the cap"
+    );
+    assert!(
+        !bus.add_debug_watch(0x2000_2000, 0, false, true),
+        "zero-length watch is rejected"
+    );
+    assert!(
+        !bus.add_debug_watch(0x2000_2000, 4097, false, true),
+        "watches wider than 4 KiB are rejected"
+    );
+    assert!(bus.remove_debug_watch(0x2000_1000, 4, false, true));
+    assert!(
+        !bus.remove_debug_watch(0x2000_1000, 8, false, true),
+        "a field mismatch is not a match"
+    );
+    assert!(bus.add_debug_watch(0x2000_2000, 4, false, true));
+    bus.clear_debug_watches();
+    assert!(
+        !bus.remove_debug_watch(0x2000_2000, 4, false, true),
+        "clear drops every watch"
+    );
+}
+
+#[test]
+fn debug_watch_clear_drops_a_pending_hit() {
+    let mut bus = SystemBus::new();
+    assert!(bus.add_debug_watch(0x2000_0100, 4, false, true));
+    bus.write_u8(0x2000_0100, 0xAB).unwrap();
+    bus.clear_debug_watches();
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        None,
+        "a cleared watch cannot leave a stale hit to report"
+    );
+}
+
+#[test]
+fn debug_watch_remove_drops_an_uncovered_pending_hit() {
+    let mut bus = SystemBus::new();
+    assert!(bus.add_debug_watch(0x2000_0100, 4, false, true)); // A
+    assert!(bus.add_debug_watch(0x2000_0200, 4, false, true)); // B
+
+    // Hit on A; removing A leaves no watch covering the pending hit.
+    bus.write_u8(0x2000_0100, 0xAB).unwrap();
+    assert!(bus.remove_debug_watch(0x2000_0100, 4, false, true));
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        None,
+        "removing the hit watch clears the pending hit"
+    );
+
+    // Hit on B; removing an unrelated watch (A) keeps the covered hit ...
+    bus.write_u8(0x2000_0200, 0xCD).unwrap();
+    assert!(bus.add_debug_watch(0x2000_0100, 4, false, true));
+    assert!(bus.remove_debug_watch(0x2000_0100, 4, false, true));
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        Some(0x2000_0200),
+        "a hit a remaining watch still covers survives an unrelated removal"
+    );
+
+    // ... and the hit is cleared once its own (only) covering watch goes.
+    bus.write_u8(0x2000_0200, 0xEF).unwrap();
+    assert!(bus.remove_debug_watch(0x2000_0200, 4, false, true));
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        None,
+        "removing the covering watch clears the pending hit"
+    );
+}
+
+#[test]
+fn debug_watch_remove_keeps_an_overlapping_hit() {
+    let mut bus = SystemBus::new();
+    assert!(bus.add_debug_watch(0x2000_0100, 4, false, true));
+    assert!(bus.add_debug_watch(0x2000_0100, 8, false, true));
+    bus.write_u8(0x2000_0100, 0xAB).unwrap();
+    assert!(bus.remove_debug_watch(0x2000_0100, 4, false, true));
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        Some(0x2000_0100),
+        "ANY remaining watch covering the address keeps the hit"
+    );
+}
+
+#[test]
+fn debug_watch_host_bypass_suppresses_latching() {
+    let mut bus = SystemBus::new();
+    assert!(bus.add_debug_watch(0x2000_0100, 4, false, true));
+    bus.debug_watch_host_bypass.set(true);
+    bus.write_u8(0x2000_0100, 0xAB).unwrap();
+    let _ = bus.read_u8(0x2000_0100).unwrap();
+    let _ = crate::Bus::read_u64(&bus, 0x2000_0100).unwrap();
+    assert_eq!(bus.take_debug_watch_hit(), None);
+    bus.debug_watch_host_bypass.set(false);
+    bus.write_u8(0x2000_0100, 0xCD).unwrap();
+    assert_eq!(bus.take_debug_watch_hit(), Some(0x2000_0100));
+}
+
+#[test]
+fn dma_transfers_do_not_latch_debug_watches() {
+    let mut bus = SystemBus::new();
+    assert!(bus.add_debug_watch(0x2000_0100, 8, true, true));
+
+    // A DMA store into the watched range: the controller is its own bus
+    // master, not the CPU, so the DWT-style watch must ignore it.
+    let write = crate::DmaRequest {
+        src_addr: 0,
+        addr: 0x2000_0100,
+        val: 0xAB,
+        direction: crate::DmaDirection::Write,
+        transform: None,
+        remaining: None,
+    };
+    bus.execute_dma_request(&write).unwrap();
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        None,
+        "a DMA store must not latch a store watch"
+    );
+
+    // A DMA load from the watched range: same rule for the read side.
+    let read = crate::DmaRequest {
+        src_addr: 0,
+        addr: 0x2000_0100,
+        val: 0,
+        direction: crate::DmaDirection::Read,
+        transform: None,
+        remaining: None,
+    };
+    bus.execute_dma_request(&read).unwrap();
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        None,
+        "a DMA load must not latch a read watch"
+    );
+
+    // The bypass must be restored: a CPU store still latches.
+    bus.write_u8(0x2000_0100, 0xCD).unwrap();
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        Some(0x2000_0100),
+        "the DMA bypass must not leak into the CPU path"
+    );
+}
+
+#[test]
+fn debug_watch_default_bus_has_no_hit() {
+    let mut bus = SystemBus::new();
+    bus.write_u8(0x2000_0100, 0xAB).unwrap();
+    let _ = bus.read_u32(0x2000_0100).unwrap();
+    assert_eq!(bus.take_debug_watch_hit(), None);
 }

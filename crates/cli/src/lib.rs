@@ -37,6 +37,8 @@ mod dispatch;
 /// `execute_test_loop` and the `TestExecutionContext` it takes.
 mod execute;
 mod gpio_observer;
+/// `--log-timestamps` prefix state ([`log_ts::prefix`] / the `eventln!` macro).
+pub(crate) mod log_ts;
 /// The three run-outcome writers (`write_outputs`, `write_config_error_outputs`,
 /// `write_junit_xml`), all deriving from `artifacts::TestOutcome`.
 mod outputs;
@@ -442,6 +444,13 @@ pub struct RunArgs {
     /// sleeps when virtual time (`cycles/cpu_hz`) is at least 1 ms ahead of wall.
     #[arg(long = "time-mode", value_name = "MODE", default_value_t = labwired_core::HostTimeMode::MaxSpeed)]
     pub time_mode: labwired_core::HostTimeMode,
+
+    /// Prefix human-readable stderr event/log lines with virtual and/or real
+    /// timestamps: `[t=virt=<sim time>|real=<wall since start>]`. Virtual time
+    /// is deterministic (cycles / cpu_hz); real time is not. Default `none`
+    /// leaves all outputs byte-identical.
+    #[arg(long, value_enum, default_value_t = crate::log_ts::LogTimestamps::None)]
+    pub log_timestamps: crate::log_ts::LogTimestamps,
 }
 
 impl RunArgs {
@@ -744,6 +753,13 @@ struct TestArgs {
     /// advancing from one that is hung. No flag → no writes, no clock reads.
     #[arg(long = "heartbeat-file", value_name = "PATH")]
     heartbeat_file: Option<PathBuf>,
+
+    /// Prefix human-readable stderr event/log lines with virtual and/or real
+    /// timestamps: `[t=virt=<sim time>|real=<wall since start>]`. Virtual time
+    /// is deterministic (cycles / cpu_hz); real time is not. Default `none`
+    /// leaves all outputs byte-identical.
+    #[arg(long, value_enum, default_value_t = crate::log_ts::LogTimestamps::None)]
+    pub log_timestamps: crate::log_ts::LogTimestamps,
 }
 
 /// Unified error response for agent consumption
@@ -1462,6 +1478,9 @@ fn handle_load_error<C: labwired_core::Cpu>(
         None,
         None,
         // No machine: no policy report either.
+        None,
+        // No machine: no run-level times either.
+        None,
         None,
         None,
         // No machine: no CAN bridges ran.
@@ -2979,6 +2998,8 @@ mod test_outcome_golden_tests {
             footprint: None,
             memory: None,
             memory_policy: None,
+            virtual_time_ns: None,
+            host_time_ns: None,
             metrics: None,
             rtt: None,
             semihosting: None,
@@ -3067,6 +3088,24 @@ mod test_outcome_golden_tests {
             })
         );
         assert!(json["memory_policy"]["flash"]["first"]["addr"].is_number());
+    }
+
+    /// The run-level `--log-timestamps` pair on disk: both keys present and
+    /// numeric when set, both absent (not null) when `None`, so a default run
+    /// stays byte-identical to the pre-`--log-timestamps` artifact.
+    #[test]
+    fn golden_log_timestamp_block() {
+        let mut outcome = synthetic_outcome();
+        outcome.virtual_time_ns = Some(1_500_000_000);
+        outcome.host_time_ns = Some(123_456_789);
+        let json = serde_json::to_value(&outcome).unwrap();
+        assert_eq!(json["virtual_time_ns"], 1_500_000_000u64);
+        assert_eq!(json["host_time_ns"], 123_456_789u64);
+        outcome.virtual_time_ns = None;
+        outcome.host_time_ns = None;
+        let json = serde_json::to_value(&outcome).unwrap();
+        assert!(json.get("virtual_time_ns").is_none());
+        assert!(json.get("host_time_ns").is_none());
     }
 
     #[test]

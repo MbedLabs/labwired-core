@@ -77,7 +77,7 @@ pub fn render(v: &FaultVerdict) -> String {
 
 /// Print the verdict to stderr (stdout carries firmware UART and `--json`).
 pub fn eprint(v: &FaultVerdict) {
-    eprintln!("{}", render(v));
+    eprintln!("{}{}", crate::log_ts::prefix(), render(v));
 }
 
 #[cfg(test)]
