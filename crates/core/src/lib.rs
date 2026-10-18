@@ -73,6 +73,8 @@ pub enum Arch {
     XtensaLx7,
     /// AVR8 (ATmega328P-class).
     Avr,
+    /// PIC24 / dsPIC33 (dsPIC33FJ32MC204-class, M0 subset).
+    Pic24,
     Unknown,
 }
 
