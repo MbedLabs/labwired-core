@@ -97,6 +97,7 @@ nav:
     - Extend LabWired:
       - Add a peripheral block (YAML): howto/extend/add-a-peripheral.md
       - Add an I2C sensor (data + Python): howto/extend/python-device.md
+      - Add a board (chip + manifest): howto/extend/add-a-board.md
 
   - Reference:
     - Configuration (YAML): configuration_reference.md
