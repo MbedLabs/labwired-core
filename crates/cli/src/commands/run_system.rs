@@ -152,8 +152,7 @@ pub(crate) fn run_firmware_with_system(
             format!(
                 "run --system currently supports ARM manifests only; got arch {:?} from chip '{}' \
                  (RISC-V and Xtensa boot paths are a follow-up)",
-                chip.arch,
-                manifest.chip
+                chip.arch, manifest.chip
             ),
             None,
             EXIT_CONFIG_ERROR,

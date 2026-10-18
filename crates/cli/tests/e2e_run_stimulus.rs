@@ -346,10 +346,8 @@ fn system_run_resolves_descriptor_paths_against_the_chip_file() {
 /// the inventory is meant to be read before a run.
 #[test]
 fn system_run_resolves_a_builtin_chip_id() {
-    let dir = std::env::temp_dir().join(format!(
-        "labwired-run-builtin-chip-{}",
-        std::process::id()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("labwired-run-builtin-chip-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
