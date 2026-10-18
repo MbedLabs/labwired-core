@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- GDB watchpoints (`Z2`/`Z3`/`Z4`, write/read/access) on the RSP server,
+  software-tracked by the bus accessors: ranges up to 4 KiB (a single 2 KiB
+  object fits one request) and 16 concurrent ranges, debugger `M`/`m` never
+  tripping them, and stops that are post-retirement (Thumb-16 `PC = store + 2`)
+  with a bare SIGTRAP and no `watch:` annotation. `P` single-register writes
+  really work now (the `reset $pc` path; before, the stub answered the empty
+  envelope and changed nothing). Six pinned RSP conformance scenarios for
+  renode #51/#52/#57/#70/#74/#978 run under
+  `cargo test -p labwired-gdbstub` (`crates/gdbstub/tests/rsp_conformance.rs`),
+  and `docs/gdb_integration.md` carries the honest client matrix backed by
+  those runs: CI covers the RSP side, `scripts/gdb-conformance.sh` is an
+  optional `gdb-multiarch` batch smoke that skips without the tool, and every
+  other client (arm-none-eabi-gdb, CLion, cortex-debug, LLDB) stays `untested`
+  until someone runs it.
+- `--log-timestamps {none,virtual,real,both}` on `labwired run` and
+  `labwired test` (default `none`): human-readable stderr event/log lines are
+  prefixed `[t=virt=1.500000000s|real=+0.123456789s]` — only the components
+  the selected mode asks for. Virtual time derives from committed
+  cycles and the declared `cpu_hz` and is byte-stable across runs; real time
+  is wall-clock and explicitly not comparable. `result.json` carries
+  `virtual_time_ns` / `host_time_ns` only when the flag requests them, so
+  default artifacts stay byte-identical (locked by the determinism guard,
+  which now hashes stdout too).
 - Read-only memory regions: `cpu_writes: allow|warn|fault` on a chip YAML
   `flash:` / `ram:` region (default `allow`). A CPU store into a `fault`
   region raises the existing precise BusFault and the fault verdict names the

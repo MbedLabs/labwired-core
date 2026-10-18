@@ -230,6 +230,15 @@ pub(crate) struct TestResult {
     /// only when a policy is non-default, so default runs stay byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) memory_policy: Option<labwired_core::bus::MemoryPolicyReport>,
+    /// Simulated run time in nanoseconds: `total_cycles * 1e9 / cpu_hz`.
+    /// Present only when `--log-timestamps` requests virtual time, so default
+    /// runs are byte-identical. Deterministic for a given firmware+config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) virtual_time_ns: Option<u64>,
+    /// Wall time of the run in nanoseconds. Explicitly NON-deterministic;
+    /// never compare this across runs. Present only for `real`/`both`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) host_time_ns: Option<u64>,
     /// Always-on cheap execution metrics (cycles, bus accesses, PC samples).
     /// Present on successful machine runs; omitted on config-error paths that
     /// never built a machine. Top-level `cycles` / `instructions` /
