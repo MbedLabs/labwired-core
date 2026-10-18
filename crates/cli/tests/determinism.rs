@@ -61,6 +61,9 @@ assertions: []
     std::fs::write(&script_path, script_content).unwrap();
 
     // One run of the same script; `extra` carries the phase-specific flags.
+    // Note: UART stdout echo is deliberately left enabled (no
+    // `--no-uart-stdout`) so the stdout hashes below cover real payload bytes
+    // (`OK\n` from the fixture), not an empty stream.
     let run_once = |output_dir: &std::path::Path, extra: &[&str]| -> std::process::Output {
         Command::new(get_labwired_bin())
             .arg("test")
@@ -69,7 +72,6 @@ assertions: []
             .arg("--output-dir")
             .arg(output_dir)
             .arg("--trace")
-            .arg("--no-uart-stdout")
             .args(extra)
             .output()
             .expect("Failed to run labwired")
@@ -112,6 +114,29 @@ assertions: []
             panic!("Run {} failed to produce trace.json (--trace was set)", i);
         }
 
+        // The fixture firmware writes `OK\n` to UART. stdout must carry that
+        // echo so the hash below covers real payload bytes; empty or `OK`-less
+        // stdout means `--no-uart-stdout` was silently re-added to the helper
+        // and the hash would be covering nothing.
+        let stdout_text = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !output.stdout.is_empty(),
+            "Run {} stdout is empty; expected the UART `OK` echo (was --no-uart-stdout re-added?)",
+            i
+        );
+        assert!(
+            stdout_text.contains("OK"),
+            "Run {} stdout does not contain `OK` (expected the UART echo). stdout: {:?}",
+            i,
+            stdout_text
+        );
+        eprintln!(
+            "[determinism] run {} stdout ({} bytes): {:?}",
+            i,
+            output.stdout.len(),
+            stdout_text
+        );
+
         stdout_hashes.push(sha256_bytes(&output.stdout));
     }
 
@@ -132,7 +157,8 @@ assertions: []
     }
 
     // Compare stdout hashes across all runs: stdout must be byte-identical
-    // run to run (it carries UART echo when enabled and any agent payload).
+    // run to run (it carries the fixture's UART `OK` echo and any agent
+    // payload).
     let first_stdout_hash = &stdout_hashes[0];
     for (i, hash) in stdout_hashes.iter().enumerate().skip(1) {
         assert_eq!(
@@ -192,6 +218,28 @@ assertions: []
                 i
             );
         }
+
+        // Same guard as the default phase: stdout must carry the fixture's
+        // UART `OK` echo.
+        let virtual_stdout_text = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !output.stdout.is_empty(),
+            "Virtual run {} stdout is empty; expected the UART `OK` echo (was --no-uart-stdout re-added?)",
+            i
+        );
+        assert!(
+            virtual_stdout_text.contains("OK"),
+            "Virtual run {} stdout does not contain `OK` (expected the UART echo). stdout: {:?}",
+            i,
+            virtual_stdout_text
+        );
+        eprintln!(
+            "[determinism] virtual run {} stdout ({} bytes): {:?}",
+            i,
+            output.stdout.len(),
+            virtual_stdout_text
+        );
+
         virtual_trace_hashes.push(sha256_file(&trace_json_path));
         virtual_stdout_hashes.push(sha256_bytes(&output.stdout));
     }
