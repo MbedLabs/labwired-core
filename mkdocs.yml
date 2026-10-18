@@ -94,6 +94,8 @@ nav:
     - PlatformIO Integration: platformio_integration.md
     - Co-simulation Plugins: cosimulation_plugins.md
     - CI Integration Templates: integration-templates/README.md
+    - Extend LabWired:
+      - Add a peripheral block (YAML): howto/extend/add-a-peripheral.md
 
   - Reference:
     - Configuration (YAML): configuration_reference.md
