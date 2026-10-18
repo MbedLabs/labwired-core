@@ -5499,25 +5499,34 @@ impl<C: Cpu> DebugControl for Machine<C> {
     }
 
     fn read_memory(&self, addr: u32, len: usize) -> SimResult<Vec<u8>> {
+        // Debugger-context read: it must not latch a read watch — a GDB `x`
+        // must not fire a watchpoint. The flag is restored on every path
+        // (the `try_for_each` collects the first error and the restore runs
+        // after it), and the `Cell` is what makes this possible on `&self`.
+        // The loader reads flash directly, never through this function.
+        let prev = self.bus.debug_watch_host_bypass.replace(true);
         let mut data = Vec::with_capacity(len);
-        for i in 0..len {
+        let result = (0..len).try_for_each(|i| {
             let byte = self.bus.read_u8((addr as u64) + (i as u64))?;
             data.push(byte);
-        }
-        Ok(data)
+            Ok(())
+        });
+        self.bus.debug_watch_host_bypass.set(prev);
+        result.map(|()| data)
     }
 
     fn write_memory(&mut self, addr: u32, data: &[u8]) -> SimResult<()> {
         // Debugger-context write: it must not latch a store watch. The flag
-        // is restored on every path (the loop cannot early-return), and the
-        // loader (`load_firmware`) never goes through this function — it
-        // writes LinearMemory directly.
-        self.bus.debug_watch_host_bypass = true;
+        // is restored on every path (the `try_for_each` collects the first
+        // error and the restore runs after it), and the loader
+        // (`load_firmware`) never goes through this function — it writes
+        // LinearMemory directly.
+        let prev = self.bus.debug_watch_host_bypass.replace(true);
         let result = data
             .iter()
             .enumerate()
             .try_for_each(|(i, byte)| self.bus.write_u8((addr as u64) + (i as u64), *byte));
-        self.bus.debug_watch_host_bypass = false;
+        self.bus.debug_watch_host_bypass.set(prev);
         result
     }
 

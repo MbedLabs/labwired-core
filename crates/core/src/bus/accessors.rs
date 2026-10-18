@@ -375,10 +375,13 @@ impl SystemBus {
 
 impl crate::Bus for SystemBus {
     fn read_u64(&self, addr: u64) -> SimResult<u64> {
-        // Deliberately NOT gated by debug watches: a 64-bit physical access is
-        // a host/bulk path, not a CPU data load, and watch ranges model CPU
-        // accesses. `debug_watch_read_u64_does_not_latch` in `tests_main.rs`
-        // pins this; `read_u8`/`read_u16`/`read_u32` latch normally.
+        // Watched like every other width: a 64-bit load is a CPU access on
+        // cores that have one (Cortex-A7 `w=8`), so the latch is uniform.
+        // Taken before routing, like the narrower reads; the machine discards
+        // the latch if the access faults (see `Machine::advance`).
+        if !self.debug_watches.is_empty() && !self.debug_watch_host_bypass.get() {
+            self.note_debug_watch_read(addr);
+        }
         let offset =
             addr.checked_sub(self.ram.base_addr)
                 .and_then(|v| usize::try_from(v).ok())
@@ -397,13 +400,14 @@ impl crate::Bus for SystemBus {
 
     fn write_u64(&mut self, addr: u64, value: u64) -> SimResult<()> {
         self.batch_stop.note_store(addr, 8);
-        // Latch the watch BEFORE the memory-policy gate below (and the PMS
-        // gate later in the wider widths): an attempted store is what the
-        // debugger watches for, so a store a gate rejects still latches —
-        // uniformly across all four widths. When the step then faults, the
-        // machine discards the latch (see `Machine::advance`), so a rejected
-        // store can never leave a stale stop behind.
-        if !self.debug_watches.is_empty() && !self.debug_watch_host_bypass {
+        // Latch the watch BEFORE the memory-policy gate below: an attempted
+        // store is what the debugger watches for, so a store a gate rejects
+        // still latches — uniformly across all four widths. Unlike the
+        // byte/half/word stores there is no C3 PMS gate on the 64-bit path.
+        // When the step then faults, the machine discards the latch (see
+        // `Machine::advance`), so a rejected store can never leave a stale
+        // stop behind.
+        if !self.debug_watches.is_empty() && !self.debug_watch_host_bypass.get() {
             self.note_debug_watch_store(addr);
         }
         if let Some(r) = self.memory_policy_gate_store(addr) {
@@ -526,7 +530,7 @@ impl crate::Bus for SystemBus {
         self.irq_fabric.armv7.as_ref()?.timer.next_deadline()
     }
     fn read_u8(&self, addr: u64) -> SimResult<u8> {
-        if !self.debug_watches.is_empty() && !self.debug_watch_host_bypass {
+        if !self.debug_watches.is_empty() && !self.debug_watch_host_bypass.get() {
             self.note_debug_watch_read(addr);
         }
         // RAM is always first (hot path, never overlaps a peripheral window).
@@ -640,7 +644,7 @@ impl crate::Bus for SystemBus {
         // semantics across all four write widths — a store a gate rejects is
         // still an attempted access and latches; the machine discards the
         // latch if the step faults (see `Machine::advance`).
-        if !self.debug_watches.is_empty() && !self.debug_watch_host_bypass {
+        if !self.debug_watches.is_empty() && !self.debug_watch_host_bypass.get() {
             self.note_debug_watch_store(addr);
         }
         if let Some(r) = self.memory_policy_gate_store(addr) {
@@ -847,7 +851,7 @@ impl crate::Bus for SystemBus {
     }
 
     fn read_u16(&self, addr: u64) -> SimResult<u16> {
-        if !self.debug_watches.is_empty() && !self.debug_watch_host_bypass {
+        if !self.debug_watches.is_empty() && !self.debug_watch_host_bypass.get() {
             self.note_debug_watch_read(addr);
         }
         if let Some(val) = self.ram.read_u16(addr) {
@@ -934,7 +938,7 @@ impl crate::Bus for SystemBus {
     }
 
     fn read_u32(&self, addr: u64) -> SimResult<u32> {
-        if !self.debug_watches.is_empty() && !self.debug_watch_host_bypass {
+        if !self.debug_watches.is_empty() && !self.debug_watch_host_bypass.get() {
             self.note_debug_watch_read(addr);
         }
         // Debug (env-gated): trace the driver's reads of a freshly-injected RX
@@ -1096,7 +1100,7 @@ impl crate::Bus for SystemBus {
         // semantics across all four write widths — a store a gate rejects is
         // still an attempted access and latches; the machine discards the
         // latch if the step faults (see `Machine::advance`).
-        if !self.debug_watches.is_empty() && !self.debug_watch_host_bypass {
+        if !self.debug_watches.is_empty() && !self.debug_watch_host_bypass.get() {
             self.note_debug_watch_store(addr);
         }
         if let Some(r) = self.memory_policy_gate_store(addr) {
@@ -1227,7 +1231,7 @@ impl crate::Bus for SystemBus {
         // semantics across all four write widths — a store a gate rejects is
         // still an attempted access and latches; the machine discards the
         // latch if the step faults (see `Machine::advance`).
-        if !self.debug_watches.is_empty() && !self.debug_watch_host_bypass {
+        if !self.debug_watches.is_empty() && !self.debug_watch_host_bypass.get() {
             self.note_debug_watch_store(addr);
         }
         if let Some(r) = self.memory_policy_gate_store(addr) {

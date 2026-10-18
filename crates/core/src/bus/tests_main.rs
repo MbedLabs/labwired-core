@@ -3556,7 +3556,7 @@ fn test_flash_boot_alias_read_and_write() {
         memory_policy_bypass: false,
         debug_watches: Vec::new(),
         debug_watch_hit: Cell::new(None),
-        debug_watch_host_bypass: false,
+        debug_watch_host_bypass: std::cell::Cell::new(false),
         ram: LinearMemory::new(256, 0x2000_0000),
         extra_mem: Vec::new(),
         peripherals: Vec::new(),
@@ -3670,7 +3670,7 @@ fn h5_flash_bus(gate: bool) -> SystemBus {
         memory_policy_bypass: false,
         debug_watches: Vec::new(),
         debug_watch_hit: Cell::new(None),
-        debug_watch_host_bypass: false,
+        debug_watch_host_bypass: std::cell::Cell::new(false),
         ram: LinearMemory::new(256, 0x2000_0000),
         extra_mem: Vec::new(),
         peripherals: vec![PeripheralEntry {
@@ -3950,7 +3950,7 @@ fn h5_rww_bus(gate: bool) -> SystemBus {
         memory_policy_bypass: false,
         debug_watches: Vec::new(),
         debug_watch_hit: Cell::new(None),
-        debug_watch_host_bypass: false,
+        debug_watch_host_bypass: std::cell::Cell::new(false),
         ram: LinearMemory::new(0x1000, 0x2000_0000),
         extra_mem: Vec::new(),
         peripherals: vec![PeripheralEntry {
@@ -4220,7 +4220,7 @@ fn test_peripheral_range_index_lookup() {
         memory_policy_bypass: false,
         debug_watches: Vec::new(),
         debug_watch_hit: Cell::new(None),
-        debug_watch_host_bypass: false,
+        debug_watch_host_bypass: std::cell::Cell::new(false),
         ram: LinearMemory::new(256, 0x2000_0000),
         extra_mem: Vec::new(),
         peripherals: vec![
@@ -4363,7 +4363,7 @@ fn test_dma_tick_executes_copy_and_raises_irq() {
         memory_policy_bypass: false,
         debug_watches: Vec::new(),
         debug_watch_hit: Cell::new(None),
-        debug_watch_host_bypass: false,
+        debug_watch_host_bypass: std::cell::Cell::new(false),
         ram: LinearMemory::new(256, 0x2000_0000),
         extra_mem: Vec::new(),
         peripherals: vec![PeripheralEntry {
@@ -6177,14 +6177,14 @@ fn debug_watch_latch_keeps_the_first_hit() {
 }
 
 #[test]
-fn debug_watch_read_u64_does_not_latch() {
+fn debug_watch_read_u64_latches() {
     let mut bus = SystemBus::new();
     assert!(bus.add_debug_watch(0x2000_0100, 8, true, false));
     let _ = crate::Bus::read_u64(&bus, 0x2000_0100).unwrap();
     assert_eq!(
         bus.take_debug_watch_hit(),
-        None,
-        "64-bit loads are not watched by design (host/bulk path)"
+        Some(0x2000_0100),
+        "a 64-bit CPU load (Cortex-A7 w=8) is watched like any other width"
     );
 }
 
@@ -6272,14 +6272,64 @@ fn debug_watch_clear_drops_a_pending_hit() {
 }
 
 #[test]
+fn debug_watch_remove_drops_an_uncovered_pending_hit() {
+    let mut bus = SystemBus::new();
+    assert!(bus.add_debug_watch(0x2000_0100, 4, false, true)); // A
+    assert!(bus.add_debug_watch(0x2000_0200, 4, false, true)); // B
+
+    // Hit on A; removing A leaves no watch covering the pending hit.
+    bus.write_u8(0x2000_0100, 0xAB).unwrap();
+    assert!(bus.remove_debug_watch(0x2000_0100, 4, false, true));
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        None,
+        "removing the hit watch clears the pending hit"
+    );
+
+    // Hit on B; removing an unrelated watch (A) keeps the covered hit ...
+    bus.write_u8(0x2000_0200, 0xCD).unwrap();
+    assert!(bus.add_debug_watch(0x2000_0100, 4, false, true));
+    assert!(bus.remove_debug_watch(0x2000_0100, 4, false, true));
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        Some(0x2000_0200),
+        "a hit a remaining watch still covers survives an unrelated removal"
+    );
+
+    // ... and the hit is cleared once its own (only) covering watch goes.
+    bus.write_u8(0x2000_0200, 0xEF).unwrap();
+    assert!(bus.remove_debug_watch(0x2000_0200, 4, false, true));
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        None,
+        "removing the covering watch clears the pending hit"
+    );
+}
+
+#[test]
+fn debug_watch_remove_keeps_an_overlapping_hit() {
+    let mut bus = SystemBus::new();
+    assert!(bus.add_debug_watch(0x2000_0100, 4, false, true));
+    assert!(bus.add_debug_watch(0x2000_0100, 8, false, true));
+    bus.write_u8(0x2000_0100, 0xAB).unwrap();
+    assert!(bus.remove_debug_watch(0x2000_0100, 4, false, true));
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        Some(0x2000_0100),
+        "ANY remaining watch covering the address keeps the hit"
+    );
+}
+
+#[test]
 fn debug_watch_host_bypass_suppresses_latching() {
     let mut bus = SystemBus::new();
     assert!(bus.add_debug_watch(0x2000_0100, 4, false, true));
-    bus.debug_watch_host_bypass = true;
+    bus.debug_watch_host_bypass.set(true);
     bus.write_u8(0x2000_0100, 0xAB).unwrap();
     let _ = bus.read_u8(0x2000_0100).unwrap();
+    let _ = crate::Bus::read_u64(&bus, 0x2000_0100).unwrap();
     assert_eq!(bus.take_debug_watch_hit(), None);
-    bus.debug_watch_host_bypass = false;
+    bus.debug_watch_host_bypass.set(false);
     bus.write_u8(0x2000_0100, 0xCD).unwrap();
     assert_eq!(bus.take_debug_watch_hit(), Some(0x2000_0100));
 }

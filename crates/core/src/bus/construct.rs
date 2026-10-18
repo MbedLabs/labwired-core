@@ -16,7 +16,7 @@ impl SystemBus {
             memory_policy_bypass: false,
             debug_watches: Vec::new(),
             debug_watch_hit: Cell::new(None),
-            debug_watch_host_bypass: false,
+            debug_watch_host_bypass: std::cell::Cell::new(false),
             ram: LinearMemory::new(1024 * 1024, 0x2000_0000),
             extra_mem: Vec::new(),
             peripherals: vec![
@@ -157,7 +157,7 @@ impl SystemBus {
             memory_policy_bypass: false,
             debug_watches: Vec::new(),
             debug_watch_hit: Cell::new(None),
-            debug_watch_host_bypass: false,
+            debug_watch_host_bypass: std::cell::Cell::new(false),
             ram: LinearMemory::new(0, 0),
             extra_mem: Vec::new(),
             peripherals: Vec::new(),

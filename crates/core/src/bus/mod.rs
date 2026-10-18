@@ -374,8 +374,9 @@ pub struct SystemBus {
     /// [`SystemBus::take_debug_watch_hit`]. `Cell` because loads run on `&self`.
     pub(crate) debug_watch_hit: Cell<Option<u64>>,
     /// While true the accessors skip watch tracking: host/debugger accesses
-    /// must not fire the target's own watchpoints.
-    pub(crate) debug_watch_host_bypass: bool,
+    /// must not fire the target's own watchpoints. `Cell` because debugger
+    /// memory reads run on `&self`.
+    pub(crate) debug_watch_host_bypass: Cell<bool>,
     pub ram: LinearMemory,
     /// Extra CPU-visible RAM/ROM windows beyond `flash`/`ram` (e.g. ESP32 IRAM
     /// `0x4037C000` and flash-DROM `0x3C000000`), from the chip's

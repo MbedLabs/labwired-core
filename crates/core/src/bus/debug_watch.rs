@@ -39,6 +39,10 @@ impl crate::bus::SystemBus {
     }
 
     /// Disarm the exact watch `add_debug_watch` armed; false when absent.
+    ///
+    /// A pending hit only outlives its watch while some remaining range still
+    /// covers it: disarming the watch that latched it must not leave a stale
+    /// stop for a later run (see [`Self::take_debug_watch_hit`]).
     pub fn remove_debug_watch(
         &mut self,
         base: u64,
@@ -51,6 +55,11 @@ impl crate::bus::SystemBus {
         }) {
             Some(idx) => {
                 self.debug_watches.remove(idx);
+                if let Some(hit) = self.debug_watch_hit.get() {
+                    if !self.debug_watches.iter().any(|w| w.covers(hit)) {
+                        self.debug_watch_hit.set(None);
+                    }
+                }
                 true
             }
             None => false,

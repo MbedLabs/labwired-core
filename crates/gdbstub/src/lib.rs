@@ -208,6 +208,12 @@ where
     ) -> Option<gdbstub::target::ext::breakpoints::SwBreakpointOps<'_, Self>> {
         Some(self)
     }
+
+    fn support_hw_watchpoint(
+        &mut self,
+    ) -> Option<gdbstub::target::ext::breakpoints::HwWatchpointOps<'_, Self>> {
+        Some(self)
+    }
 }
 
 impl<C: Cpu> gdbstub::target::ext::breakpoints::SwBreakpoint for LabwiredTarget<C>
@@ -230,6 +236,50 @@ where
     ) -> TargetResult<bool, Self> {
         self.machine.remove_breakpoint(addr);
         Ok(true)
+    }
+}
+
+impl<C: Cpu> gdbstub::target::ext::breakpoints::HwWatchpoint for LabwiredTarget<C>
+where
+    LabwiredTarget<C>: Target<Arch: gdbstub::arch::Arch<Usize = u32>>,
+{
+    fn add_hw_watchpoint(
+        &mut self,
+        addr: u32,
+        len: u32,
+        kind: gdbstub::target::ext::breakpoints::WatchKind,
+    ) -> TargetResult<bool, Self> {
+        use gdbstub::target::ext::breakpoints::WatchKind;
+        // GDB's WatchKind has three variants (`Write` / `Read` / `ReadWrite`);
+        // map each onto the bus's (on_read, on_store) pair.
+        let (on_read, on_store) = match kind {
+            WatchKind::Write => (false, true),
+            WatchKind::Read => (true, false),
+            WatchKind::ReadWrite => (true, true),
+        };
+        // `Machine::add_watchpoint` refuses empty ranges, ranges wider than
+        // 4 KiB and a full watch table; the same verdict goes back to GDB so
+        // it can report the failure to the user.
+        Ok(self
+            .machine
+            .add_watchpoint(u64::from(addr), u64::from(len), on_read, on_store))
+    }
+
+    fn remove_hw_watchpoint(
+        &mut self,
+        addr: u32,
+        len: u32,
+        kind: gdbstub::target::ext::breakpoints::WatchKind,
+    ) -> TargetResult<bool, Self> {
+        use gdbstub::target::ext::breakpoints::WatchKind;
+        let (on_read, on_store) = match kind {
+            WatchKind::Write => (false, true),
+            WatchKind::Read => (true, false),
+            WatchKind::ReadWrite => (true, true),
+        };
+        Ok(self
+            .machine
+            .remove_watchpoint(u64::from(addr), u64::from(len), on_read, on_store))
     }
 }
 
@@ -389,6 +439,15 @@ where
                         gdbstub::common::Signal::SIGTRAP,
                     )));
                 }
+                Ok(StopReason::Watchpoint(_)) => {
+                    // Without this arm the latch is consumed by the `Ok(_)`
+                    // arm's MaxStepsReached fall-through and swallowed — the
+                    // target would keep running past the watchpoint.
+                    target.running = false;
+                    return Ok(Event::TargetStopped(BaseStopReason::Signal(
+                        gdbstub::common::Signal::SIGTRAP,
+                    )));
+                }
                 Ok(_) => {
                     // MaxStepsReached
                     if target.single_step {
@@ -451,6 +510,120 @@ mod tests {
             .write_registers(&regs)
             .unwrap_or_else(|_| panic!("Failed to write registers"));
         assert_eq!(target.machine.read_core_reg(1), 0xdeadbeef);
+    }
+
+    #[test]
+    fn hw_watchpoint_round_trip_through_the_target() {
+        use gdbstub::target::ext::breakpoints::{Breakpoints, HwWatchpoint, WatchKind};
+
+        let mut bus = SystemBus::new();
+        let (cpu, _nvic) = labwired_core::system::cortex_m::configure_cortex_m(&mut bus);
+        let machine = Machine::new(cpu, bus);
+        let mut target = LabwiredTarget::<CortexM>::new(machine);
+
+        assert!(target.support_hw_watchpoint().is_some());
+        assert!(target
+            .add_hw_watchpoint(0x2000_0100, 4, WatchKind::ReadWrite)
+            .unwrap_or(false));
+        assert!(
+            !target
+                .remove_hw_watchpoint(0x2000_0100, 8, WatchKind::ReadWrite)
+                .unwrap_or(false),
+            "a length mismatch is not the armed watch"
+        );
+        assert!(target
+            .remove_hw_watchpoint(0x2000_0100, 4, WatchKind::ReadWrite)
+            .unwrap_or(false));
+        assert!(
+            !target
+                .remove_hw_watchpoint(0x2000_0100, 4, WatchKind::ReadWrite)
+                .unwrap_or(false),
+            "a removed watch cannot be removed twice"
+        );
+
+        // The extension is implemented generically, so the RISC-V arch target
+        // exposes it too.
+        let mut riscv = LabwiredTarget::<RiscV>::new(Machine::new(
+            labwired_core::cpu::RiscV::new(),
+            SystemBus::new(),
+        ));
+        assert!(riscv.support_hw_watchpoint().is_some());
+        assert!(riscv
+            .add_hw_watchpoint(0x8000_0100, 4, WatchKind::Write)
+            .unwrap_or(false));
+        assert!(riscv
+            .remove_hw_watchpoint(0x8000_0100, 4, WatchKind::Write)
+            .unwrap_or(false));
+    }
+
+    #[test]
+    fn hw_watchpoint_refusals_reach_gdb_as_false() {
+        use gdbstub::target::ext::breakpoints::{HwWatchpoint, WatchKind};
+
+        let mut bus = SystemBus::new();
+        let (cpu, _nvic) = labwired_core::system::cortex_m::configure_cortex_m(&mut bus);
+        let machine = Machine::new(cpu, bus);
+        let mut target = LabwiredTarget::<CortexM>::new(machine);
+
+        assert!(
+            !target
+                .add_hw_watchpoint(0x2000_0100, 4097, WatchKind::Write)
+                .unwrap_or(false),
+            "a range wider than 4 KiB is refused"
+        );
+        assert!(!target
+            .add_hw_watchpoint(0x2000_0100, 0, WatchKind::Write)
+            .unwrap_or(false));
+        for i in 0..16u32 {
+            assert!(target
+                .add_hw_watchpoint(0x2000_1000 + i * 16, 4, WatchKind::Write)
+                .unwrap_or(false));
+        }
+        assert!(
+            !target
+                .add_hw_watchpoint(0x2000_2000, 4, WatchKind::Write)
+                .unwrap_or(false),
+            "17th watch is refused at the cap"
+        );
+    }
+
+    #[test]
+    fn hw_watchpoint_stops_the_machine_run() {
+        use gdbstub::target::ext::breakpoints::{HwWatchpoint, WatchKind};
+        use labwired_core::Bus;
+
+        let mut bus = SystemBus::new();
+        let (cpu, _nvic) = labwired_core::system::cortex_m::configure_cortex_m(&mut bus);
+        let machine = Machine::new(cpu, bus);
+        let mut target = LabwiredTarget::<CortexM>::new(machine);
+
+        let code = 0x2000_0800u32;
+        let watched = 0x2000_0200u64;
+        target.machine.cpu.set_pc(code);
+        // str r0, [r1] (Thumb-16 0x6008), then NOPs so the budget is valid.
+        target.machine.bus.write_u16(code as u64, 0x6008).unwrap();
+        for i in 1..4u64 {
+            target
+                .machine
+                .bus
+                .write_u16(code as u64 + i * 2, 0x4600)
+                .unwrap();
+        }
+        target.machine.cpu.set_register(0, 0xAB);
+        target.machine.cpu.set_register(1, watched as u32);
+
+        assert!(target
+            .add_hw_watchpoint(watched as u32, 4, WatchKind::Write)
+            .unwrap_or(false));
+        let stop = target.machine.run(Some(4)).unwrap();
+        assert_eq!(
+            stop,
+            StopReason::Watchpoint(watched),
+            "a CPU store into the armed range must stop the machine"
+        );
+        let _ = target
+            .remove_hw_watchpoint(watched as u32, 4, WatchKind::Write)
+            .unwrap_or(false);
     }
 
     #[test]
