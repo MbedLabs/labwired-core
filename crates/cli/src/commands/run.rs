@@ -495,7 +495,7 @@ pub(crate) fn run_firmware_riscv(
                 // off — and the run then returned EXIT_PASS regardless, so a
                 // `MemoryViolation` or a `DecodeError` at instruction 12 of a
                 // hundred million produced no stderr and exit 0.
-                eprintln!(
+                crate::eventln!(
                     "labwired run (riscv): simulation error at pc={pc:#010x} (step {i}): {e}"
                 );
                 if !break_at.is_empty() {
@@ -624,7 +624,7 @@ fn run_firmware_riscv_batched(
                 // Was `tracing::debug!("… halt: {e}")` under a comment claiming
                 // a halt is the normal end of a fixture run. It is not: a
                 // normal end arrives as `Ok`. See `riscv_run_exit_code`.
-                eprintln!(
+                crate::eventln!(
                     "labwired run (riscv, batched): simulation error at pc={:#010x}: {e}",
                     machine.cpu.get_pc(),
                 );
@@ -751,11 +751,13 @@ pub(crate) fn run_firmware_esp32(args: &RunArgs) -> ExitCode {
             Ok(()) => {}
             Err(SimulationError::BreakpointHit(_)) => break,
             Err(SimulationError::ExceptionRaised { cause, pc }) => {
-                eprintln!("labwired-cli run (esp32): ExceptionRaised cause={cause} at 0x{pc:08x}");
+                crate::eventln!(
+                    "labwired-cli run (esp32): ExceptionRaised cause={cause} at 0x{pc:08x}"
+                );
                 return ExitCode::from(EXIT_RUNTIME_ERROR);
             }
             Err(e) => {
-                eprintln!(
+                crate::eventln!(
                     "labwired-cli run (esp32): simulator error at pc=0x{:08x}: {e}",
                     machine.cpu.get_pc(),
                 );
@@ -764,6 +766,7 @@ pub(crate) fn run_firmware_esp32(args: &RunArgs) -> ExitCode {
         }
         steps += 1;
     }
+    crate::log_ts::refresh_cycles(machine.total_cycles);
     crate::eventln!(
         "labwired-cli run (esp32): reached --max-steps {limit}; pc=0x{:08x}",
         machine.cpu.get_pc(),
@@ -801,7 +804,7 @@ fn run_firmware_xtensa_batched(
         let report = match result {
             Ok(report) => report,
             Err(e) => {
-                eprintln!(
+                crate::eventln!(
                     "labwired run ({chip}, batched): simulator error at pc=0x{:08x}: {e}",
                     machine.cpu.get_pc(),
                 );
@@ -1310,7 +1313,9 @@ pub(crate) fn run_firmware(
                     return ExitCode::from(EXIT_PASS);
                 }
                 Err(SimulationError::ExceptionRaised { cause, pc }) => {
-                    eprintln!("labwired-cli run: ExceptionRaised cause={cause} at 0x{pc:08x}");
+                    crate::eventln!(
+                        "labwired-cli run: ExceptionRaised cause={cause} at 0x{pc:08x}"
+                    );
                     eprintln!(
                         "labwired-cli run: PS=0x{:08x} (excm={} intlevel={}) WB={} WS=0x{:04x}",
                         machine.cpu.ps.as_raw(),
@@ -1319,7 +1324,7 @@ pub(crate) fn run_firmware(
                         machine.cpu.regs.windowbase(),
                         machine.cpu.regs.windowstart(),
                     );
-                    eprintln!("labwired-cli run: recent PCs (oldest first):");
+                    crate::eventln!("labwired-cli run: recent PCs (oldest first):");
                     for i in 0..RING_LEN {
                         let idx = (ring_head + i) % RING_LEN;
                         if pc_ring[idx] != 0 {
@@ -1329,11 +1334,11 @@ pub(crate) fn run_firmware(
                     return ExitCode::from(EXIT_RUNTIME_ERROR);
                 }
                 Err(e) => {
-                    eprintln!(
+                    crate::eventln!(
                         "labwired-cli run: simulator error at pc=0x{:08x}: {e}",
                         machine.cpu.get_pc(),
                     );
-                    eprintln!("labwired-cli run: a0..a15 at fault:");
+                    crate::eventln!("labwired-cli run: a0..a15 at fault:");
                     for r in 0..16u8 {
                         eprintln!("  a{:<2} = 0x{:08x}", r, machine.cpu.regs.read_logical(r));
                     }
@@ -1342,7 +1347,7 @@ pub(crate) fn run_firmware(
                         machine.cpu.regs.windowbase(),
                         machine.cpu.regs.windowstart(),
                     );
-                    eprintln!("labwired-cli run: recent PCs (oldest first):");
+                    crate::eventln!("labwired-cli run: recent PCs (oldest first):");
                     for i in 0..RING_LEN {
                         let idx = (ring_head + i) % RING_LEN;
                         if pc_ring[idx] != 0 {
@@ -1442,11 +1447,12 @@ pub(crate) fn run_firmware(
             }
         }
     } // else (non-batched step loop)
-      // Optional end-of-run dump of the Unity result struct (env
-      // LABWIRED_UNITY_ADDR=<hex base of the `Unity` UNITY_STORAGE_T global>).
-      // Mirrors the hardware oracle (`mdw <addr> 10`): NumberOfTests at +20,
-      // TestFailures at +24, TestIgnores at +28 — the authoritative pass/fail
-      // since Unity's text output goes out USB_SERIAL_JTAG, not stdout.
+    crate::log_ts::refresh_cycles(machine.total_cycles);
+    // Optional end-of-run dump of the Unity result struct (env
+    // LABWIRED_UNITY_ADDR=<hex base of the `Unity` UNITY_STORAGE_T global>).
+    // Mirrors the hardware oracle (`mdw <addr> 10`): NumberOfTests at +20,
+    // TestFailures at +24, TestIgnores at +28 — the authoritative pass/fail
+    // since Unity's text output goes out USB_SERIAL_JTAG, not stdout.
     if let Ok(s) = std::env::var("LABWIRED_UNITY_ADDR") {
         if let Ok(base) = u32::from_str_radix(s.trim_start_matches("0x"), 16) {
             let mut words = [0u32; 10];
@@ -1519,7 +1525,7 @@ fn run_xtensa_batched_loop(
         let stop = match result {
             Ok(report) => Some(report.stop),
             Err(e) => {
-                eprintln!("labwired run (xtensa, batched): simulation error: {e}");
+                crate::eventln!("labwired run (xtensa, batched): simulation error: {e}");
                 faulted = true;
                 None
             }
@@ -1603,7 +1609,7 @@ fn run_firmware_avr(
         let report = match result {
             Ok(report) => report,
             Err(e) => {
-                eprintln!("labwired run (avr, batched): simulator error: {e}");
+                crate::eventln!("labwired run (avr, batched): simulator error: {e}");
                 return ExitCode::from(EXIT_RUNTIME_ERROR);
             }
         };
@@ -1615,11 +1621,12 @@ fn run_firmware_avr(
         for _ in 0..limit {
             crate::log_ts::refresh_cycles(machine.total_cycles);
             if let Err(e) = machine.step() {
-                eprintln!("labwired run (avr): simulator error: {e}");
+                crate::eventln!("labwired run (avr): simulator error: {e}");
                 return ExitCode::from(EXIT_RUNTIME_ERROR);
             }
         }
     }
+    crate::log_ts::refresh_cycles(machine.total_cycles);
     crate::eventln!(
         "labwired-cli run (avr{}): reached --max-steps {limit}; pc=0x{:08x}",
         if args.batched { ", batched" } else { "" },
@@ -2043,7 +2050,7 @@ fn run_arm_step_loop(
                 }
             }
             Err(e) => {
-                eprintln!("labwired run (arm): simulation error: {e}");
+                crate::eventln!("labwired run (arm): simulation error: {e}");
                 // The caller decides what this means. It ends the run either
                 // way; whether it ends the PROCESS with a failure is up to
                 // `--allow-sim-error`, because a TIER1 protocol may already
@@ -2229,7 +2236,7 @@ fn run_arm_batched_loop(
                 }
             }
             Err(e) => {
-                eprintln!("labwired run (arm, batched): simulation error: {e}");
+                crate::eventln!("labwired run (arm, batched): simulation error: {e}");
                 faulted = true;
                 break;
             }

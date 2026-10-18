@@ -65,6 +65,10 @@ pub(crate) struct TestExecutionContext<'a, C: labwired_core::Cpu> {
 pub(crate) fn execute_test_loop<C: labwired_core::Cpu>(
     ctx: &mut TestExecutionContext<C>,
 ) -> ExitCode {
+    // The test loop runs the machine its caller already built; publish the
+    // declared core clock here so every `test` machine reports a virtual time
+    // (mirrors the per-run-path `set_hz` calls on `run`).
+    crate::log_ts::set_hz(ctx.machine.bus.cpu_hz);
     // ── Resource metrics: footprint + main-stack paint (load/reset-time) ────
     // Paint is not a SimulationObserver: fill unused stack RAM now, scan after
     // the run. Footprint is pure ELF section math and does not touch the bus.
@@ -740,6 +744,7 @@ pub(crate) fn execute_test_loop<C: labwired_core::Cpu>(
     let mut step = 0;
     let mut heartbeat = Heartbeat::new(ctx.args.heartbeat_file.clone());
     while step < max_steps {
+        crate::log_ts::refresh_cycles(ctx.machine.total_cycles);
         heartbeat.tick(step, ctx.machine.total_cycles);
         // JIT-eligible path: mirror the machine's authoritative counters into
         // `metrics` BEFORE the cycle-sensitive checks below (stimulus
@@ -947,6 +952,7 @@ pub(crate) fn execute_test_loop<C: labwired_core::Cpu>(
                 .map(labwired_core::cosim::CosimAdvance::from)
                 .map_err(labwired_core::cosim::CosimAdvanceError::Machine),
         };
+        crate::log_ts::refresh_cycles(ctx.machine.total_cycles);
         let (report, boundary) = match advanced {
             Ok(advance) => (
                 advance.report,
@@ -1699,7 +1705,7 @@ pub(crate) fn execute_test_loop<C: labwired_core::Cpu>(
             .or_else(|| ctx.firmware_path.file_stem())
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "run".to_string());
-        eprintln!(
+        crate::eventln!(
             "{label}  {passed}/{checked} checks · {subject} · {steps_executed} steps · {:.2}s",
             duration.as_secs_f64()
         );

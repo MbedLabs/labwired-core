@@ -247,6 +247,7 @@ pub(crate) fn run_firmware_with_system(
         Box::new(cpu)
     };
     let mut machine = Machine::new(cpu, bus);
+    crate::log_ts::set_hz(machine.bus.cpu_hz);
     machine.config.host_time_mode = args.time_mode;
     machine.config.idle_fast_forward_enabled =
         std::env::var("LABWIRED_IDLE_FAST_FORWARD").as_deref() != Ok("0");
@@ -283,6 +284,7 @@ pub(crate) fn run_firmware_with_system(
 
     let mut steps: u64 = 0;
     while steps < max_steps {
+        crate::log_ts::refresh_cycles(machine.total_cycles);
         let current_cycle = machine.total_cycles;
         track.poll(&mut machine, current_cycle);
         let mut limit = (max_steps - steps).min(RUN_BATCH_CAP);
@@ -295,7 +297,9 @@ pub(crate) fn run_firmware_with_system(
                 NonZeroU32::new(batch.min(u64::from(u32::MAX)) as u32).expect("batch is non-zero"),
             )
             .with_breakpoints(labwired_core::BreakpointPolicy::Ignore);
-        match machine.advance(request) {
+        let result = machine.advance(request);
+        crate::log_ts::refresh_cycles(machine.total_cycles);
+        match result {
             Ok(report) => {
                 steps += report.fuel_consumed;
                 if report.primary_steps == 0 && report.idle_cycles == 0 {
@@ -338,7 +342,9 @@ pub(crate) fn run_firmware_with_system(
             })
             .collect::<Vec<_>>()
             .join("; ");
-        eprintln!("labwired-cli run (system): warning: {list} never fired before the run ended");
+        crate::eventln!(
+            "labwired-cli run (system): warning: {list} never fired before the run ended"
+        );
     }
     let elf = std::fs::read(&args.firmware).ok();
     if let Some(v) = crate::fault_report::fault_verdict(
@@ -350,9 +356,11 @@ pub(crate) fn run_firmware_with_system(
     }
     let pc = machine.cpu.get_pc();
     if steps >= max_steps {
-        eprintln!("labwired-cli run (system): reached --max-steps {max_steps}; pc=0x{pc:08x}");
+        crate::eventln!(
+            "labwired-cli run (system): reached --max-steps {max_steps}; pc=0x{pc:08x}"
+        );
     } else {
-        eprintln!("labwired-cli run (system): halted at step {steps}; pc=0x{pc:08x}");
+        crate::eventln!("labwired-cli run (system): halted at step {steps}; pc=0x{pc:08x}");
     }
     ExitCode::from(EXIT_PASS)
 }
