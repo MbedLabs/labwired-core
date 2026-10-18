@@ -90,7 +90,6 @@ static CONTEXT: OnceLock<Context> = OnceLock::new();
 
 /// Called once from `dispatch` with the mode parsed from the command line
 /// (before the tracing subscriber is built). Later calls are ignored.
-#[allow(dead_code)] // TODO(A2 Task 3-6): called by `dispatch` for --log-timestamps
 pub(crate) fn init(mode: LogTimestamps) {
     let _ = CONTEXT.set(Context {
         mode,
@@ -122,7 +121,6 @@ pub(crate) fn refresh_cycles(cycles: u64) {
 }
 
 /// The current prefix: `""` unless a timestamp mode is active.
-#[allow(dead_code)] // TODO(A2 Task 3-6): expanded by `eventln!` at call sites
 pub fn prefix() -> String {
     let Some(ctx) = CONTEXT.get() else {
         return String::new();
@@ -143,6 +141,30 @@ pub fn prefix() -> String {
             .then(|| ctx.start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64),
     };
     prefix_now(ctx.mode, &ns)
+}
+
+/// `tracing-subscriber` event formatter that prepends the `[t=…]` prefix,
+/// then delegates to the subscriber's default format. Empty prefix (mode
+/// `none`, or any non-run/test command) leaves existing output byte-identical.
+pub struct LogTsFormat;
+
+impl<S, N> tracing_subscriber::fmt::FormatEvent<S, N> for LogTsFormat
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+    N: for<'a> tracing_subscriber::fmt::FormatFields<'a> + 'static,
+{
+    fn format_event(
+        &self,
+        ctx: &tracing_subscriber::fmt::FmtContext<'_, S, N>,
+        mut writer: tracing_subscriber::fmt::format::Writer<'_>,
+        event: &tracing::Event<'_>,
+    ) -> std::fmt::Result {
+        let prefix = prefix();
+        if !prefix.is_empty() {
+            write!(writer, "{prefix}")?;
+        }
+        tracing_subscriber::fmt::format::Format::default().format_event(ctx, writer, event)
+    }
 }
 
 /// `eprintln!` with the timestamp prefix. Use for human-readable event lines
@@ -227,6 +249,32 @@ mod tests {
             "faul",
         ]);
         assert!(err.is_err(), "typo must not parse");
+
+        let cli = crate::Cli::try_parse_from(["labwired", "test", "--script", "s.yaml"]).unwrap();
+        match cli.command {
+            Some(crate::dispatch::Commands::Test(a)) => {
+                assert_eq!(a.log_timestamps, LogTimestamps::None)
+            }
+            _ => panic!("expected test command"),
+        }
+
+        let cli = crate::Cli::try_parse_from([
+            "labwired",
+            "run",
+            "--firmware",
+            "f.elf",
+            "--chip",
+            "c.yaml",
+            "--log-timestamps",
+            "both",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(crate::dispatch::Commands::Run(a)) => {
+                assert_eq!(a.log_timestamps, LogTimestamps::Both)
+            }
+            _ => panic!("expected run command"),
+        }
     }
 
     #[test]
