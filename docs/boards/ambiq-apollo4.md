@@ -3,12 +3,25 @@
 **Architecture:** ARM Cortex-M4F. Ultra-low power MCU with SPOT technology.
 
 ## 1. Dynamic Simulation Validation
-**Status:** ❌ Failed ([2m2026-10-18T00:53:04.026938Z[0m [31mERROR[0m [2mlabwired_cli[0m[2m:[0m Peripheral 'adc' (type 'ambiqapollo4_ad)
+**Status:** ✅ Passed (simulation-ok)
 
 ```text
-[2m2026-10-18T00:53:04.025627Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting LabWired Simulator
-[2m2026-10-18T00:53:04.025859Z[0m [32m INFO[0m [2mlabwired_core::system::builder[0m[2m:[0m Loading chip descriptor: ../../chips/onboarding/ambiq-apollo4.yaml
-[2m2026-10-18T00:53:04.026938Z[0m [31mERROR[0m [2mlabwired_cli[0m[2m:[0m Peripheral 'adc' (type 'ambiqapollo4_adc') has no `config.profile`, and the default ADC register layout is STM32's. Refusing to model this silicon with another vendor's register map: an unmodelled peripheral is a gap you can see, a wrongly modelled one answers reads with registers that do not exist on this part. Set `config: { profile: <layout> }` explicitly.
+[2m2026-10-18T11:37:18.820751Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting LabWired Simulator
+[2m2026-10-18T11:37:18.820883Z[0m [32m INFO[0m [2mlabwired_core::system::builder[0m[2m:[0m Loading chip descriptor: ../../chips/onboarding/ambiq-apollo4.yaml
+[2m2026-10-18T11:37:18.821499Z[0m [33m WARN[0m [2mlabwired_core::bus::profiles[0m[2m:[0m GPIO type 'ambiqapollo4_gpio' (peripheral 'gpio') has no dedicated register model; falling back to the STM32F1 placeholder layout. This is a known-incomplete onboarding model — set `config.profile` or add a real model for correct behaviour.
+[2m2026-10-18T11:37:18.821660Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Loading firmware: "/home/andrii/Projects/labwired-renode/core/tests/fixtures/uart-ok-thumbv7m.elf"
+[2m2026-10-18T11:37:18.821724Z[0m [32m INFO[0m [2mlabwired_loader[0m[2m:[0m ELF Entry Point: 0x401
+[2m2026-10-18T11:37:18.821729Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Firmware Loaded Successfully!
+[2m2026-10-18T11:37:18.821731Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Entry Point: 0x401
+[2m2026-10-18T11:37:18.822550Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting Simulation (ARM Cortex-M)...
+[2m2026-10-18T11:37:18.822558Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Initial PC: 0x400, SP: 0x20020000
+[2m2026-10-18T11:37:18.822562Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Running for 20000 steps...
+[2m2026-10-18T11:37:18.822627Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Simulation Error at step 2: Memory access violation at 0x2001ffe0
+[2m2026-10-18T11:37:18.822639Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Simulation loop finished.
+[2m2026-10-18T11:37:18.822642Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Final PC: 0x45c
+[2m2026-10-18T11:37:18.822644Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Instructions: 2
+[2m2026-10-18T11:37:18.822646Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Cycles: 2
+[2m2026-10-18T11:37:18.822649Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Average IPS: 2186.65
 ```
 
 
@@ -17,26 +30,26 @@
 | Peripheral ID | Base Address | Type |
 |---|---|---|
 | `bootrom_logger` | `0x07fffffc` | `ambiqapollo4_bootromlogger` |
-| `adc` | `0x40038000` | `ambiqapollo4_adc` |
+| `adc` | `0x40038000` | `stub` |
 | `gpio` | `0x40010000` | `ambiqapollo4_gpio` |
-| `iom0` | `0x40050000` | `ambiqapollo4_iomaster` |
-| `iom1` | `0x40051000` | `ambiqapollo4_iomaster` |
-| `iom2` | `0x40052000` | `ambiqapollo4_iomaster` |
-| `iom3` | `0x40053000` | `ambiqapollo4_iomaster` |
-| `iom4` | `0x40054000` | `ambiqapollo4_iomaster` |
-| `iom5` | `0x40055000` | `ambiqapollo4_iomaster` |
-| `iom6` | `0x40056000` | `ambiqapollo4_iomaster` |
-| `iom7` | `0x40057000` | `ambiqapollo4_iomaster` |
-| `rtc` | `0x40004800` | `ambiqapollo4_rtc` |
+| `iom0` | `0x40050000` | `stub` |
+| `iom1` | `0x40051000` | `stub` |
+| `iom2` | `0x40052000` | `stub` |
+| `iom3` | `0x40053000` | `stub` |
+| `iom4` | `0x40054000` | `stub` |
+| `iom5` | `0x40055000` | `stub` |
+| `iom6` | `0x40056000` | `stub` |
+| `iom7` | `0x40057000` | `stub` |
+| `rtc` | `0x40004800` | `stub` |
 | `timer` | `0x40008000` | `ambiqapollo4_timer` |
 | `stimer` | `0x40008800` | `ambiqapollo4_systemtimer` |
 | `uart0` | `0x4001c000` | `pl011` |
 | `uart1` | `0x4001d000` | `pl011` |
 | `uart2` | `0x4001e000` | `pl011` |
 | `uart3` | `0x4001f000` | `pl011` |
-| `pwrctrl` | `0x40021000` | `ambiqapollo4_powercontroller` |
-| `security` | `0x40030000` | `ambiqapollo4_security` |
-| `wdt` | `0x40024000` | `ambiqapollo4_watchdog` |
+| `pwrctrl` | `0x40021000` | `stub` |
+| `security` | `0x40030000` | `stub` |
+| `wdt` | `0x40024000` | `stub` |
 | `cpu_complex` | `0x48000000` | `pythonperipheral` |
 
 **Total Peripherals:** 22

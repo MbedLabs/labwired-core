@@ -1,14 +1,8 @@
-# LabWired - Firmware Simulation Platform
-# Copyright (C) 2026 Andrii Shylenko
-#
-# This software is released under the MIT License.
-# See the LICENSE file in the project root for full license information.
-
 name: andes_ae350_n25
 description: 'andes_ae350_n25 (root platform, Andes). Architecture: RISC-V.'
 family: Andes
-code_example: "/* LabWired Hardware Initialization */\nint main(void) {\n    // Initialize hardware...\n\
-  \    while(1) {\n        // Idle loop\n    }\n    return 0;\n}"
+code_example: "/* LabWired Hardware Initialization */\nint main(void) {\n    // Initialize\
+  \ hardware...\n    while(1) {\n        // Idle loop\n    }\n    return 0;\n}"
 pass_rate: 100
 verified: false
 system: systems/onboarding/andes_ae350_n25.yaml
@@ -24,6 +18,6 @@ validation:
     chip_descriptor: true
     flash_base_present: true
     ram_base_present: true
-  timestamp_utc: '2026-10-18T00:53:04.119186+00:00'
+  timestamp_utc: '2026-10-18T11:37:18.850993+00:00'
   run_url: ''
   artifacts_url: https://github.com/w1ne/labwired-core/blob/main/docs/boards/andes_ae350_n25.md

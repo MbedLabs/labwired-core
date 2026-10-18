@@ -19,6 +19,6 @@
 
 | Peripheral ID | Base Address | Type |
 |---|---|---|
-| `uart` | `0xc0002000` | `potato_uart` |
+| `uart` | `0xc0002000` | `stub` |
 
 **Total Peripherals:** 1

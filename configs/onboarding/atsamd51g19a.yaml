@@ -1,15 +1,9 @@
-# LabWired - Firmware Simulation Platform
-# Copyright (C) 2026 Andrii Shylenko
-#
-# This software is released under the MIT License.
-# See the LICENSE file in the project root for full license information.
-
 name: atsamd51g19a
 description: 'Microchip SAMD51 Series High Performance MCU. Architecture: ARM Cortex-M4F.'
 family: Microchip SAM D
 url: https://www.microchip.com/en-us/product/ATSAMD51G19A
-code_example: "/* LabWired Hardware Initialization */\nint main(void) {\n    // Initialize hardware...\n\
-  \    while(1) {\n        // Idle loop\n    }\n    return 0;\n}"
+code_example: "/* LabWired Hardware Initialization */\nint main(void) {\n    // Initialize\
+  \ hardware...\n    while(1) {\n        // Idle loop\n    }\n    return 0;\n}"
 pass_rate: 100
 verified: true
 system: systems/onboarding/atsamd51g19a.yaml
@@ -20,7 +14,7 @@ validation:
     system_manifest: true
     chip_descriptor: true
     simulation: true
-  timestamp_utc: '2026-10-18T00:53:04.616424+00:00'
+  timestamp_utc: '2026-10-18T11:37:19.077983+00:00'
   run_url: ''
   artifacts_url: https://github.com/w1ne/labwired-core/blob/main/docs/boards/atsamd51g19a.md
 provenance:

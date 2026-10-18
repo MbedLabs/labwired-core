@@ -21,6 +21,6 @@
 |---|---|---|
 | `timer0` | `0x60002800` | `litex_timer` |
 | `valenty` | `0x60004800` | `valentyusb` |
-| `spi` | `0x60005000` | `picorv_spi` |
+| `spi` | `0x60005000` | `stub` |
 
 **Total Peripherals:** 3

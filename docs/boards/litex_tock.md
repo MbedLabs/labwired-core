@@ -22,7 +22,7 @@
 | `uart` | `0x82002000` | `litex_uart` |
 | `eth` | `0x82004800` | `litex_ethernet_csr32` |
 | `phy` | `0x00000000` | `ethernetphysicallayer` |
-| `spi` | `0x60005000` | `litex_spi_flash` |
+| `spi` | `0x60005000` | `stub` |
 | `timer0` | `0x82002800` | `litex_timer_csr32` |
 | `cas` | `0x60006800` | `litex_controlandstatus` |
 | `led0` | `0x00000000` | `led` |

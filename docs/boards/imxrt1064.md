@@ -3,12 +3,24 @@
 **Architecture:** ARMv7E-M.
 
 ## 1. Dynamic Simulation Validation
-**Status:** ❌ Failed ([2m2026-10-18T00:53:12.155631Z[0m [31mERROR[0m [2mlabwired_cli[0m[2m:[0m Peripheral 'lpspi1' (type 'imxrt_lpspi')
+**Status:** ✅ Passed (simulation-ok)
 
 ```text
-[2m2026-10-18T00:53:12.148876Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting LabWired Simulator
-[2m2026-10-18T00:53:12.149032Z[0m [32m INFO[0m [2mlabwired_core::system::builder[0m[2m:[0m Loading chip descriptor: ../../chips/onboarding/imxrt1064.yaml
-[2m2026-10-18T00:53:12.155631Z[0m [31mERROR[0m [2mlabwired_cli[0m[2m:[0m Peripheral 'lpspi1' (type 'imxrt_lpspi') has no `config.profile`, and the default SPI register layout is STM32's. Refusing to model this silicon with another vendor's register map: an unmodelled peripheral is a gap you can see, a wrongly modelled one answers reads with registers that do not exist on this part. Set `config: { profile: <layout> }` explicitly.
+[2m2026-10-18T11:37:22.945232Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting LabWired Simulator
+[2m2026-10-18T11:37:22.945341Z[0m [32m INFO[0m [2mlabwired_core::system::builder[0m[2m:[0m Loading chip descriptor: ../../chips/onboarding/imxrt1064.yaml
+[2m2026-10-18T11:37:22.946565Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Loading firmware: "/home/andrii/Projects/labwired-renode/core/tests/fixtures/uart-ok-thumbv7m.elf"
+[2m2026-10-18T11:37:22.946612Z[0m [32m INFO[0m [2mlabwired_loader[0m[2m:[0m ELF Entry Point: 0x401
+[2m2026-10-18T11:37:22.946617Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Firmware Loaded Successfully!
+[2m2026-10-18T11:37:22.946619Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Entry Point: 0x401
+[2m2026-10-18T11:37:22.947421Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting Simulation (ARM Cortex-M)...
+[2m2026-10-18T11:37:22.947428Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Initial PC: 0x0, SP: 0x0
+[2m2026-10-18T11:37:22.947452Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Running for 20000 steps...
+[2m2026-10-18T11:37:22.950186Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Progress: 10000 steps, current IPS: 2809267.30
+[2m2026-10-18T11:37:22.952896Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Simulation loop finished.
+[2m2026-10-18T11:37:22.952902Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Final PC: 0x9c40
+[2m2026-10-18T11:37:22.952905Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Instructions: 20000
+[2m2026-10-18T11:37:22.952908Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Cycles: 20000
+[2m2026-10-18T11:37:22.952910Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Average IPS: 3182110.43
 ```
 
 
@@ -47,10 +59,10 @@
 | `enet2` | `0x402d4000` | `k6xf_ethernet` |
 | `flex_spi` | `0x402a8000` | `imxrt_flexspi` |
 | `flex_spi2` | `0x402a4000` | `imxrt_flexspi` |
-| `lpspi1` | `0x40394000` | `imxrt_lpspi` |
-| `lpspi2` | `0x40398000` | `imxrt_lpspi` |
-| `lpspi3` | `0x4039c000` | `imxrt_lpspi` |
-| `lpspi4` | `0x403a0000` | `imxrt_lpspi` |
+| `lpspi1` | `0x40394000` | `stub` |
+| `lpspi2` | `0x40398000` | `stub` |
+| `lpspi3` | `0x4039c000` | `stub` |
+| `lpspi4` | `0x403a0000` | `stub` |
 | `adc1` | `0x400c4000` | `imxrt_adc` |
 | `adc2` | `0x400c8000` | `imxrt_adc` |
 | `pwm1` | `0x403dc000` | `imxrt_pwm` |

@@ -3,12 +3,25 @@
 **Architecture:** Quad ARM Cortex-A53 / Dual Cortex-R5F.
 
 ## 1. Dynamic Simulation Validation
-**Status:** ❌ Failed ([2m2026-10-18T00:53:59.087120Z[0m [31mERROR[0m [2mlabwired_cli[0m[2m:[0m Peripheral 'i2c0' (type 'cadence_i2c') )
+**Status:** ✅ Passed (simulation-ok)
 
 ```text
-[2m2026-10-18T00:53:57.568678Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting LabWired Simulator
-[2m2026-10-18T00:53:57.568841Z[0m [32m INFO[0m [2mlabwired_core::system::builder[0m[2m:[0m Loading chip descriptor: ../../chips/onboarding/zynqmp-zcu102-revA.yaml
-[2m2026-10-18T00:53:59.087120Z[0m [31mERROR[0m [2mlabwired_cli[0m[2m:[0m Peripheral 'i2c0' (type 'cadence_i2c') has no `config.profile`, and the default I2C register layout is STM32's. Refusing to model this silicon with another vendor's register map: an unmodelled peripheral is a gap you can see, a wrongly modelled one answers reads with registers that do not exist on this part. Set `config: { profile: <layout> }` explicitly.
+[2m2026-10-18T11:37:38.935094Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting LabWired Simulator
+[2m2026-10-18T11:37:38.935246Z[0m [32m INFO[0m [2mlabwired_core::system::builder[0m[2m:[0m Loading chip descriptor: ../../chips/onboarding/zynqmp-zcu102-revA.yaml
+[2m2026-10-18T11:37:39.278110Z[0m [33m WARN[0m [2mlabwired_core::bus::profiles[0m[2m:[0m GPIO type 'xilinxgpiops' (peripheral 'gpio') has no dedicated register model; falling back to the STM32F1 placeholder layout. This is a known-incomplete onboarding model — set `config.profile` or add a real model for correct behaviour.
+[2m2026-10-18T11:37:39.278253Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Loading firmware: "/home/andrii/Projects/labwired-renode/core/tests/fixtures/uart-ok-thumbv7m.elf"
+[2m2026-10-18T11:37:39.278335Z[0m [32m INFO[0m [2mlabwired_loader[0m[2m:[0m ELF Entry Point: 0x401
+[2m2026-10-18T11:37:39.278347Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Firmware Loaded Successfully!
+[2m2026-10-18T11:37:39.278351Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Entry Point: 0x401
+[2m2026-10-18T11:37:39.279468Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting Simulation (ARM Cortex-M)...
+[2m2026-10-18T11:37:39.279482Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Initial PC: 0x400, SP: 0x20020000
+[2m2026-10-18T11:37:39.279491Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Running for 20000 steps...
+[2m2026-10-18T11:37:39.282572Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Progress: 10000 steps, current IPS: 2376380.57
+[2m2026-10-18T11:37:39.284355Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Simulation loop finished.
+[2m2026-10-18T11:37:39.284363Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Final PC: 0x454
+[2m2026-10-18T11:37:39.284366Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Instructions: 20000
+[2m2026-10-18T11:37:39.284369Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Cycles: 20004
+[2m2026-10-18T11:37:39.284372Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Average IPS: 3327442.65
 ```
 
 
@@ -24,8 +37,8 @@
 | `adma` | `0xffa80000` | `zynqmp_dma` |
 | `uart0` | `0xff000000` | `cadence_uart` |
 | `uart1` | `0xff010000` | `cadence_uart` |
-| `i2c0` | `0xff020000` | `cadence_i2c` |
-| `i2c1` | `0xff030000` | `cadence_i2c` |
+| `i2c0` | `0xff020000` | `stub` |
+| `i2c1` | `0xff030000` | `stub` |
 | `ttc0` | `0xff110000` | `cadence_ttc` |
 | `ttc1` | `0xff120000` | `cadence_ttc` |
 | `ttc2` | `0xff130000` | `cadence_ttc` |
@@ -36,12 +49,12 @@
 | `gem3` | `0xff0e0000` | `cadencegem` |
 | `phy` | `0x00000000` | `ethernetphysicallayer` |
 | `gpio` | `0xff0a0000` | `xilinxgpiops` |
-| `ipi` | `0xff300000` | `zynqmp_ipi` |
-| `rtc` | `0xffa60000` | `zynqmp_rtc` |
+| `ipi` | `0xff300000` | `stub` |
+| `rtc` | `0xffa60000` | `stub` |
 | `L1_PLL_STATUS_READ_1_SERDES_REGISTER` | `0xfd4063e4` | `arraymemory` |
 | `L2_PLL_STATUS_READ_1_SERDES_REGISTER` | `0xfd40a3e4` | `arraymemory` |
 | `L3_PLL_STATUS_READ_1_SERDES_REGISTER` | `0xfd40e3e4` | `arraymemory` |
 | `PS_CTRL_STATUS_AMS_REGISTER` | `0xffa50040` | `pythonperipheral` |
-| `qspi` | `0xff0f0000` | `zynqmp_gqspi` |
+| `qspi` | `0xff0f0000` | `stub` |
 
 **Total Peripherals:** 27

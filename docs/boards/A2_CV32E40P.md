@@ -23,8 +23,8 @@
 | `timer` | `0x1a10b000` | `pulp_timer` |
 | `gpio` | `0x1a101000` | `pulp_apb_gpio` |
 | `i2s` | `0x1a102200` | `pulp_i2s` |
-| `i2c0` | `0x1a102180` | `pulp_udma_i2c` |
-| `spi` | `0x1a102080` | `pulp_udma_spi` |
+| `i2c0` | `0x1a102180` | `stub` |
+| `spi` | `0x1a102080` | `stub` |
 | `camera_controller` | `0x1a102280` | `pulp_udma_camera` |
 
 **Total Peripherals:** 7

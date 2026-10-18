@@ -3,12 +3,24 @@
 **Architecture:** ARM Cortex-M4F.
 
 ## 1. Dynamic Simulation Validation
-**Status:** ❌ Failed ([2m2026-10-18T00:53:18.087830Z[0m [31mERROR[0m [2mlabwired_cli[0m[2m:[0m Peripheral 'spip' (type 'npcx_spip') ha)
+**Status:** ✅ Passed (simulation-ok)
 
 ```text
-[2m2026-10-18T00:53:18.078251Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting LabWired Simulator
-[2m2026-10-18T00:53:18.079773Z[0m [32m INFO[0m [2mlabwired_core::system::builder[0m[2m:[0m Loading chip descriptor: ../../chips/onboarding/nuvoton_npcx9m6fb_evb.yaml
-[2m2026-10-18T00:53:18.087830Z[0m [31mERROR[0m [2mlabwired_cli[0m[2m:[0m Peripheral 'spip' (type 'npcx_spip') has no `config.profile`, and the default SPI register layout is STM32's. Refusing to model this silicon with another vendor's register map: an unmodelled peripheral is a gap you can see, a wrongly modelled one answers reads with registers that do not exist on this part. Set `config: { profile: <layout> }` explicitly.
+[2m2026-10-18T11:37:25.155727Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting LabWired Simulator
+[2m2026-10-18T11:37:25.155840Z[0m [32m INFO[0m [2mlabwired_core::system::builder[0m[2m:[0m Loading chip descriptor: ../../chips/onboarding/nuvoton_npcx9m6fb_evb.yaml
+[2m2026-10-18T11:37:25.157627Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Loading firmware: "/home/andrii/Projects/labwired-renode/core/tests/fixtures/uart-ok-thumbv7m.elf"
+[2m2026-10-18T11:37:25.157713Z[0m [32m INFO[0m [2mlabwired_loader[0m[2m:[0m ELF Entry Point: 0x401
+[2m2026-10-18T11:37:25.157729Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Firmware Loaded Successfully!
+[2m2026-10-18T11:37:25.157733Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Entry Point: 0x401
+[2m2026-10-18T11:37:25.159276Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting Simulation (ARM Cortex-M)...
+[2m2026-10-18T11:37:25.159290Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Initial PC: 0x400, SP: 0x20020000
+[2m2026-10-18T11:37:25.159295Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Running for 20000 steps...
+[2m2026-10-18T11:37:25.159375Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Simulation Error at step 2: Memory access violation at 0x2001ffe0
+[2m2026-10-18T11:37:25.159393Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Simulation loop finished.
+[2m2026-10-18T11:37:25.159397Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Final PC: 0x45c
+[2m2026-10-18T11:37:25.159400Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Instructions: 2
+[2m2026-10-18T11:37:25.159403Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Cycles: 2
+[2m2026-10-18T11:37:25.159406Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Average IPS: 1198.31
 ```
 
 
@@ -36,10 +48,10 @@
 | `mdma3` | `0x40011300` | `npcx_mdma` |
 | `mdma4` | `0x40011400` | `npcx_mdma` |
 | `mdma5` | `0x40011500` | `npcx_mdma` |
-| `spip` | `0x400d2000` | `npcx_spip` |
-| `lfcg` | `0x400b5100` | `npcx_lfcg` |
-| `hfcg` | `0x400b5000` | `npcx_hfcg` |
-| `fiu` | `0x40020000` | `npcx_fiu` |
+| `spip` | `0x400d2000` | `stub` |
+| `lfcg` | `0x400b5100` | `stub` |
+| `hfcg` | `0x400b5000` | `stub` |
+| `fiu` | `0x40020000` | `stub` |
 | `gpio0` | `0x40081000` | `npcx_gpio` |
 | `gpio1` | `0x40083000` | `npcx_gpio` |
 | `gpio2` | `0x40085000` | `npcx_gpio` |
@@ -56,14 +68,14 @@
 | `gpiod` | `0x4009b000` | `npcx_gpio` |
 | `gpioe` | `0x4009d000` | `npcx_gpio` |
 | `gpiof` | `0x4009f000` | `npcx_gpio` |
-| `smbus0` | `0x40009000` | `npcx_smbus` |
-| `smbus1` | `0x4000b000` | `npcx_smbus` |
-| `smbus2` | `0x400c0000` | `npcx_smbus` |
-| `smbus3` | `0x400c2000` | `npcx_smbus` |
-| `smbus4` | `0x40008000` | `npcx_smbus` |
-| `smbus5` | `0x40017000` | `npcx_smbus` |
-| `smbus6` | `0x40018000` | `npcx_smbus` |
-| `smbus7` | `0x40019000` | `npcx_smbus` |
+| `smbus0` | `0x40009000` | `stub` |
+| `smbus1` | `0x4000b000` | `stub` |
+| `smbus2` | `0x400c0000` | `stub` |
+| `smbus3` | `0x400c2000` | `stub` |
+| `smbus4` | `0x40008000` | `stub` |
+| `smbus5` | `0x40017000` | `stub` |
+| `smbus6` | `0x40018000` | `stub` |
+| `smbus7` | `0x40019000` | `stub` |
 | `DEV_CTL4` | `0x400c3006` | `pythonperipheral` |
 | `SWRST_CTL4` | `0x400c3110` | `pythonperipheral` |
 | `pm1` | `0x400c9000` | `arraymemory` |

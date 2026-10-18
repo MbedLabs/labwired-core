@@ -19,12 +19,12 @@
 
 | Peripheral ID | Base Address | Type |
 |---|---|---|
-| `spi0` | `0xb0001000` | `designware_spi` |
-| `spi1` | `0xb0001400` | `designware_spi` |
+| `spi0` | `0xb0001000` | `stub` |
+| `spi1` | `0xb0001400` | `stub` |
 | `uartA` | `0xb0002000` | `ns16550` |
 | `uartB` | `0xb0002400` | `ns16550` |
 | `gpio` | `0xb0000c00` | `designware_apb_gpio` |
-| `pwm` | `0xb0000800` | `quark_pwm` |
-| `scss` | `0xb0800000` | `quark_systemcontrolsubsystem` |
+| `pwm` | `0xb0000800` | `stub` |
+| `scss` | `0xb0800000` | `stub` |
 
 **Total Peripherals:** 7

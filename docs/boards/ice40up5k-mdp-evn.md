@@ -19,7 +19,7 @@
 
 | Peripheral ID | Base Address | Type |
 |---|---|---|
-| `i2c` | `0x60007800` | `litex_i2c` |
+| `i2c` | `0x60007800` | `stub` |
 | `bmp180` | `0x00000077` | `bmp180` |
 | `lsm330_a` | `0x00000018` | `lsm330_accelerometer` |
 | `lsm330_g` | `0x0000006b` | `lsm330_gyroscope` |
@@ -28,6 +28,6 @@
 | `lsm303dlhc_g` | `0x0000001e` | `lsm303dlhc_gyroscope` |
 | `timer0` | `0x60002800` | `litex_timer` |
 | `valenty` | `0x60004800` | `valentyusb` |
-| `spi` | `0x60005000` | `picorv_spi` |
+| `spi` | `0x60005000` | `stub` |
 
 **Total Peripherals:** 10

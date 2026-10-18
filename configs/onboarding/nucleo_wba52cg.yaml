@@ -1,18 +1,13 @@
-# LabWired - Firmware Simulation Platform
-# Copyright (C) 2026 Andrii Shylenko
-#
-# This software is released under the MIT License.
-# See the LICENSE file in the project root for full license information.
-
 name: nucleo_wba52cg
-description: 'STMicroelectronics NUCLEO-WBA52CG development board for Bluetooth 5.3 applications. Architecture:
-  ARMv8-M.'
+description: 'STMicroelectronics NUCLEO-WBA52CG development board for Bluetooth 5.3
+  applications. Architecture: ARMv8-M.'
 family: STM32 Nucleo-64
 url: https://www.st.com/en/evaluation-tools/nucleo-wba52cg.html
-code_example: "/* Zephyr Blinky for STM32 */\n#include <zephyr/kernel.h>\n#include <zephyr/drivers/gpio.h>\n\
-  \nvoid main(void) {\n    const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);\n\
-  \    gpio_pin_configure_dt(&led, GPIO_OUTPUT_ACTIVE);\n    while (1) {\n        gpio_pin_toggle_dt(&led);\n\
-  \        k_msleep(500);\n    }\n}"
+code_example: "/* Zephyr Blinky for STM32 */\n#include <zephyr/kernel.h>\n#include\
+  \ <zephyr/drivers/gpio.h>\n\nvoid main(void) {\n    const struct gpio_dt_spec led\
+  \ = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);\n    gpio_pin_configure_dt(&led, GPIO_OUTPUT_ACTIVE);\n\
+  \    while (1) {\n        gpio_pin_toggle_dt(&led);\n        k_msleep(500);\n  \
+  \  }\n}"
 pass_rate: 100
 verified: true
 system: systems/onboarding/nucleo_wba52cg.yaml
@@ -23,7 +18,7 @@ validation:
     system_manifest: true
     chip_descriptor: true
     simulation: true
-  timestamp_utc: '2026-10-18T00:53:17.853114+00:00'
+  timestamp_utc: '2026-10-18T11:37:25.101927+00:00'
   run_url: ''
   artifacts_url: https://github.com/w1ne/labwired-core/blob/main/docs/boards/nucleo_wba52cg.md
 provenance:

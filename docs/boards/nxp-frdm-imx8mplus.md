@@ -3,17 +3,29 @@
 **Architecture:** ARM multicore cluster.
 
 ## 1. Dynamic Simulation Validation
-**Status:** ❌ Failed ([2m2026-10-18T00:53:24.360764Z[0m [31mERROR[0m [2mlabwired_cli[0m[2m:[0m UART type 'mxcuart' (peripheral 'uart1')
+**Status:** ✅ Passed (simulation-ok)
 
 ```text
-[2m2026-10-18T00:53:18.275653Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting LabWired Simulator
-[2m2026-10-18T00:53:18.275823Z[0m [32m INFO[0m [2mlabwired_core::system::builder[0m[2m:[0m Loading chip descriptor: ../../chips/onboarding/nxp-frdm-imx8mplus.yaml
-[2m2026-10-18T00:53:23.729547Z[0m [33m WARN[0m [2mlabwired_core::bus::profiles[0m[2m:[0m GPIO type 'nxp_imx_gpio' (peripheral 'gpio1') has no dedicated register model; falling back to the STM32F1 placeholder layout. This is a known-incomplete onboarding model — set `config.profile` or add a real model for correct behaviour.
-[2m2026-10-18T00:53:23.729593Z[0m [33m WARN[0m [2mlabwired_core::bus::profiles[0m[2m:[0m GPIO type 'nxp_imx_gpio' (peripheral 'gpio2') has no dedicated register model; falling back to the STM32F1 placeholder layout. This is a known-incomplete onboarding model — set `config.profile` or add a real model for correct behaviour.
-[2m2026-10-18T00:53:23.729606Z[0m [33m WARN[0m [2mlabwired_core::bus::profiles[0m[2m:[0m GPIO type 'nxp_imx_gpio' (peripheral 'gpio3') has no dedicated register model; falling back to the STM32F1 placeholder layout. This is a known-incomplete onboarding model — set `config.profile` or add a real model for correct behaviour.
-[2m2026-10-18T00:53:23.729617Z[0m [33m WARN[0m [2mlabwired_core::bus::profiles[0m[2m:[0m GPIO type 'nxp_imx_gpio' (peripheral 'gpio4') has no dedicated register model; falling back to the STM32F1 placeholder layout. This is a known-incomplete onboarding model — set `config.profile` or add a real model for correct behaviour.
-[2m2026-10-18T00:53:23.729628Z[0m [33m WARN[0m [2mlabwired_core::bus::profiles[0m[2m:[0m GPIO type 'nxp_imx_gpio' (peripheral 'gpio5') has no dedicated register model; falling back to the STM32F1 placeholder layout. This is a known-incomplete onboarding model — set `config.profile` or add a real model for correct behaviour.
-[2m2026-10-18T00:53:24.360764Z[0m [31mERROR[0m [2mlabwired_cli[0m[2m:[0m UART type 'mxcuart' (peripheral 'uart1') has no register layout modelled yet and no `config.profile` set; it will NOT be silently mapped onto an STM32. Choose a layout explicitly with `config: { profile: <one of the supported layouts> }`, or add a dedicated model for it.
+[2m2026-10-18T11:37:25.200219Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting LabWired Simulator
+[2m2026-10-18T11:37:25.200325Z[0m [32m INFO[0m [2mlabwired_core::system::builder[0m[2m:[0m Loading chip descriptor: ../../chips/onboarding/nxp-frdm-imx8mplus.yaml
+[2m2026-10-18T11:37:27.185715Z[0m [33m WARN[0m [2mlabwired_core::bus::profiles[0m[2m:[0m GPIO type 'nxp_imx_gpio' (peripheral 'gpio1') has no dedicated register model; falling back to the STM32F1 placeholder layout. This is a known-incomplete onboarding model — set `config.profile` or add a real model for correct behaviour.
+[2m2026-10-18T11:37:27.185744Z[0m [33m WARN[0m [2mlabwired_core::bus::profiles[0m[2m:[0m GPIO type 'nxp_imx_gpio' (peripheral 'gpio2') has no dedicated register model; falling back to the STM32F1 placeholder layout. This is a known-incomplete onboarding model — set `config.profile` or add a real model for correct behaviour.
+[2m2026-10-18T11:37:27.185751Z[0m [33m WARN[0m [2mlabwired_core::bus::profiles[0m[2m:[0m GPIO type 'nxp_imx_gpio' (peripheral 'gpio3') has no dedicated register model; falling back to the STM32F1 placeholder layout. This is a known-incomplete onboarding model — set `config.profile` or add a real model for correct behaviour.
+[2m2026-10-18T11:37:27.185758Z[0m [33m WARN[0m [2mlabwired_core::bus::profiles[0m[2m:[0m GPIO type 'nxp_imx_gpio' (peripheral 'gpio4') has no dedicated register model; falling back to the STM32F1 placeholder layout. This is a known-incomplete onboarding model — set `config.profile` or add a real model for correct behaviour.
+[2m2026-10-18T11:37:27.185763Z[0m [33m WARN[0m [2mlabwired_core::bus::profiles[0m[2m:[0m GPIO type 'nxp_imx_gpio' (peripheral 'gpio5') has no dedicated register model; falling back to the STM32F1 placeholder layout. This is a known-incomplete onboarding model — set `config.profile` or add a real model for correct behaviour.
+[2m2026-10-18T11:37:27.185926Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Loading firmware: "/home/andrii/Projects/labwired-renode/core/tests/fixtures/uart-ok-thumbv7m.elf"
+[2m2026-10-18T11:37:27.185982Z[0m [32m INFO[0m [2mlabwired_loader[0m[2m:[0m ELF Entry Point: 0x401
+[2m2026-10-18T11:37:27.185990Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Firmware Loaded Successfully!
+[2m2026-10-18T11:37:27.185992Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Entry Point: 0x401
+[2m2026-10-18T11:37:27.186938Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting Simulation (ARM Cortex-M)...
+[2m2026-10-18T11:37:27.186947Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Initial PC: 0x400, SP: 0x20020000
+[2m2026-10-18T11:37:27.186950Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Running for 20000 steps...
+[2m2026-10-18T11:37:27.190363Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Progress: 10000 steps, current IPS: 2289616.19
+[2m2026-10-18T11:37:27.193793Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Simulation loop finished.
+[2m2026-10-18T11:37:27.193800Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Final PC: 0x454
+[2m2026-10-18T11:37:27.193808Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Instructions: 20000
+[2m2026-10-18T11:37:27.193811Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Cycles: 20004
+[2m2026-10-18T11:37:27.193815Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Average IPS: 2557704.70
 ```
 
 
@@ -53,15 +65,15 @@
 | `flexcan2` | `0x308d0000` | `nxp_flexcan` |
 | `eth_mac` | `0x30be0000` | `k6xf_ethernet` |
 | `eth_qos` | `0x30bf0000` | `synopsysdwcethernetqualityofservice` |
-| `i2c1` | `0x30a20000` | `nxp_imx_i2c` |
-| `i2c2` | `0x30a30000` | `nxp_imx_i2c` |
-| `i2c3` | `0x30a40000` | `nxp_imx_i2c` |
-| `i2c4` | `0x30a50000` | `nxp_imx_i2c` |
-| `i2c5` | `0x30ad0000` | `nxp_imx_i2c` |
-| `i2c6` | `0x30ae0000` | `nxp_imx_i2c` |
+| `i2c1` | `0x30a20000` | `stub` |
+| `i2c2` | `0x30a30000` | `stub` |
+| `i2c3` | `0x30a40000` | `stub` |
+| `i2c4` | `0x30a50000` | `stub` |
+| `i2c5` | `0x30ad0000` | `stub` |
+| `i2c6` | `0x30ae0000` | `stub` |
 | `apis1_gpc` | `0x303a0000` | `pythonperipheral` |
-| `ecspi1` | `0x30820000` | `nxp_ecspi` |
-| `ecspi2` | `0x30830000` | `nxp_ecspi` |
-| `ecspi3` | `0x30840000` | `nxp_ecspi` |
+| `ecspi1` | `0x30820000` | `stub` |
+| `ecspi2` | `0x30830000` | `stub` |
+| `ecspi3` | `0x30840000` | `stub` |
 
 **Total Peripherals:** 42

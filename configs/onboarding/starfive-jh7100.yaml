@@ -1,15 +1,10 @@
-# LabWired - Firmware Simulation Platform
-# Copyright (C) 2026 Andrii Shylenko
-#
-# This software is released under the MIT License.
-# See the LICENSE file in the project root for full license information.
-
 name: starfive-jh7100
-description: 'StarFive JH7100 Vision SoC with dual core SiFive U74. Architecture: RISC-V RV64GC.'
+description: 'StarFive JH7100 Vision SoC with dual core SiFive U74. Architecture:
+  RISC-V RV64GC.'
 url: https://www.starfivetech.com/en/site/soc
 family: StarFive
-code_example: "/* LabWired Hardware Initialization */\nint main(void) {\n    // Initialize hardware...\n\
-  \    while(1) {\n        // Idle loop\n    }\n    return 0;\n}"
+code_example: "/* LabWired Hardware Initialization */\nint main(void) {\n    // Initialize\
+  \ hardware...\n    while(1) {\n        // Idle loop\n    }\n    return 0;\n}"
 pass_rate: 100
 verified: false
 system: systems/onboarding/starfive-jh7100.yaml
@@ -21,7 +16,7 @@ validation:
     chip_descriptor: true
     flash_base_present: true
     ram_base_present: true
-  timestamp_utc: '2026-10-18T00:53:36.248502+00:00'
+  timestamp_utc: '2026-10-18T11:37:32.738658+00:00'
   run_url: ''
   artifacts_url: https://github.com/w1ne/labwired-core/blob/main/docs/boards/starfive-jh7100.md
 provenance:

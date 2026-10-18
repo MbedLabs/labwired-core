@@ -22,6 +22,6 @@
 | `timer0` | `0xf0001800` | `litex_timer` |
 | `uart` | `0xf0001000` | `litex_uart` |
 | `cpu_timer` | `0xf0000800` | `litex_cputimer` |
-| `spi` | `0xf0008000` | `litex_spi` |
+| `spi` | `0xf0008000` | `stub` |
 
 **Total Peripherals:** 4

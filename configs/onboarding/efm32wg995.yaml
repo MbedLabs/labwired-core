@@ -1,16 +1,10 @@
-# LabWired - Firmware Simulation Platform
-# Copyright (C) 2026 Andrii Shylenko
-#
-# This software is released under the MIT License.
-# See the LICENSE file in the project root for full license information.
-
 name: efm32wg995
-description: 'Silicon Labs EFM32WG995 Wonder Gecko MCU featuring DSP instructions and floating-point unit.
-  Architecture: ARM Cortex-M4F.'
+description: 'Silicon Labs EFM32WG995 Wonder Gecko MCU featuring DSP instructions
+  and floating-point unit. Architecture: ARM Cortex-M4F.'
 family: Silicon Labs EFM32 Wonder Gecko
 url: https://www.silabs.com/mcu/32-bit/efm32-wonder-gecko
-code_example: "/* LabWired Hardware Initialization */\nint main(void) {\n    // Initialize hardware...\n\
-  \    while(1) {\n        // Idle loop\n    }\n    return 0;\n}"
+code_example: "/* LabWired Hardware Initialization */\nint main(void) {\n    // Initialize\
+  \ hardware...\n    while(1) {\n        // Idle loop\n    }\n    return 0;\n}"
 pass_rate: 100
 verified: true
 system: systems/onboarding/efm32wg995.yaml
@@ -21,7 +15,7 @@ validation:
     system_manifest: true
     chip_descriptor: true
     simulation: true
-  timestamp_utc: '2026-10-18T00:53:07.192596+00:00'
+  timestamp_utc: '2026-10-18T11:37:20.887876+00:00'
   run_url: ''
   artifacts_url: https://github.com/w1ne/labwired-core/blob/main/docs/boards/efm32wg995.md
 provenance:

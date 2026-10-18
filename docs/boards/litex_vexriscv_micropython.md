@@ -24,6 +24,6 @@
 | `uart` | `0x60001800` | `litex_uart` |
 | `eth` | `0x60007800` | `litex_ethernet` |
 | `phy` | `0x00000000` | `ethernetphysicallayer` |
-| `spi` | `0x60005000` | `litex_spi_flash` |
+| `spi` | `0x60005000` | `stub` |
 
 **Total Peripherals:** 6

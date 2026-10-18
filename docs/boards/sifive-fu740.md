@@ -23,9 +23,9 @@
 | `uart1` | `0x10011000` | `sifive_uart` |
 | `i2c1` | `0x10030000` | `opencoresi2c` |
 | `i2c2` | `0x10031000` | `opencoresi2c` |
-| `qspi0` | `0x10040000` | `hifive_spi` |
-| `qspi1` | `0x10041000` | `hifive_spi` |
-| `qspi2` | `0x10050000` | `hifive_spi` |
+| `qspi0` | `0x10040000` | `stub` |
+| `qspi1` | `0x10041000` | `stub` |
+| `qspi2` | `0x10050000` | `stub` |
 | `gpio` | `0x10060000` | `sifive_gpio` |
 | `ethernet` | `0x10090000` | `cadencegem` |
 | `phy` | `0x00000000` | `ethernetphysicallayer` |
