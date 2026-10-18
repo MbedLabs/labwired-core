@@ -428,9 +428,9 @@ pub struct RunArgs {
     /// This is an assertion, not a hint: the flag fails the run rather than
     /// falling back when per-instruction instrumentation (`--break-at`,
     /// `--watch-mem`, `--stop-on`; on RISC-V also the WiFi bridge and the DHCP
-    /// trace) would pin the CPU quantum to one instruction. ARM, RISC-V, and
-    /// Xtensa (ESP32 / ESP32-S3) all have batched paths and use batching by
-    /// default for ordinary runs.
+    /// trace) would pin the CPU quantum to one instruction. ARM and RISC-V use
+    /// batching by default for ordinary runs; Xtensa (ESP32 / ESP32-S3) takes
+    /// its batched path only with this flag.
     ///
     /// Keeps throughput measurements explicit even when instrumentation would
     /// otherwise select single-stepping. It also prints a `[batched] ...`
