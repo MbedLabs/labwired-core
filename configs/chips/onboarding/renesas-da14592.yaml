@@ -7,8 +7,8 @@
 name: renesas-da14592
 arch: arm
 flash:
-  base: 134217728
-  size: 294912B
+  base: 10485760
+  size: 9216B
 ram:
   base: 8388608
   size: 98304B
@@ -50,7 +50,7 @@ peripherals:
   bus: sysbus
   base_address: 1342571008
 - id: i2c
-  type: renesasda_i2c
+  type: designware_apb_i2c
   bus: sysbus
   base_address: 1342309120
 - id: clock_gen
@@ -69,3 +69,5 @@ peripherals:
   type: renesasda14_generalpurposeregisters
   bus: sysbus
   base_address: 1342505728
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

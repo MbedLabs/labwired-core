@@ -7,7 +7,7 @@
 name: efr32xg22
 arch: arm
 flash:
-  base: 134217728
+  base: 0
   size: 524288B
 ram:
   base: 536870912
@@ -17,3 +17,5 @@ peripherals:
   type: pythonperipheral
   bus: sysbus
   base_address: 1342783524
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

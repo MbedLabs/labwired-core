@@ -5,10 +5,10 @@
 # See the LICENSE file in the project root for full license information.
 
 name: litex_minerva
-arch: arm
+arch: riscv
 flash:
-  base: 537001984
-  size: 32768B
+  base: 539131904
+  size: 1048576B
 ram:
   base: 268435456
   size: 262144B
@@ -21,7 +21,13 @@ peripherals:
   type: litex_uart
   bus: sysbus
   base_address: 3758102528
+- id: eth
+  type: litex_ethernet
+  bus: sysbus
+  base_address: 3758110720
 - id: timer0
   type: litex_timer
   bus: sysbus
   base_address: 3758106624
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

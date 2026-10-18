@@ -1,11 +1,17 @@
+# LabWired - Firmware Simulation Platform
+# Copyright (C) 2026 Andrii Shylenko
+#
+# This software is released under the MIT License.
+# See the LICENSE file in the project root for full license information.
+
 name: egis_et171
-arch: arm
+arch: riscv
 flash:
-  base: 1879048192
-  size: 65536B
+  base: 2147483648
+  size: 1048576B
 ram:
-  base: 1073741824
-  size: 262144
+  base: 0
+  size: 393216B
 peripherals:
 - id: mtimer
   type: riscvmachinetimer
@@ -51,3 +57,5 @@ peripherals:
   type: egiset171_crypto
   bus: sysbus
   base_address: 3892314112
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

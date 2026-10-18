@@ -5,16 +5,19 @@ family: Renesas RA2
 url: https://www.renesas.com/products/microcontrollers-microprocessors/ra-cortex-m-mcus/ra2l1-48mhz-arm-cortex-m23-ultra-low-power-general-purpose-microcontroller
 code_example: "/* LabWired Hardware Initialization */\nint main(void) {\n    // Initialize\
   \ hardware...\n    while(1) {\n        // Idle loop\n    }\n    return 0;\n}"
-pass_rate: 100
-verified: true
+pass_rate: 67
+verified: false
 system: systems/onboarding/renesas-r7fa2l1a.yaml
 validation:
   method: ci-arm-fixture-simulation
-  reason: simulation-ok
+  reason: "\e[2m2026-10-18T00:53:31.268164Z\e[0m \e[31mERROR\e[0m \e[2mlabwired_cli\e\
+    [0m\e[2m:\e[0m Peripheral 'iic1' (type 'renesasra_iic'"
   checks:
     system_manifest: true
     chip_descriptor: true
-    simulation: true
-  timestamp_utc: '2026-06-09T13:16:43.433720+00:00'
-  run_url: https://github.com/w1ne/labwired-core/actions/runs/27208642377/attempts/1
+    simulation: false
+  timestamp_utc: '2026-10-18T00:53:31.330939+00:00'
+  run_url: ''
   artifacts_url: https://github.com/w1ne/labwired-core/blob/main/docs/boards/renesas-r7fa2l1a.md
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

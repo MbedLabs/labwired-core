@@ -17,3 +17,5 @@ peripherals:
   type: pythonperipheral
   bus: sysbus
   base_address: 1342783528
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

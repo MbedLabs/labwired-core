@@ -14,7 +14,7 @@ ram:
   size: 20480B
 peripherals:
 - id: rng
-  type: stm32f4_rng
+  type: stm32_rng
   bus: sysbus
   base_address: 1073893376
 - id: adc1
@@ -57,6 +57,10 @@ peripherals:
   type: stm32f7_i2c
   bus: sysbus
   base_address: 1073772544
+- id: flashController
+  type: stm32l0_flashcontroller
+  bus: sysbus
+  base_address: 1073881088
 - id: rcc
   type: stm32l0_rcc
   bus: sysbus
@@ -137,3 +141,5 @@ peripherals:
   type: stm32_crc
   bus: sysbus
   base_address: 1073885184
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

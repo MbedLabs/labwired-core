@@ -1,0 +1,67 @@
+# Validation Report: arduino_nano_33_ble
+
+**Architecture:** ARM Cortex-M4F. Features Bluetooth Low Energy.
+
+## 1. Dynamic Simulation Validation
+**Status:** ✅ Passed (simulation-ok)
+
+```text
+[2m2026-10-18T00:53:04.216566Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting LabWired Simulator
+[2m2026-10-18T00:53:04.216731Z[0m [32m INFO[0m [2mlabwired_core::system::builder[0m[2m:[0m Loading chip descriptor: ../../chips/onboarding/arduino_nano_33_ble.yaml
+[2m2026-10-18T00:53:04.222891Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Loading firmware: "/home/andrii/Projects/labwired/core/tests/fixtures/uart-ok-thumbv7m.elf"
+[2m2026-10-18T00:53:04.223039Z[0m [32m INFO[0m [2mlabwired_loader[0m[2m:[0m ELF Entry Point: 0x401
+[2m2026-10-18T00:53:04.223064Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Firmware Loaded Successfully!
+[2m2026-10-18T00:53:04.223069Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Entry Point: 0x401
+[2m2026-10-18T00:53:04.224538Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Starting Simulation (ARM Cortex-M)...
+[2m2026-10-18T00:53:04.224554Z[0m [32m INFO[0m [2mlabwired_cli::commands::run[0m[2m:[0m Initial PC: 0x400, SP: 0x20020000
+[2m2026-10-18T00:53:04.224562Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Running for 20000 steps...
+[2m2026-10-18T00:53:04.224663Z[0m [32m INFO[0m [2mlabwired_cli[0m[2m:[0m Simulation Error at step 2: Memory access violation at 0x2001ffe0
+[2m2026-10-18T00:53:04.224678Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Simulation loop finished.
+[2m2026-10-18T00:53:04.224686Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Final PC: 0x45c
+[2m2026-10-18T00:53:04.224693Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Instructions: 2
+[2m2026-10-18T00:53:04.224699Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Total Cycles: 2
+[2m2026-10-18T00:53:04.224706Z[0m [32m INFO[0m [2mlabwired_cli::report[0m[2m:[0m Average IPS: 1224.46
+```
+
+
+## Hardware Coverage Report
+
+| Peripheral ID | Base Address | Type |
+|---|---|---|
+| `lsm9ds1_imu` | `0x0000006b` | `lsm9ds1_imu` |
+| `lsm9ds1_mag` | `0x0000001e` | `lsm9ds1_magnetic` |
+| `led_red` | `0x00000018` | `led` |
+| `led_green` | `0x00000010` | `led` |
+| `led_blue` | `0x00000006` | `led` |
+| `uart0` | `0x40002000` | `nrf52840_uart` |
+| `uart1` | `0x40028000` | `nrf52840_uart` |
+| `rtc0` | `0x4000b000` | `nrf52840_rtc` |
+| `rtc1` | `0x40011000` | `nrf52840_rtc` |
+| `rtc2` | `0x40024000` | `nrf52840_rtc` |
+| `wdt` | `0x40010000` | `nrf52840_watchdog` |
+| `ppi` | `0x4001f000` | `nrf52840_ppi` |
+| `clock` | `0x40000000` | `nrf_clock` |
+| `twi0` | `0x40003000` | `nrf52840_i2c` |
+| `spi2` | `0x40023000` | `nrf52840_spi` |
+| `gpio0` | `0x50000500` | `nrf52840_gpio` |
+| `gpio1` | `0x50000800` | `nrf52840_gpio` |
+| `gpiote` | `0x40006000` | `nrf52840_gpiotasksevents` |
+| `twi1` | `0x40004000` | `nrf52840_i2c` |
+| `timer0` | `0x40008000` | `nrf52840_timer` |
+| `timer1` | `0x40009000` | `nrf52840_timer` |
+| `timer2` | `0x4000a000` | `nrf52840_timer` |
+| `timer3` | `0x4001a000` | `nrf52840_timer` |
+| `timer4` | `0x4001b000` | `nrf52840_timer` |
+| `i2s` | `0x40025000` | `nrf52840_i2s` |
+| `pdm` | `0x4001d000` | `nrf52840_pdm` |
+| `radio` | `0x40001000` | `nrf52840_radio` |
+| `rng` | `0x4000d000` | `nrf52840_rng` |
+| `ecb` | `0x4000e000` | `nrf52840_ecb` |
+| `egu0` | `0x40014000` | `nrf52840_egu` |
+| `egu1` | `0x40015000` | `nrf52840_egu` |
+| `egu2` | `0x40016000` | `nrf52840_egu` |
+| `egu3` | `0x40017000` | `nrf52840_egu` |
+| `egu4` | `0x40018000` | `nrf52840_egu` |
+| `egu5` | `0x40019000` | `nrf52840_egu` |
+
+**Total Peripherals:** 35

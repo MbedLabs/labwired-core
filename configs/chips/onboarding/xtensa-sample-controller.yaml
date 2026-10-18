@@ -5,11 +5,13 @@
 # See the LICENSE file in the project root for full license information.
 
 name: xtensa-sample-controller
-arch: arm
+arch: xtensa
 flash:
   base: 1342177280
   size: 67108864B
 ram:
-  base: 1073741824
-  size: 131072B
+  base: 1610612736
+  size: 134217728B
 peripherals: []
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

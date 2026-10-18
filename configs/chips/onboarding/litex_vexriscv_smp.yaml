@@ -5,7 +5,7 @@
 # See the LICENSE file in the project root for full license information.
 
 name: litex_vexriscv_smp
-arch: arm
+arch: riscv
 flash:
   base: 1073741824
   size: 134217728B
@@ -17,3 +17,7 @@ peripherals:
   type: litex_uart
   bus: sysbus
   base_address: 4026537984
+provenance:
+  generated_by: scripts/onboard_hw_targets.py
+  parse_fallbacks:
+  - flash=ram

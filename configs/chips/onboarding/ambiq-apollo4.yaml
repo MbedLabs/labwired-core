@@ -10,8 +10,8 @@ flash:
   base: 134217728
   size: 4096B
 ram:
-  base: 536870912
-  size: 2097152B
+  base: 268828672
+  size: 1048576B
 peripherals:
 - id: bootrom_logger
   type: ambiqapollo4_bootromlogger
@@ -101,3 +101,5 @@ peripherals:
   type: pythonperipheral
   bus: sysbus
   base_address: 1207959552
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

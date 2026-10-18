@@ -5,7 +5,7 @@
 # See the LICENSE file in the project root for full license information.
 
 name: riscv_virt
-arch: arm
+arch: riscv
 flash:
   base: 2147483648
   size: 2147483648B
@@ -17,3 +17,7 @@ peripherals:
   type: ns16550
   bus: sysbus
   base_address: 268435456
+provenance:
+  generated_by: scripts/onboard_hw_targets.py
+  parse_fallbacks:
+  - flash=dram

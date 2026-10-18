@@ -7,11 +7,11 @@
 name: colibri-vf61
 arch: arm
 flash:
-  base: 134217728
+  base: 0
   size: 524288B
 ram:
-  base: 1056964608
-  size: 524288B
+  base: 2147483648
+  size: 268435456B
 peripherals:
 - id: usbHub
   type: usbhub
@@ -81,3 +81,5 @@ peripherals:
   type: fslnand
   bus: sysbus
   base_address: 1074659328
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

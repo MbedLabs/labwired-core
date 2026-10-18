@@ -7,7 +7,7 @@
 name: sam4s_xplained
 arch: arm
 flash:
-  base: 134217728
+  base: 4194304
   size: 4194304B
 ram:
   base: 536870912
@@ -109,3 +109,5 @@ peripherals:
   type: sam4s_twi
   bus: sysbus
   base_address: 1073840128
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

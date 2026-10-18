@@ -5,13 +5,13 @@
 # See the LICENSE file in the project root for full license information.
 
 name: opentitan-earlgrey
-arch: arm
+arch: riscv
 flash:
+  base: 536870912
+  size: 1048576B
+ram:
   base: 32768
   size: 32768B
-ram:
-  base: 1080033280
-  size: 4096B
 peripherals:
 - id: rom_ctrl
   type: opentitan_romcontroller
@@ -141,3 +141,7 @@ peripherals:
   type: pythonperipheral
   bus: sysbus
   base_address: 1092550744
+provenance:
+  generated_by: scripts/onboard_hw_targets.py
+  parse_fallbacks:
+  - ram=rom

@@ -5,7 +5,7 @@
 # See the LICENSE file in the project root for full license information.
 
 name: riscv_verilated_uartlite
-arch: arm
+arch: riscv
 flash:
   base: 1610612736
   size: 104857600B
@@ -17,3 +17,7 @@ peripherals:
   type: cosimulateduart
   bus: sysbus
   base_address: 1879048192
+provenance:
+  generated_by: scripts/onboard_hw_targets.py
+  parse_fallbacks:
+  - flash=ram

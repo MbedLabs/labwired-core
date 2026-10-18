@@ -1,12 +1,22 @@
+# LabWired - Firmware Simulation Platform
+# Copyright (C) 2026 Andrii Shylenko
+#
+# This software is released under the MIT License.
+# See the LICENSE file in the project root for full license information.
+
 name: ice40up5k-mdp-evn
-arch: arm
+arch: riscv
 flash:
   base: 536870912
-  size: 1048576
+  size: 67108864B
 ram:
   base: 268435456
   size: 131072B
 peripherals:
+- id: i2c
+  type: litex_i2c
+  bus: sysbus
+  base_address: 1610643456
 - id: bmp180
   type: bmp180
   bus: i2c
@@ -31,3 +41,17 @@ peripherals:
   type: lsm303dlhc_gyroscope
   bus: i2c
   base_address: 30
+- id: timer0
+  type: litex_timer
+  bus: sysbus
+  base_address: 1610622976
+- id: valenty
+  type: valentyusb
+  bus: sysbus
+  base_address: 1610631168
+- id: spi
+  type: picorv_spi
+  bus: sysbus
+  base_address: 1610633216
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

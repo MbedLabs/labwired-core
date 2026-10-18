@@ -1,8 +1,14 @@
+# LabWired - Firmware Simulation Platform
+# Copyright (C) 2026 Andrii Shylenko
+#
+# This software is released under the MIT License.
+# See the LICENSE file in the project root for full license information.
+
 name: litex_vexriscv_tftp
-arch: arm
+arch: riscv
 flash:
   base: 536870912
-  size: 1048576
+  size: 16777216B
 ram:
   base: 16777216
   size: 32768B
@@ -19,7 +25,13 @@ peripherals:
   type: litex_timer
   bus: sysbus
   base_address: 2181048320
+- id: ethmac
+  type: litex_ethernet
+  bus: sysbus
+  base_address: 2181062656
 - id: ethphy
   type: ethernetphysicallayer
   bus: ethmac
   base_address: 0
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

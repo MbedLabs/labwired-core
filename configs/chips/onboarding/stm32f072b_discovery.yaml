@@ -130,11 +130,11 @@ peripherals:
   bus: sysbus
   base_address: 1073752064
 - id: rcc
-  type: pythonperipheral
+  type: stm32f0_rcc
   bus: sysbus
   base_address: 1073876992
-- id: DMA
-  type: pythonperipheral
+- id: dma
+  type: stm32g0dma
   bus: sysbus
   base_address: 1073872896
 - id: adc
@@ -145,3 +145,5 @@ peripherals:
   type: stm32_crc
   bus: sysbus
   base_address: 1073885184
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

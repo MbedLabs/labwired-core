@@ -5,16 +5,19 @@ family: Renesas RA6
 url: https://www.renesas.com/products/microcontrollers-microprocessors/ra-cortex-m-mcus/ck-ra6m5-v2-renesas-ra6m5-cloud-kit-new-secure-crypto-engine-9
 code_example: "/* LabWired Hardware Initialization */\nint main(void) {\n    // Initialize\
   \ hardware...\n    while(1) {\n        // Idle loop\n    }\n    return 0;\n}"
-pass_rate: 100
-verified: true
+pass_rate: 67
+verified: false
 system: systems/onboarding/renesas-ck_ra6m5.yaml
 validation:
   method: ci-arm-fixture-simulation
-  reason: simulation-ok
+  reason: "\e[2m2026-10-18T00:53:30.692673Z\e[0m \e[31mERROR\e[0m \e[2mlabwired_cli\e\
+    [0m\e[2m:\e[0m Peripheral 'iic0' (type 'renesasra_iic'"
   checks:
     system_manifest: true
     chip_descriptor: true
-    simulation: true
-  timestamp_utc: '2026-06-09T13:16:43.335560+00:00'
-  run_url: https://github.com/w1ne/labwired-core/actions/runs/27208642377/attempts/1
+    simulation: false
+  timestamp_utc: '2026-10-18T00:53:30.782017+00:00'
+  run_url: ''
   artifacts_url: https://github.com/w1ne/labwired-core/blob/main/docs/boards/renesas-ck_ra6m5.md
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

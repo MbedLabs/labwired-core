@@ -7,10 +7,10 @@
 name: tegra2
 arch: arm
 flash:
-  base: 134217728
+  base: 0
   size: 536870912B
 ram:
-  base: 536870912
+  base: 0
   size: 536870912B
 peripherals:
 - id: uart0
@@ -169,3 +169,7 @@ peripherals:
   type: usbkeyboard
   bus: usbHub
   base_address: 1
+provenance:
+  generated_by: scripts/onboard_hw_targets.py
+  parse_fallbacks:
+  - flash=memory

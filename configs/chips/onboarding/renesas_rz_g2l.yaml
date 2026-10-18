@@ -7,17 +7,11 @@
 name: renesas_rz_g2l
 arch: arm
 flash:
-  base: 134217728
-  size: 256KB
+  base: 0
+  size: 0B
 ram:
-  base: 536870912
-  size: 64KB
-peripherals:
-- id: timer0
-  type: arm_generictimer
-  bus: cpu0
-  base_address: 15
-- id: timer1
-  type: arm_generictimer
-  bus: cpu1
-  base_address: 15
+  base: 0
+  size: 0B
+peripherals: []
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

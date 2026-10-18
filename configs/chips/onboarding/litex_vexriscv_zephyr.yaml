@@ -5,11 +5,39 @@
 # See the LICENSE file in the project root for full license information.
 
 name: litex_vexriscv_zephyr
-arch: arm
+arch: riscv
 flash:
   base: 1073741824
   size: 268435456B
 ram:
   base: 1073741824
   size: 268435456B
-peripherals: []
+peripherals:
+- id: uart
+  type: litex_uart
+  bus: sysbus
+  base_address: 1610618880
+- id: spi
+  type: litex_spi
+  bus: sysbus
+  base_address: 1610620928
+- id: timer0
+  type: litex_timer
+  bus: sysbus
+  base_address: 1610622976
+- id: gpio_out
+  type: litex_gpio
+  bus: sysbus
+  base_address: 1610635264
+- id: gpio_in
+  type: litex_gpio
+  bus: sysbus
+  base_address: 1610637312
+- id: eth
+  type: litex_ethernet
+  bus: sysbus
+  base_address: 1610651648
+provenance:
+  generated_by: scripts/onboard_hw_targets.py
+  parse_fallbacks:
+  - flash=ram

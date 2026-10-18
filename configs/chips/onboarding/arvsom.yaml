@@ -5,10 +5,10 @@
 # See the LICENSE file in the project root for full license information.
 
 name: arvsom
-arch: arm
+arch: riscv
 flash:
-  base: 1048576
-  size: 8192B
+  base: 2147483648
+  size: 8589934592B
 ram:
   base: 2147483648
   size: 8589934592B
@@ -25,3 +25,7 @@ peripherals:
   type: pythonperipheral
   bus: sysbus
   base_address: 304414720
+provenance:
+  generated_by: scripts/onboard_hw_targets.py
+  parse_fallbacks:
+  - flash=ddr

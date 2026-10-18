@@ -7,7 +7,7 @@
 name: nxp-k6xf
 arch: arm
 flash:
-  base: 134217728
+  base: 0
   size: 1048576B
 ram:
   base: 536805376
@@ -37,3 +37,5 @@ peripherals:
   type: k6xf_rng
   bus: sysbus
   base_address: 1073909760
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

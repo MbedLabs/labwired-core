@@ -157,3 +157,5 @@ peripherals:
   type: stm32f4_flashcontroller
   bus: sysbus
   base_address: 1073881088
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

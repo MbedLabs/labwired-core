@@ -5,16 +5,19 @@ family: Arduino
 url: https://store.arduino.cc/products/uno-r4-minima
 code_example: "/* LabWired Hardware Initialization */\nint main(void) {\n    // Initialize\
   \ hardware...\n    while(1) {\n        // Idle loop\n    }\n    return 0;\n}"
-pass_rate: 100
-verified: true
+pass_rate: 67
+verified: false
 system: systems/onboarding/arduino_uno_r4_minima.yaml
 validation:
   method: ci-arm-fixture-simulation
-  reason: simulation-ok
+  reason: "\e[2m2026-10-18T00:53:04.336091Z\e[0m \e[31mERROR\e[0m \e[2mlabwired_cli\e\
+    [0m\e[2m:\e[0m Peripheral 'iic0' (type 'renesasra_iic'"
   checks:
     system_manifest: true
     chip_descriptor: true
-    simulation: true
-  timestamp_utc: '2026-06-09T13:16:41.562939+00:00'
-  run_url: https://github.com/w1ne/labwired-core/actions/runs/27208642377/attempts/1
+    simulation: false
+  timestamp_utc: '2026-10-18T00:53:04.368965+00:00'
+  run_url: ''
   artifacts_url: https://github.com/w1ne/labwired-core/blob/main/docs/boards/arduino_uno_r4_minima.md
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

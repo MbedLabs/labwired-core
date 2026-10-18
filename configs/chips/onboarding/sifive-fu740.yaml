@@ -5,10 +5,10 @@
 # See the LICENSE file in the project root for full license information.
 
 name: sifive-fu740
-arch: arm
+arch: riscv
 flash:
-  base: 16777216
-  size: 8192B
+  base: 0
+  size: 4096B
 ram:
   base: 2147483648
   size: 8589934592B
@@ -53,3 +53,7 @@ peripherals:
   type: ethernetphysicallayer
   bus: ethernet
   base_address: 0
+provenance:
+  generated_by: scripts/onboard_hw_targets.py
+  parse_fallbacks:
+  - flash=debug

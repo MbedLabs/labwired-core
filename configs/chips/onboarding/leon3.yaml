@@ -5,9 +5,9 @@
 # See the LICENSE file in the project root for full license information.
 
 name: leon3
-arch: arm
+arch: unknown
 flash:
-  base: 134217728
+  base: 0
   size: 1073741824B
 ram:
   base: 1073741824
@@ -49,3 +49,5 @@ peripherals:
   type: led
   bus: gpio
   base_address: 0
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

@@ -5,11 +5,35 @@
 # See the LICENSE file in the project root for full license information.
 
 name: litex_zephyr_vexriscv_i2s
-arch: arm
+arch: riscv
 flash:
   base: 1073741824
   size: 268435456B
 ram:
   base: 1073741824
   size: 268435456B
-peripherals: []
+peripherals:
+- id: uart
+  type: litex_uart
+  bus: sysbus
+  base_address: 2181044224
+- id: timer0
+  type: litex_timer
+  bus: sysbus
+  base_address: 2181046272
+- id: i2s_rx
+  type: litex_i2s_slave
+  bus: sysbus
+  base_address: 2181056512
+- id: i2s_tx
+  type: litex_i2s_master
+  bus: sysbus
+  base_address: 2181058560
+- id: eth
+  type: litex_ethernet
+  bus: sysbus
+  base_address: 2181052416
+provenance:
+  generated_by: scripts/onboard_hw_targets.py
+  parse_fallbacks:
+  - flash=ram

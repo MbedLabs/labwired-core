@@ -1,8 +1,14 @@
+# LabWired - Firmware Simulation Platform
+# Copyright (C) 2026 Andrii Shylenko
+#
+# This software is released under the MIT License.
+# See the LICENSE file in the project root for full license information.
+
 name: litex_microwatt
-arch: arm
+arch: unknown
 flash:
-  base: 536870912
-  size: 1048576
+  base: 0
+  size: 32768B
 ram:
   base: 16777216
   size: 4096B
@@ -15,3 +21,5 @@ peripherals:
   type: litex_timer64
   bus: sysbus
   base_address: 3221233664
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

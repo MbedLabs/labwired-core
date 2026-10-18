@@ -7,7 +7,7 @@
 name: eos-s3
 arch: arm
 flash:
-  base: 134217728
+  base: 0
   size: 524288B
 ram:
   base: 1073803264
@@ -69,3 +69,7 @@ peripherals:
   type: pythonperipheral
   bus: sysbus
   base_address: 1073759232
+provenance:
+  generated_by: scripts/onboard_hw_targets.py
+  parse_fallbacks:
+  - flash=m4mem

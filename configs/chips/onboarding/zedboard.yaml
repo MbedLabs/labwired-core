@@ -7,10 +7,10 @@
 name: zedboard
 arch: arm
 flash:
-  base: 134217728
+  base: 0
   size: 1073741824B
 ram:
-  base: 536870912
+  base: 0
   size: 1073741824B
 peripherals:
 - id: usbEhci2
@@ -145,3 +145,7 @@ peripherals:
   type: led
   bus: gpio
   base_address: 68
+provenance:
+  generated_by: scripts/onboard_hw_targets.py
+  parse_fallbacks:
+  - flash=memory

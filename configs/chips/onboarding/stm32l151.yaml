@@ -8,7 +8,7 @@ name: stm32l151
 arch: arm
 flash:
   base: 134217728
-  size: 4B
+  size: 393216B
 ram:
   base: 535822336
   size: 65536B
@@ -129,3 +129,5 @@ peripherals:
   type: pythonperipheral
   bus: sysbus
   base_address: 1073887236
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

@@ -13,10 +13,34 @@ ram:
   base: 939524096
   size: 134217728B
 peripherals:
+- id: lpi2c15
+  type: s32k3xx_lowpowerinterintegratedcircuit
+  bus: sysbus
+  base_address: 1075916800
 - id: micfil
   type: imxrt700_micfil
   bus: sysbus
   base_address: 1075896320
+- id: clkctl0_fro1
+  type: imxrt700_clockcontrol
+  bus: sysbus
+  base_address: 1073745920
+- id: clkctl1
+  type: imxrt700_clockcontrol
+  bus: sysbus
+  base_address: 1074008064
+- id: clkctl2
+  type: imxrt700_clockcontrol
+  bus: sysbus
+  base_address: 1074155520
+- id: clkctl3_fro2
+  type: imxrt700_clockcontrol
+  bus: sysbus
+  base_address: 1074139136
+- id: clkctl4
+  type: imxrt700_clockcontrol
+  bus: sysbus
+  base_address: 1074401280
 - id: rstctl1_i3c0
   type: pythonperipheral
   bus: sysbus
@@ -29,7 +53,15 @@ peripherals:
   type: pythonperipheral
   bus: sysbus
   base_address: 1074098176
+- id: iprstclp0_clr_cpu1
+  type: pythonperipheral
+  bus: sysbus
+  base_address: 1074135152
 - id: syscon3_nsvtor
   type: pythonperipheral
   bus: sysbus
   base_address: 1074143388
+provenance:
+  generated_by: scripts/onboard_hw_targets.py
+  parse_fallbacks:
+  - flash=xspi0_memory

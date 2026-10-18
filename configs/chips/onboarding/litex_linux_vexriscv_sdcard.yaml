@@ -5,7 +5,7 @@
 # See the LICENSE file in the project root for full license information.
 
 name: litex_linux_vexriscv_sdcard
-arch: arm
+arch: riscv
 flash:
   base: 1073741824
   size: 268435456B
@@ -17,6 +17,10 @@ peripherals:
   type: litex_uart
   bus: sysbus
   base_address: 4026535936
+- id: eth
+  type: litex_ethernet
+  bus: sysbus
+  base_address: 4026548224
 - id: spi
   type: litex_spi
   bus: sysbus
@@ -37,6 +41,10 @@ peripherals:
   type: litex_gpio
   bus: sysbus
   base_address: 4026560512
+- id: led
+  type: led
+  bus: gpio_out
+  base_address: 0
 - id: button
   type: button
   bus: gpio_in
@@ -49,3 +57,11 @@ peripherals:
   type: litex_mmcm
   bus: sysbus
   base_address: 4026570752
+- id: mmc_controller
+  type: litesdcard
+  bus: sysbus
+  base_address: 4026572800
+provenance:
+  generated_by: scripts/onboard_hw_targets.py
+  parse_fallbacks:
+  - flash=ddr

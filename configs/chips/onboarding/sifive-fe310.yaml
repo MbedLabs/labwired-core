@@ -5,7 +5,7 @@
 # See the LICENSE file in the project root for full license information.
 
 name: sifive-fe310
-arch: arm
+arch: riscv
 flash:
   base: 4096
   size: 4096B
@@ -25,3 +25,7 @@ peripherals:
   type: sifive_gpio
   bus: sysbus
   base_address: 268509184
+provenance:
+  generated_by: scripts/onboard_hw_targets.py
+  parse_fallbacks:
+  - ram=otp

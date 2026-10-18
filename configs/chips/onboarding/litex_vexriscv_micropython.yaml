@@ -5,7 +5,7 @@
 # See the LICENSE file in the project root for full license information.
 
 name: litex_vexriscv_micropython
-arch: arm
+arch: riscv
 flash:
   base: 536870912
   size: 33554432B
@@ -17,7 +17,25 @@ peripherals:
   type: litex_mmcm_csr32
   bus: sysbus
   base_address: 3758114816
+- id: timer
+  type: litex_timer_csr32
+  bus: sysbus
+  base_address: 1610622976
+- id: uart
+  type: litex_uart
+  bus: sysbus
+  base_address: 1610618880
+- id: eth
+  type: litex_ethernet
+  bus: sysbus
+  base_address: 1610643456
 - id: phy
   type: ethernetphysicallayer
   bus: eth
   base_address: 0
+- id: spi
+  type: litex_spi_flash
+  bus: sysbus
+  base_address: 1610633216
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

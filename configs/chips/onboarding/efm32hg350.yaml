@@ -7,7 +7,7 @@
 name: efm32hg350
 arch: arm
 flash:
-  base: 134217728
+  base: 0
   size: 65536B
 ram:
   base: 536870912
@@ -57,3 +57,5 @@ peripherals:
   type: pythonperipheral
   bus: sysbus
   base_address: 1073741832
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

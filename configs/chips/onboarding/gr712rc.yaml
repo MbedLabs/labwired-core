@@ -1,8 +1,14 @@
+# LabWired - Firmware Simulation Platform
+# Copyright (C) 2026 Andrii Shylenko
+#
+# This software is released under the MIT License.
+# See the LICENSE file in the project root for full license information.
+
 name: gr712rc
-arch: arm
+arch: unknown
 flash:
-  base: 536870912
-  size: 1048576
+  base: 0
+  size: 8388608B
 ram:
   base: 1073741824
   size: 134217728B
@@ -71,3 +77,5 @@ peripherals:
   type: gaislerapbcontroller
   bus: sysbus
   base_address: 2149576704
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

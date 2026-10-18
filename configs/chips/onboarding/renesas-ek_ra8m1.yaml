@@ -7,11 +7,11 @@
 name: renesas-ek_ra8m1
 arch: arm
 flash:
-  base: 134217728
-  size: 65536B
+  base: 33554432
+  size: 2097152B
 ram:
-  base: 805306368
-  size: 65536B
+  base: 570425344
+  size: 917504B
 peripherals:
 - id: led_blue
   type: led
@@ -33,6 +33,10 @@ peripherals:
   type: button
   bus: port0
   base_address: 9
+- id: option_setting
+  type: arraymemory
+  bus: sysbus
+  base_address: 654508112
 - id: gpt
   type: renesasra_gpt
   bus: sysbus
@@ -77,6 +81,54 @@ peripherals:
   type: renesasra_gpiomisc
   bus: sysbus
   base_address: 1077939456
+- id: port0
+  type: renesasra8_gpio
+  bus: sysbus
+  base_address: 1077936128
+- id: port1
+  type: renesasra8_gpio
+  bus: sysbus
+  base_address: 1077936160
+- id: port2
+  type: renesasra8_gpio
+  bus: sysbus
+  base_address: 1077936192
+- id: port3
+  type: renesasra8_gpio
+  bus: sysbus
+  base_address: 1077936224
+- id: port4
+  type: renesasra8_gpio
+  bus: sysbus
+  base_address: 1077936256
+- id: port5
+  type: renesasra8_gpio
+  bus: sysbus
+  base_address: 1077936288
+- id: port6
+  type: renesasra8_gpio
+  bus: sysbus
+  base_address: 1077936320
+- id: port7
+  type: renesasra8_gpio
+  bus: sysbus
+  base_address: 1077936352
+- id: port8
+  type: renesasra8_gpio
+  bus: sysbus
+  base_address: 1077936384
+- id: port9
+  type: renesasra8_gpio
+  bus: sysbus
+  base_address: 1077936416
+- id: portA
+  type: renesasra8_gpio
+  bus: sysbus
+  base_address: 1077936448
+- id: portB
+  type: renesasra8_gpio
+  bus: sysbus
+  base_address: 1077936480
 - id: SYSC_SCICKCR
   type: pythonperipheral
   bus: sysbus
@@ -89,3 +141,5 @@ peripherals:
   type: renesasra_iic
   bus: sysbus
   base_address: 1076224256
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

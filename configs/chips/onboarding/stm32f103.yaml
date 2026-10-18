@@ -7,7 +7,7 @@
 name: stm32f103
 arch: arm
 flash:
-  base: 134217728
+  base: 0
   size: 536870912B
 ram:
   base: 536870912
@@ -137,3 +137,5 @@ peripherals:
   type: stm32f1afio
   bus: sysbus
   base_address: 1073807360
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

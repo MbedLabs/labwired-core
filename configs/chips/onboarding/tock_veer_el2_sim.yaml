@@ -1,9 +1,17 @@
+# LabWired - Firmware Simulation Platform
+# Copyright (C) 2026 Andrii Shylenko
+#
+# This software is released under the MIT License.
+# See the LICENSE file in the project root for full license information.
+
 name: tock_veer_el2_sim
-arch: arm
+arch: riscv
 flash:
-  base: 536870912
-  size: 1048576
+  base: 540016640
+  size: 3145728B
 ram:
   base: 543162368
   size: 3145728B
 peripherals: []
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

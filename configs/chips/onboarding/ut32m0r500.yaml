@@ -7,8 +7,8 @@
 name: ut32m0r500
 arch: arm
 flash:
-  base: 134217728
-  size: 32768B
+  base: 16777216
+  size: 65536B
 ram:
   base: 536870912
   size: 98304B
@@ -53,3 +53,5 @@ peripherals:
   type: ut32_can
   bus: sysbus
   base_address: 1073889280
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

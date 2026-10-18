@@ -1,13 +1,31 @@
+# LabWired - Firmware Simulation Platform
+# Copyright (C) 2026 Andrii Shylenko
+#
+# This software is released under the MIT License.
+# See the LICENSE file in the project root for full license information.
+
 name: litex_vexriscv_verilated_cfu
-arch: arm
+arch: riscv
 flash:
-  base: 536870912
-  size: 1048576
-ram:
-  base: 268435456
+  base: 0
   size: 262144B
+ram:
+  base: 1073741824
+  size: 268435456B
 peripherals:
+- id: uart
+  type: litex_uart
+  bus: sysbus
+  base_address: 4026544128
+- id: timer0
+  type: litex_timer
+  bus: sysbus
+  base_address: 4026542080
 - id: cfu0
   type: cosimulatedcfu
   bus: cpu
   base_address: 0
+provenance:
+  generated_by: scripts/onboard_hw_targets.py
+  parse_fallbacks:
+  - flash=mem

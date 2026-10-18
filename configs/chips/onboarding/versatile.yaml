@@ -7,10 +7,10 @@
 name: versatile
 arch: arm
 flash:
-  base: 134217728
+  base: 0
   size: 268435456B
 ram:
-  base: 536870912
+  base: 0
   size: 268435456B
 peripherals:
 - id: usbEhci
@@ -69,3 +69,7 @@ peripherals:
   type: pl050
   bus: sysbus
   base_address: 268464128
+provenance:
+  generated_by: scripts/onboard_hw_targets.py
+  parse_fallbacks:
+  - flash=memory

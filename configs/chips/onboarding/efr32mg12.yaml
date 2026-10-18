@@ -7,7 +7,7 @@
 name: efr32mg12
 arch: arm
 flash:
-  base: 134217728
+  base: 0
   size: 262144B
 ram:
   base: 553648128
@@ -101,3 +101,5 @@ peripherals:
   type: efr32mg12_ldma
   bus: sysbus
   base_address: 1074667520
+provenance:
+  generated_by: scripts/onboard_hw_targets.py

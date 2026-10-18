@@ -10,7 +10,7 @@ flash:
   base: 4294901760
   size: 65536B
 ram:
-  base: 536870912
+  base: 0
   size: 262144B
 peripherals:
 - id: uart0
@@ -57,10 +57,6 @@ peripherals:
   type: ehcihostcontroller
   bus: sysbus
   base_address: 29474816
-- id: timer
-  type: arm_generictimer
-  bus: cpu
-  base_address: 15
 - id: sunxiMmc0
   type: sunximmc
   bus: sysbus
@@ -81,3 +77,5 @@ peripherals:
   type: sunxitimer
   bus: sysbus
   base_address: 29494272
+provenance:
+  generated_by: scripts/onboard_hw_targets.py
