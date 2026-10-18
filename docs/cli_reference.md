@@ -77,7 +77,7 @@ labwired run --chip <CHIP> --firmware <ELF> [OPTIONS]
 | `--break-at <HEX>` | Debug: PC address(es) to dump registers and `--watch-mem` words at first hit, then continue. Repeatable. |
 | `--watch-mem <HEX>` | Debug: memory address(es) printed as `u32` whenever a `--break-at` fires. Repeatable. |
 | `--flash-image <PATH@HEX>` | ARM-only additional flash piece at an absolute address. Repeatable; ELF, Intel HEX, or raw binary. Overlaps are a hard error. |
-| `--batched` | Drive the run through the batched orchestration instead of per-instruction `step()`. Rejected with `--break-at`, `--watch-mem`, or `--stop-on`, and on Xtensa. Prints a `[batched] ...` summary. |
+| `--batched` | Drive the run through the batched orchestration instead of per-instruction `step()`. Fails rather than falls back when per-instruction instrumentation (`--break-at`, `--watch-mem`, `--stop-on`; on RISC-V also the WiFi bridge and DHCP trace) is active. ARM, RISC-V and Xtensa (ESP32 / ESP32-S3) all have batched paths. Prints a `[batched] ...` summary. |
 | `--time-mode <MODE>` | `max-speed` (default, never sleeps) or `realtime` (sleeps when virtual time is ≥ 1 ms ahead of wall). |
 | `--log-timestamps <MODE>` | `none` (default), `virtual`, `real`, or `both`. See [`--log-timestamps`](#-log-timestamps-run-and-test) below. |
 
@@ -120,10 +120,12 @@ labwired test --script /tmp/cli-ref/logts/script.yaml \
   --log-timestamps virtual
 ```
 
+Real output (trimmed — the full run also prints the ELF entry-point and `idle_ff` lines; wall-seconds vary between runs):
+
 ```text
 [t=virt=0.000000000s]  INFO labwired_core::system::builder: Loading chip descriptor: ../chips/ci-fixture-cortex-m3-uart1.yaml
 [t=virt=0.000000000s] labwired-cli test: hosted fast path (exact windows up to 1024 cycles)
-[t=virt=0.000012500s] PASS  0/0 checks · script · 1000 steps · 0.01s
+[t=virt=0.000012500s] PASS  0/0 checks · script · 1000 steps · 0.00s
 ```
 
 The same run's `result.json` carries `"virtual_time_ns": 12500` and no `host_time_ns` key.
@@ -156,7 +158,7 @@ $enddefinitions $end
 b01000011 !
 ```
 
-`b01000011` is `0x43` (`C`), the first byte of the firmware banner. Point the same flag at `blinky.json` for the lossless event list (`seq` 1, `cycle` 13312, `bus` `uart0`, payload `{"protocol":"uart","direction":"tx","byte":67}`). More on the ring and formats: [Hook surfaces](howto/extend/hooks.md#2-host-observation-bus-trace-console-stop-python-frames).
+`b01000011` is `0x43` (`C`), the first byte of the firmware banner. Point the same flag at `blinky.json` for the lossless event list (`seq` 1, `cycle` 13312, `bus` `uart0`, payload `{"protocol":"uart","direction":"tx","byte":67}`). More on the ring and formats: [Hook surfaces](howto/extend/hooks.md#2-host-observation-bus-trace-console-stop-logic-capture-python-frames).
 
 #### `--stop-on` (run)
 

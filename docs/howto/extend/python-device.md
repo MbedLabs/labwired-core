@@ -377,7 +377,7 @@ labwired test --script /tmp/lm74/script.yaml \
   --no-uart-stdout --output-dir /tmp/lm74/out
 ```
 
-Real output:
+Real output (wall-seconds vary between runs):
 
 ```text
 2026-10-18T14:55:56.690691Z  INFO labwired_core::system::builder: Loading chip descriptor: chips/stm32f103.yaml

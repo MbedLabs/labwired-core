@@ -1,5 +1,5 @@
 ---
-description: "There is no generic hooks: key. LabWired's hook surfaces are device behaviour as YAML, host-side observation (bus trace, --stop-on, Python frames) and the Rust SimulationObserver / Peripheral traits — each with a receipt from this checkout."
+description: "There is no generic hooks: key. LabWired's hook surfaces are device behaviour as YAML, host-side observation (bus trace, --stop-on, logic capture, Python frames) and the Rust SimulationObserver / Peripheral traits — each with a receipt from this checkout."
 ---
 
 # Hook surfaces (device, host, Rust)
@@ -15,24 +15,35 @@ instead:
   finite `schedules:` that *are* the simulated behaviour. Use this when the
   "hook" is part of the device being modelled.
 - **Host observation** — artifacts and streams produced by a run:
-  `--bus-trace-out` (VCD/JSON), `--stop-on` (ESP32-S3 console), and the Python
-  SDK's `Sim::frames()`. Use this when firmware, not the model, owns the
-  behaviour and you only need to watch it.
+  `--bus-trace-out` (VCD/JSON), `--stop-on` (ESP32-S3 console), logic capture
+  (`--gpio-trace` / `--watch-gpio`), and the Python SDK's `Sim::frames()`. Use
+  this when firmware, not the model, owns the behaviour and you only need to
+  watch it.
 - **Rust extension points** — `SimulationObserver` callbacks and the
   `Peripheral` trait's tick/clock attach points. Use this when you are changing
   the simulator itself.
+
+That list is the surface, not a sampler: there is no fourth family and no
+generic `hooks:` key. Mechanisms live *inside* the families — `behavior.rules`
+and `behavior.schedules` are family 1's two mechanisms; family 2's are the
+bus-trace ring, `--stop-on`, logic capture and the Python frame drain; family 3
+is the observer callbacks plus the `Peripheral` attach/tick seams.
 
 | You want to… | Family | Entry point |
 |---|---|---|
 | make a sensor answer a protocol | 1. device data | `behavior.rules` / `behavior.schedules` in device YAML |
 | capture what went over the wires | 2. host | `labwired run --bus-trace-out trace.vcd` |
 | stop right after a firmware log line | 2. host | `labwired run --stop-on <text>` (ESP32-S3) |
+| capture GPIO edges as JSON lines | 2. host | `labwired run --gpio-trace trace.jsonl` (ESP32-S3) |
+| capture pad edges into the verdict | 2. host | `labwired test --watch-gpio gpioc:2` → `result.json` `logic_edges` |
 | assert on trace events from a script | 2. host | Python SDK `Sim.frames()` |
 | add tracing/coverage instrumentation | 3. Rust | `impl SimulationObserver` |
 | give a model the clock or a tick seam | 3. Rust | `impl Peripheral` (`attach_cycle_clock`, `tick`) |
 
 Everything quoted below was run from this checkout on 2026-10-18. Nothing is
-invented output.
+invented output. Build the CLI first (`cargo build -p labwired-cli`; the
+commands use `./target/debug/labwired`) and run from the labwired-core
+checkout root — wall-seconds in receipt tails vary between runs.
 
 ## 1. Device data hooks: `behavior:` in a part pack
 
@@ -121,9 +132,9 @@ stores the count at `0x20000100`. Two small files attach the pack to an
 STM32L476 and assert the frame completed:
 
 ```yaml
-# /tmp/hook-surfaces/dht22-system.yaml
+# dht22-system.yaml — scratch file at the checkout root
 name: "dht22-cli-receipt"
-chip: "/home/andrii/wt-a4-docs/configs/chips/stm32l476.yaml"
+chip: "configs/chips/stm32l476.yaml"
 external_devices:
   - id: sensor
     type: dht22
@@ -134,11 +145,11 @@ external_devices:
 ```
 
 ```yaml
-# /tmp/hook-surfaces/dht22-test.yaml
+# dht22-test.yaml — scratch file at the checkout root
 schema_version: "1.0"
 inputs:
-  firmware: "/home/andrii/wt-a4-docs/crates/core/tests/fixtures/gpio-schedules/dht-frame.elf"
-  system: "/tmp/hook-surfaces/dht22-system.yaml"
+  firmware: "crates/core/tests/fixtures/gpio-schedules/dht-frame.elf"
+  system: "dht22-system.yaml"
 limits:
   max_steps: 1000000
 assertions:
@@ -148,8 +159,13 @@ assertions:
       size: 32
 ```
 
+Both YAMLs are scratch: create them at the checkout root — there the
+manifest's `chip:` resolves (manifest-relative) and the script's `inputs`
+resolve (script-relative), so no absolute path appears — then delete them
+afterwards.
+
 ```bash
-./target/debug/labwired test -c /tmp/hook-surfaces/dht22-test.yaml \
+./target/debug/labwired test -c dht22-test.yaml \
   --output-dir /tmp/hook-surfaces/dht-out
 ```
 
@@ -157,7 +173,7 @@ Real output (tail):
 
 ```text
 labwired-cli test: idle_ff=on (event_scheduler=on)
-PASS  1/1 checks · dht22-test · 1000000 steps · 2.63s
+PASS  1/1 checks · dht22-test · 1000000 steps · 2.57s
 ```
 
 `/tmp/hook-surfaces/dht-out/result.json` (verbatim excerpts):
@@ -209,7 +225,7 @@ Its expected bytes for 22.0 °C / 50 % are `[1, 244, 0, 220, 209]`
 (`crates/core/tests/gpio_schedule_firmware.rs:46`), with the raw pulse-width
 array decoded at `crates/core/tests/gpio_schedule_firmware.rs:65-72`.
 
-## 2. Host observation: bus trace, console stop, Python frames
+## 2. Host observation: bus trace, console stop, logic capture, Python frames
 
 ### `--bus-trace-out` — the wire record, VCD or JSON
 
@@ -312,6 +328,82 @@ unconditional epilogue (`crates/cli/src/commands/run.rs:1486`), so ignore its
 not occur in boot output: `--stop-on 27` matches inside the ROM banner
 `ESP-ROM:esp32s3-20210327` at step 100000.
 
+### Logic capture — `--watch-gpio` (test) and `--gpio-trace` (run)
+
+**What fires.** Both drain the same in-engine GPIO tap the browser logic
+analyzer reads. On `labwired test`, `--watch-gpio <peripheral:pin>`
+(repeatable — `CH0`, `CH1`, … in argument order) records each watched pad's
+edge series into `result.json`'s `logic_edges` block: per channel,
+`peripheral`, `pin`, `initial`, the `transitions` (`cycle`, `value`), and
+`gaps`/`dropped` bookkeeping. On `labwired run`, `--gpio-trace <path>` writes
+one JSON line per transition (`{"sim_cycle":N,"pin":P,"from":B,"to":B}` with
+the default `--gpio-trace-format bool`; `4state` adds `z`/`x` states and
+drive-change lines). The `run` flag's JSON observer is installed on the
+ESP32-S3 path; a chip-only fast-boot run with no board I/O wiring (the C3
+blinky above, say) writes no trace file.
+
+**Receipt — the same DHT22 script, with the sensor's data pad watched.**
+Adding `--watch-gpio gpioc:2` to the receipt above:
+
+```bash
+./target/debug/labwired test -c dht22-test.yaml --no-uart-stdout \
+  --watch-gpio gpioc:2 --output-dir /tmp/hook-surfaces/dht-watch-out
+```
+
+```text
+labwired-cli test: idle_ff=on (event_scheduler=on)
+PASS  1/1 checks · dht22-test · 1000000 steps · 1.68s
+```
+
+`result.json` (verbatim excerpt — 87 transitions in total, first two shown):
+
+```json
+  "logic_edges": {
+    "dropped": 0,
+    "now_cycle": 1000000,
+    "channels": [
+      {
+        "ch": 0,
+        "channel": "CH0",
+        "peripheral": "gpioc",
+        "pin": 2,
+        "initial": 0,
+        "transitions": [
+          {
+            "cycle": 7,
+            "value": 1
+          },
+          {
+            "cycle": 13,
+            "value": 0
+          },
+```
+
+**Receipt — `--gpio-trace` on the S3 fixture.** The `--stop-on` receipt's
+command plus `--gpio-trace`:
+
+```bash
+LABWIRED_ESP32S3_FLASH=tests/fixtures/source-debug/esp32s3-arduino-flash.bin \
+  ./target/debug/labwired run --chip configs/chips/esp32s3.yaml \
+  --firmware tests/fixtures/source-debug/esp32s3-arduino.elf \
+  --rom-boot --max-steps 200000000 --stop-on 81 \
+  --gpio-trace /tmp/hook-surfaces/s3-stop.jsonl
+```
+
+The run wrote 10 transitions. First two and last lines of
+`/tmp/hook-surfaces/s3-stop.jsonl`:
+
+```json
+{"sim_cycle":5539549,"pin":2,"from":false,"to":true}
+{"sim_cycle":5543815,"pin":2,"from":true,"to":false}
+...
+{"sim_cycle":101624699,"pin":2,"from":true,"to":false}
+```
+
+The last line's cycle matches the `GPIO2: 1->0 (cycle=101624699)` log line the
+same run prints just before the `--stop-on` match — the trace, the log and the
+console stop agree on when the pad dropped.
+
 ### `Sim::frames()` — protocol events from Python
 
 The Python SDK exposes the same trace ring as a drained list of dictionaries
@@ -396,5 +488,5 @@ opt-in and why dropping it is a ratchet failure
 | Register maps for declarative peripherals | [Declarative Registers](../../declarative_registers.md) |
 | `Sim.frames()` and the rest of the Python API | [Python SDK](../../python-sdk.md) |
 | Co-simulation models and plugin seams | [Co-Simulation Plugins](../../cosimulation_plugins.md) |
-| CLI flags (`--bus-trace-out`, `--stop-on`; `labwired run --help` is authoritative for new flags) | [CLI Reference](../../cli_reference.md) |
+| CLI flags (`--bus-trace-out`, `--stop-on`, `--gpio-trace`, `--watch-gpio`; `labwired run --help` is authoritative for new flags) | [CLI Reference](../../cli_reference.md) |
 | Test scripts (`memory_value`, `uart_contains`, limits) | [CI Test Runner](../../ci_test_runner.md) |

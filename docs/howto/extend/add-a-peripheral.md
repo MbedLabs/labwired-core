@@ -284,7 +284,7 @@ cargo run -p labwired-cli -- test --script /tmp/apc/script.yaml \
   --no-uart-stdout --output-dir /tmp/apc/out
 ```
 
-Real output:
+Real output (wall-seconds vary between runs):
 
 ```text
 2026-10-18T14:27:00.743955Z  INFO labwired_core::system::builder: Loading chip descriptor: /tmp/apc/chip.yaml

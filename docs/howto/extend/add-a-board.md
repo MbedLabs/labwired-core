@@ -269,19 +269,40 @@ never committed. `/tmp/labwired-readonly-flash/result.json` carries the block
 image wrote flash directly and was not counted, which is the "CPU stores only"
 rule in one number.
 
-Flip `cpu_writes` to `warn` on the walkthrough board's own `flash:`, point the
-script at the receipt's store-to-flash ELF (copied to
-`/tmp/add-a-board/fault-write.elf`; it is
-`tests/fixtures/fault-verdict/fault-readonly-flash.elf`, linked at
-`0x08000000`), and re-run — the store now commits:
+Flip `cpu_writes` to `warn` on the walkthrough board and re-run the same
+store: make `chip-warn.yaml` = `chip.yaml` with `cpu_writes: warn` on its
+`flash:`, and `system-warn.yaml` = `system.yaml` with
+`chip: "chip-warn.yaml"`. The new script — identical to `script.yaml` except
+for the firmware and manifest — is:
+
+```yaml
+# /tmp/add-a-board/script-warn.yaml
+schema_version: "1.0"
+inputs:
+  firmware: "fault-write.elf"   # relative to this script
+  system: "system-warn.yaml"
+limits:
+  max_steps: 5000
+assertions:
+  - expected_stop_reason: max_steps
+```
+
+The store-to-flash ELF is the receipt's own firmware,
+`tests/fixtures/fault-verdict/fault-readonly-flash.elf` (linked at
+`0x08000000`), copied next to the script:
 
 ```bash
+cp tests/fixtures/fault-verdict/fault-readonly-flash.elf \
+  /tmp/add-a-board/fault-write.elf
 cargo run -p labwired-cli -- test --script /tmp/add-a-board/script-warn.yaml \
   --output-dir /tmp/add-a-board/out-warn
 ```
 
+Real output (the WARN line's timestamp is RFC 3339 wall-clock; wall-seconds in
+the PASS line vary between runs):
+
 ```text
-2026-10-18T15:14:35.105713Z  WARN labwired_core::bus::memory_policy: CPU store into flash with cpu_writes: warn — store committed addr=0x08001000 pc=0x0800008E
+2026-10-18T18:41:56.727911Z  WARN labwired_core::bus::memory_policy: CPU store into flash with cpu_writes: warn — store committed addr=0x08001000 pc=0x0800008E
 PASS  1/1 checks · script-warn · 5000 steps · 0.00s
 ```
 
