@@ -24,6 +24,7 @@ pub mod bus_trace;
 mod can_bridge_service;
 mod can_devices;
 mod construct;
+mod debug_watch;
 mod declarative_device;
 mod device_hooks;
 pub(crate) mod embedded_descriptors;
@@ -366,6 +367,15 @@ pub struct SystemBus {
     /// (`jit_gate_allows`), so they cannot bypass the gate.
     /// See [`SystemBus::with_memory_policy_bypass`].
     pub(crate) memory_policy_bypass: bool,
+    /// Software debug watch ranges (GDB watchpoints) checked by the memory
+    /// accessors. Empty on every bus with no debugger — one `is_empty` branch.
+    pub(crate) debug_watches: Vec<crate::bus::debug_watch::DebugWatch>,
+    /// Address of the first watched access since the last
+    /// [`SystemBus::take_debug_watch_hit`]. `Cell` because loads run on `&self`.
+    pub(crate) debug_watch_hit: Cell<Option<u64>>,
+    /// While true the accessors skip watch tracking: host/debugger accesses
+    /// must not fire the target's own watchpoints.
+    pub(crate) debug_watch_host_bypass: bool,
     pub ram: LinearMemory,
     /// Extra CPU-visible RAM/ROM windows beyond `flash`/`ram` (e.g. ESP32 IRAM
     /// `0x4037C000` and flash-DROM `0x3C000000`), from the chip's

@@ -396,6 +396,9 @@ impl crate::Bus for SystemBus {
         if let Some(r) = self.memory_policy_gate_store(addr) {
             return r;
         }
+        if !self.debug_watches.is_empty() && !self.debug_watch_host_bypass {
+            self.note_debug_watch_store(addr);
+        }
         let offset =
             addr.checked_sub(self.ram.base_addr)
                 .and_then(|v| usize::try_from(v).ok())
@@ -513,6 +516,9 @@ impl crate::Bus for SystemBus {
         self.irq_fabric.armv7.as_ref()?.timer.next_deadline()
     }
     fn read_u8(&self, addr: u64) -> SimResult<u8> {
+        if !self.debug_watches.is_empty() && !self.debug_watch_host_bypass {
+            self.note_debug_watch_read(addr);
+        }
         // RAM is always first (hot path, never overlaps a peripheral window).
         if let Some(val) = self.ram.read_u8(addr) {
             self.note_memory_read();
@@ -622,6 +628,9 @@ impl crate::Bus for SystemBus {
         self.batch_stop.note_store(addr, 1);
         if let Some(r) = self.memory_policy_gate_store(addr) {
             return r;
+        }
+        if !self.debug_watches.is_empty() && !self.debug_watch_host_bypass {
+            self.note_debug_watch_store(addr);
         }
         // ESP32-C3 permission control (PMS): a store into a region the
         // SENSITIVE PMS marks non-writable is blocked on silicon and raises
@@ -824,6 +833,9 @@ impl crate::Bus for SystemBus {
     }
 
     fn read_u16(&self, addr: u64) -> SimResult<u16> {
+        if !self.debug_watches.is_empty() && !self.debug_watch_host_bypass {
+            self.note_debug_watch_read(addr);
+        }
         if let Some(val) = self.ram.read_u16(addr) {
             self.note_memory_read();
             return Ok(val);
@@ -908,6 +920,9 @@ impl crate::Bus for SystemBus {
     }
 
     fn read_u32(&self, addr: u64) -> SimResult<u32> {
+        if !self.debug_watches.is_empty() && !self.debug_watch_host_bypass {
+            self.note_debug_watch_read(addr);
+        }
         // Debug (env-gated): trace the driver's reads of a freshly-injected RX
         // buffer, to RE the rx-control header format the RX callback parses.
         if crate::peripherals::esp32c3::wifi_mac::rxbuf_trace_enabled() {
@@ -1066,6 +1081,9 @@ impl crate::Bus for SystemBus {
         if let Some(r) = self.memory_policy_gate_store(addr) {
             return r;
         }
+        if !self.debug_watches.is_empty() && !self.debug_watch_host_bypass {
+            self.note_debug_watch_store(addr);
+        }
         // ESP32-C3 permission control (PMS): a store into a region the
         // SENSITIVE PMS marks non-writable is blocked on silicon and raises
         // ETS_CORE0_{I,D}RAM0_PMS_INTR_SOURCE. Inert (one bool test) unless
@@ -1189,6 +1207,9 @@ impl crate::Bus for SystemBus {
         self.batch_stop.note_store(addr, 4);
         if let Some(r) = self.memory_policy_gate_store(addr) {
             return r;
+        }
+        if !self.debug_watches.is_empty() && !self.debug_watch_host_bypass {
+            self.note_debug_watch_store(addr);
         }
         // ESP32-C3 permission control (PMS): a store into a region the
         // SENSITIVE PMS marks non-writable is blocked on silicon and raises
