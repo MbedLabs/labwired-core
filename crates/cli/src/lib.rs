@@ -37,6 +37,8 @@ mod dispatch;
 /// `execute_test_loop` and the `TestExecutionContext` it takes.
 mod execute;
 mod gpio_observer;
+/// `--log-timestamps` prefix state ([`log_ts::prefix`] / the `eventln!` macro).
+pub(crate) mod log_ts;
 /// The three run-outcome writers (`write_outputs`, `write_config_error_outputs`,
 /// `write_junit_xml`), all deriving from `artifacts::TestOutcome`.
 mod outputs;
