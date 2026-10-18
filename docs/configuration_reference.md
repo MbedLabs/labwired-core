@@ -141,7 +141,7 @@ The semantics, precisely (`crates/config/src/chip.rs` `CpuWritePolicy`,
 
 Runnable receipt: [examples/readonly-flash/](../examples/readonly-flash/README.md)
 runs a firmware store into `cpu_writes: fault` flash end to end, and
-[Add a board](../howto/extend/add-a-board.md) shows the flip to `warn`.
+[Add a board](howto/extend/add-a-board.md) shows the flip to `warn`.
 
 **Known caveat — images linked at the boot alias.** A segment whose address is
 not inside the flash/RAM backing (an ELF linked at `0x0` on a part whose flash

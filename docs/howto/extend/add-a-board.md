@@ -208,30 +208,15 @@ ram:
 | `warn` | commits; one deduplicated log line | every violation counted, first kept |
 | `fault` | does not commit; the core takes a data fault | every violation counted, first kept |
 
-The semantics, precisely:
-
-- **CPU stores only.** The gate sits at the top of the CPU store path, for
-  every access width, before anything commits. Non-CPU writers are not judged:
-  loading a firmware image whose segments land in `flash:`/`ram:` writes the
-  backing memory directly, and non-CPU hardware writers (the generic DMA path)
-  run with the gate explicitly bypassed. (One corner: an image *linked at the
-  boot alias*, address `0x0`, is loaded through the bus byte-by-byte, so those
-  load writes count as flash stores. Link firmware at the flash base, as real
-  parts' images are.)
-- **`fault` → precise BusFault.** The store raises
-  `SimulationError::MemoryViolation(addr)`; on an ARMv7-M core with BusFault
-  enabled (the fixture firmware below enables it) that is a precise data
-  BusFault with `BFAR` valid, and the CLI's verdict names the region when the
-  fault address matches the first recorded violation.
-- **`warn` commits and records.** The store lands exactly as with `allow`; a
-  single WARN is logged for the first violation; the count and the first
-  violation (`addr`, `cycle`, `pc`) are always recorded.
-- **The report is opt-in by presence.** `result.json` carries
-  `memory_policy` only when at least one of the two regions is non-`allow`. The
-  board built above is all-default and its `out/result.json` indeed has no
-  such key.
-- A store through the **boot alias** (address `0x0` on a flash-at-`0x08000000`
-  chip) is gated as a flash store — the alias is flash for policy purposes too.
+The gate applies to CPU stores only (never loader writes, snapshot restores,
+or the generic DMA path). `fault` refuses the store and, on ARMv7-M with
+BusFault enabled, surfaces as a precise data BusFault with `BFAR` valid; `warn`
+commits but logs one deduplicated WARN. Every non-`allow` region records each
+violation and the first `{addr, cycle, pc}`, and `result.json` carries the
+block only when at least one region is non-`allow` — the board built above is
+all-default and has no such key. The authoritative rule set, including the
+boot-alias corner and the image-linked-at-zero caveat, is
+[Configuration → `cpu_writes`](../../configuration_reference.md#cpu_writes-the-memory-region-store-policy).
 
 ### The receipt: a store into `cpu_writes: fault` flash
 

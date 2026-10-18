@@ -46,7 +46,7 @@ Plus the [global flags](#global-options). The top-level `--max-steps` default (2
 
 Start the server with `labwired --firmware app.elf --system board.yaml --gdb 3333`. The RSP surface is documented in [GDB Integration](gdb_integration.md#3-supported-commands); two debugger behaviours worth knowing:
 
-- **Watchpoints** — `Z2`/`Z3`/`Z4` arm a write/read/access watch on a byte range of `1..=4096` bytes, up to 16 concurrent ranges. They are software-tracked on CPU accesses only: DMA and debugger transfers (`m`/`M`/`x`) do not trip them, so inspecting a watched object cannot fire its own watchpoint. A hit stops the target with a bare `T05`/`S05` (no `watch:` annotation; read `PC` back with `g`). Details: [Watchpoints](gdb_integration.md#5-watchpoints-z2--z3--z4).
+- **Watchpoints** — `Z2`/`Z3`/`Z4` arm a write/read/access watch on a byte range of `1..=4096` bytes, up to 16 concurrent ranges. They are software-tracked on CPU accesses only: DMA and debugger transfers (`m`/`M`/`x`) do not trip them, so inspecting a watched object cannot fire its own watchpoint. A hit stops the target with a bare `T05`/`S05` (no `watch:` annotation; read `PC` back with `g`). Details: [Watchpoints](gdb_integration.md#5-watchpoints-z2-z3-z4).
 - **`P`** — writes a single register for real (`reg=value` form), so `set $pc = ...` and `reset $pc` take effect; see the CPSR raw-id quirk in the same section.
 
 Which clients have actually run against the stub is tracked in the [conformance matrix](gdb_integration.md#6-conformance-matrix); every cell is either CI-backed or marked `untested`.
