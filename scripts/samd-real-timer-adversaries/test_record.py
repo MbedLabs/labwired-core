@@ -113,7 +113,7 @@ class ReaderControls(unittest.TestCase):
         env = {'LABWIRED_TIMER_POSITIVE_DIR': '/manufactured/positive',
                'LABWIRED_TIMER_MUTANT_DIR': '/manufactured/mutants',
                'LABWIRED_TIMER_SOURCE_DIR': '/manufactured/samd', 'LABWIRED_TIMER_CORE_DIR': '/manufactured/core',
-               'QUALIFICATION_HEAD': head, 'GITHUB_REPOSITORY': 'CrispStrobe/labwired-core',
+               'QUALIFICATION_HEAD': head, 'GITHUB_REPOSITORY': 'w1ne/labwired-core',
                'GITHUB_EVENT_NAME': 'pull_request', 'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1'}
         if mode == 'repository': env['GITHUB_REPOSITORY'] = 'unknown/repository'
         elif mode == 'event': env['GITHUB_EVENT_NAME'] = 'push'
