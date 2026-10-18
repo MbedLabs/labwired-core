@@ -251,12 +251,6 @@ pub const KNOWN_STUBBED_PERIPHERAL_TYPES: &[(&str, &str)] = &[
          answers reads with zeros. Used by: onboarding/versatile, onboarding/vexpress.",
     ),
     (
-        "enc28j60",
-        "Microchip ENC28J60 SPI Ethernet controller (an external chip Renode models on the \
-         SPI bus). Renode-imported onboarding descriptor; no model in this engine, so the \
-         window answers reads with zeros. Used by: onboarding/arduino_101-shield.",
-    ),
-    (
         "esamemorycontroller",
         "ESA/Gaisler memory controller. Renode-imported onboarding descriptor; no model in \
          this engine, so the window answers reads with zeros. Used by: onboarding/leon3.",
@@ -369,12 +363,6 @@ pub const KNOWN_STUBBED_PERIPHERAL_TYPES: &[(&str, &str)] = &[
          onboarding/mimxrt1064_evk.",
     ),
     (
-        "imxrt700_clockcontrol",
-        "NXP i.MX RT700 clock control block. Renode-imported onboarding descriptor; no model \
-         in this engine, so the window answers reads with zeros. Used by: \
-         onboarding/mimxrt700_evk, onboarding/mimxrt798s.",
-    ),
-    (
         "imxrt700_micfil",
         "NXP i.MX RT700 MICFIL PDM microphone interface. Renode-imported onboarding \
          descriptor; no model in this engine, so the window answers reads with zeros. Used \
@@ -443,40 +431,10 @@ pub const KNOWN_STUBBED_PERIPHERAL_TYPES: &[(&str, &str)] = &[
          onboarding/ice40up5k-mdp-evn.",
     ),
     (
-        "litesdcard_csr32",
-        "LiteX SDCard CSR window. Renode-imported onboarding descriptor; no model in this \
-         engine, so the window answers reads with zeros. Used by: \
-         onboarding/litex_nexys_video_vexriscv_linux.",
-    ),
-    (
         "litex_controlandstatus",
         "LiteX control-and-status register block. Renode-imported onboarding descriptor; no \
          model in this engine, so the window answers reads with zeros. Used by: \
          onboarding/crosslink-nx-evn.",
-    ),
-    (
-        "litex_ethernet",
-        "LiteX Ethernet MAC. Renode-imported onboarding descriptor; no model in this engine, \
-         so the window answers reads with zeros. Used by: onboarding/arty_litex_vexriscv, \
-         onboarding/litex_common, onboarding/litex_linux_vexriscv_sdcard, \
-         onboarding/litex_minerva, onboarding/litex_picorv32 (+7 more).",
-    ),
-    (
-        "litex_ethernet_csr32",
-        "LiteX Ethernet CSR window. Renode-imported onboarding descriptor; no model in this \
-         engine, so the window answers reads with zeros. Used by: onboarding/litex_tock.",
-    ),
-    (
-        "litex_i2s_master",
-        "LiteX I2S master interface. Renode-imported onboarding descriptor; no model in this \
-         engine, so the window answers reads with zeros. Used by: \
-         onboarding/litex_zephyr_vexriscv_i2s.",
-    ),
-    (
-        "litex_i2s_slave",
-        "LiteX I2S slave interface. Renode-imported onboarding descriptor; no model in this \
-         engine, so the window answers reads with zeros. Used by: \
-         onboarding/litex_zephyr_vexriscv_i2s.",
     ),
     (
         "litex_mmcm_csr32",
@@ -493,21 +451,9 @@ pub const KNOWN_STUBBED_PERIPHERAL_TYPES: &[(&str, &str)] = &[
          onboarding/verilated_ibex.",
     ),
     (
-        "litex_soc_controller_csr32",
-        "LiteX SoC controller CSR window. Renode-imported onboarding descriptor; no model in \
-         this engine, so the window answers reads with zeros. Used by: \
-         onboarding/litex_nexys_video_vexriscv_linux.",
-    ),
-    (
         "lpc_can",
         "NXP LPC CAN controller. Renode-imported onboarding descriptor; no model in this \
          engine, so the window answers reads with zeros. Used by: onboarding/lpc2294.",
-    ),
-    (
-        "lpc_clock0",
-        "NXP LPC/i.MX RT500 clock block (Flexcomm/SYSCON clocking). Renode-imported \
-         onboarding descriptor; no model in this engine, so the window answers reads with \
-         zeros. Used by: onboarding/imxrt500.",
     ),
     (
         "lsm303dlhc_accelerometer",
@@ -585,21 +531,9 @@ pub const KNOWN_STUBBED_PERIPHERAL_TYPES: &[(&str, &str)] = &[
          onboarding/polarfire-soc.",
     ),
     (
-        "msp430_uscia",
-        "TI MSP430 USCI (UART/SPI/I2C serial block). Renode-imported onboarding descriptor; \
-         no model in this engine, so the window answers reads with zeros. Used by: \
-         onboarding/msp430f2619.",
-    ),
-    (
         "msp430f2xxx_mpy",
         "TI MSP430F2xxx hardware multiplier. Renode-imported onboarding descriptor; no model \
          in this engine, so the window answers reads with zeros. Used by: \
-         onboarding/msp430f2619.",
-    ),
-    (
-        "msp430f2xxx_watchdog",
-        "TI MSP430F2xxx watchdog timer. Renode-imported onboarding descriptor; no model in \
-         this engine, so the window answers reads with zeros. Used by: \
          onboarding/msp430f2619.",
     ),
     (
@@ -872,13 +806,6 @@ pub const KNOWN_STUBBED_PERIPHERAL_TYPES: &[(&str, &str)] = &[
          onboarding/colibri-vf61, onboarding/vybrid.",
     ),
     (
-        "sema42",
-        "NXP SEMA42 hardware semaphore (the newer i.MX/S32K spelling of SEMA4). \
-         Renode-imported onboarding descriptor; no model in this engine, so the window \
-         answers reads with zeros. Used by: onboarding/nxp-s32k388, \
-         onboarding/nxp-s32k388evb.",
-    ),
-    (
         "si70xx",
         "Silicon Labs Si70xx humidity/temperature sensor. Renode-imported onboarding \
          descriptor; no model in this engine, so the window answers reads with zeros. Used \
@@ -982,12 +909,6 @@ pub const KNOWN_STUBBED_PERIPHERAL_TYPES: &[(&str, &str)] = &[
         "STM32H SDMMC as spelled by the Renode import. Renode-imported onboarding descriptor; \
          no model in this engine, so the window answers reads with zeros. Used by: \
          onboarding/nucleo_h753zi, onboarding/stm32h743, onboarding/stm32h753.",
-    ),
-    (
-        "stm32l0_flashcontroller",
-        "STM32L0 flash controller as spelled by the Renode import. Renode-imported \
-         onboarding descriptor; no model in this engine, so the window answers reads with \
-         zeros. Used by: onboarding/stm32l071, onboarding/stm32l072.",
     ),
     (
         "stm32l0_pwr",
@@ -1107,18 +1028,6 @@ pub const KNOWN_STUBBED_PERIPHERAL_TYPES: &[(&str, &str)] = &[
         "USB HID mouse. Renode-imported onboarding descriptor; no model in this engine, so \
          the window answers reads with zeros. Used by: onboarding/colibri-vf61, \
          onboarding/tegra2, onboarding/tegra3, onboarding/versatile, onboarding/vexpress.",
-    ),
-    (
-        "usbserialport_s3b",
-        "ESP32-S3 USB serial port device window. Renode-imported onboarding descriptor; no \
-         model in this engine, so the window answers reads with zeros. Used by: \
-         onboarding/eos-s3-qomu.",
-    ),
-    (
-        "valentyusb",
-        "ValentyUSB FPGA USB device core. Renode-imported onboarding descriptor; no model in \
-         this engine, so the window answers reads with zeros. Used by: onboarding/fomu, \
-         onboarding/ice40up5k-mdp-evn.",
     ),
     (
         "virtiommioconsole",
