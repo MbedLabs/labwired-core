@@ -504,6 +504,12 @@ pub const KNOWN_STUBBED_PERIPHERAL_TYPES: &[(&str, &str)] = &[
          engine, so the window answers reads with zeros. Used by: onboarding/lpc2294.",
     ),
     (
+        "lpc_clock0",
+        "NXP LPC/i.MX RT500 clock block (Flexcomm/SYSCON clocking). Renode-imported \
+         onboarding descriptor; no model in this engine, so the window answers reads with \
+         zeros. Used by: onboarding/imxrt500.",
+    ),
+    (
         "lsm303dlhc_accelerometer",
         "ST LSM303DLHC accelerometer. Renode-imported onboarding descriptor; no model in this \
          engine, so the window answers reads with zeros. Used by: \
@@ -684,6 +690,30 @@ pub const KNOWN_STUBBED_PERIPHERAL_TYPES: &[(&str, &str)] = &[
          finds this entry (by name or by base 0xE000_E100) and REPLACES it with the real \
          Nvic, publishing bus.nvic — see tests/nvic_masking_config_path.rs, which pins that \
          ordering. Used by: rp2040, rp2350, stm32f401, stm32f405, stm32f407 (+8 more).",
+    ),
+    (
+        "nxp_flexcan",
+        "NXP FlexCAN controller (i.MX 8M). Renode-imported onboarding descriptor; no model \
+         in this engine, so the window answers reads with zeros. Used by: \
+         onboarding/nxp-frdm-imx8mplus, onboarding/nxp-mimx8ml.",
+    ),
+    (
+        "nxp_imx8mp_systemresetcontroller",
+        "NXP i.MX 8M Plus system reset controller (SRC). Renode-imported onboarding \
+         descriptor; no model in this engine, so the window answers reads with zeros. Used \
+         by: onboarding/nxp-frdm-imx8mplus, onboarding/nxp-mimx8ml.",
+    ),
+    (
+        "nxp_imx_watchdog",
+        "NXP i.MX watchdog (WDOG). Renode-imported onboarding descriptor; no model in this \
+         engine, so the window answers reads with zeros. Used by: \
+         onboarding/nxp-frdm-imx8mplus, onboarding/nxp-mimx8ml.",
+    ),
+    (
+        "nxp_usdhc",
+        "NXP uSDHC SD/eMMC host controller (i.MX 8M). Renode-imported onboarding descriptor; \
+         no model in this engine, so the window answers reads with zeros. Used by: \
+         onboarding/nxp-frdm-imx8mplus, onboarding/nxp-mimx8ml.",
     ),
     (
         "opentitan_flashcontroller",
