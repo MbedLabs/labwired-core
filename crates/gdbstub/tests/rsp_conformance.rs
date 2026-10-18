@@ -114,9 +114,9 @@ fn expand_rle(s: &str) -> String {
 
 /// The body between `$` and `#` of an envelope, byte-exact.
 ///
-/// No trimming: RLE's count character is `0x20 + repeat - 1`, so a repeat of
-/// four is encoded as a literal trailing space (`00040* ` for `00040000`).
-/// Trimming the body would silently corrupt exactly that run.
+/// No trimming: RLE's count character is `0x1C + repeat`, so a repeat of four
+/// is `0x20` — a literal trailing space (`00040* ` for `00040000`). Trimming
+/// the body would silently corrupt exactly that run.
 fn body(reply: &str) -> String {
     let start = reply.find('$').map(|i| i + 1).unwrap_or(0);
     let end = reply[start..]
@@ -634,4 +634,78 @@ fn attach_detach_stress_under_breakpoint_traffic() {
             join_session(handle);
         }
     }
+}
+
+/// Optional client smoke: run `scripts/gdb-conformance.sh`, which launches the
+/// `labwired` server (`cargo run -q -p labwired-cli -- --gdb ...`) and drives
+/// one batch `gdb-multiarch` (or `arm-none-eabi-gdb`) session against it.
+/// Ignored by default so a box without either tool skips instead of failing;
+/// run with
+/// `cargo test -p labwired-gdbstub --test rsp_conformance -- --ignored`.
+///
+/// The script prefers a prebuilt `target/debug/labwired`: `cargo test`
+/// holds the target-dir build lock for the whole run, so the script's `cargo
+/// run` fallback would block forever under it. Without that binary the test
+/// skips with a note — build it with `cargo build -p labwired-cli` first, or
+/// run the script standalone where the fallback is safe.
+#[test]
+#[ignore = "requires gdb-multiarch; run scripts/gdb-conformance.sh"]
+fn gdb_multiarch_batch_smoke() {
+    fn tool_absent(tool: &str) -> bool {
+        std::process::Command::new(tool)
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_err()
+    }
+
+    if tool_absent("gdb-multiarch") && tool_absent("arm-none-eabi-gdb") {
+        println!("skipping gdb_multiarch_batch_smoke: neither gdb-multiarch nor arm-none-eabi-gdb is installed");
+        return;
+    }
+
+    let repo_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+
+    let cli_present = match std::env::var("LABWIRED_CLI_BIN") {
+        Ok(path) => std::path::Path::new(&path).is_file(),
+        Err(_) => {
+            let target_dir = std::env::var("CARGO_TARGET_DIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| repo_root.join("target"));
+            let target_dir = if target_dir.is_absolute() {
+                target_dir
+            } else {
+                repo_root.join(target_dir)
+            };
+            target_dir.join("debug/labwired").is_file()
+        }
+    };
+    if !cli_present {
+        println!(
+            "skipping gdb_multiarch_batch_smoke: no prebuilt target/debug/labwired \
+             (cargo test holds the target-dir lock); run `cargo build -p labwired-cli` \
+             and rerun, or run scripts/gdb-conformance.sh standalone"
+        );
+        return;
+    }
+
+    let output = std::process::Command::new("bash")
+        .arg(repo_root.join("scripts/gdb-conformance.sh"))
+        .current_dir(&repo_root)
+        .output()
+        .expect("spawn scripts/gdb-conformance.sh");
+    assert!(
+        output.status.success(),
+        "scripts/gdb-conformance.sh failed with {}:\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    println!("{}", String::from_utf8_lossy(&output.stdout));
 }
