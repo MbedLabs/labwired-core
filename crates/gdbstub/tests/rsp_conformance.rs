@@ -549,13 +549,30 @@ fn watchpoint_on_a_2kib_object_stops_the_core() {
     assert_eq!(refusal, "$E16#ac");
     assert_ne!(body(&refusal), "OK");
 
-    // The refused watch did not arm: continue and interrupt normally.
+    // The refused watch did not arm: continue and interrupt normally. Park
+    // the PC in a controlled `b .` spin first — the previous continuation
+    // started at CODE + 2 in zero-filled RAM (`movs r0, r0` sled) and, given
+    // the 200 ms head start, could reach the end of RAM and take a
+    // BusFault → HardFault (S0b) before the 0x03 landed. CI caught that race;
+    // with the spin the only possible stops are ones this test controls.
+    write_thumb_code(&mut stream, CODE + 0x100, &[0xfe, 0xe7]);
+    set_reg_via_p(&mut stream, "f", CODE + 0x100);
+    assert_eq!(
+        read_reg_via_p(&mut stream, "f"),
+        CODE + 0x100,
+        "P f must move the PC to the spin"
+    );
     send_packet(&mut stream, "c");
     thread::sleep(Duration::from_millis(200));
     stream.write_all(&[0x03]).unwrap();
     stream.flush().unwrap();
     let stop = read_packet(&mut stream);
     assert_eq!(stop_signal(&stop).as_deref(), Some("02"), "{stop:?}");
+    assert_eq!(
+        read_reg_via_p(&mut stream, "f"),
+        CODE + 0x100,
+        "the interrupt must land while the core is still in the spin"
+    );
     assert_no_second_stop(&mut stream, 200);
 
     shutdown(stream, handle);
