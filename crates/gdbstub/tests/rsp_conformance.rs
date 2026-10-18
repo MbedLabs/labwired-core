@@ -112,14 +112,18 @@ fn expand_rle(s: &str) -> String {
     out
 }
 
-/// The body between `$` and `#` of an envelope.
+/// The body between `$` and `#` of an envelope, byte-exact.
+///
+/// No trimming: RLE's count character is `0x20 + repeat - 1`, so a repeat of
+/// four is encoded as a literal trailing space (`00040* ` for `00040000`).
+/// Trimming the body would silently corrupt exactly that run.
 fn body(reply: &str) -> String {
     let start = reply.find('$').map(|i| i + 1).unwrap_or(0);
     let end = reply[start..]
         .find('#')
         .map(|i| start + i)
         .unwrap_or(reply.len());
-    reply[start..end].trim().to_string()
+    reply[start..end].to_string()
 }
 
 /// The two hex digits after the leading `S`/`T` of a stop reply.
@@ -144,6 +148,17 @@ fn firmware_path() -> std::path::PathBuf {
 
 /// Bind an ephemeral port and serve ONE session with the standard fixture.
 fn start_session() -> (u16, thread::JoinHandle<anyhow::Result<()>>) {
+    start_session_with_faults(true)
+}
+
+/// Same session, with the ARMv7-M fault model explicitly toggled through the
+/// public per-core override (`CortexM::set_faults_enabled`) before the machine
+/// is handed to the server. The alternative — `LABWIRED_CORTEXM_FAULTS` — is a
+/// process-global read once at `configure_cortex_m` time, which would race
+/// other tests running in parallel; the per-core switch has no such problem.
+fn start_session_with_faults(
+    faults_enabled: bool,
+) -> (u16, thread::JoinHandle<anyhow::Result<()>>) {
     let bound = GdbServer::bind(0).expect("bind an ephemeral port");
     let port = bound.local_addr().port();
     let path = firmware_path();
@@ -151,6 +166,7 @@ fn start_session() -> (u16, thread::JoinHandle<anyhow::Result<()>>) {
         let mut bus = SystemBus::new();
         let (cpu, _nvic) = labwired_core::system::cortex_m::configure_cortex_m(&mut bus);
         let mut machine = Machine::new(cpu, bus);
+        machine.cpu.set_faults_enabled(faults_enabled);
         let image = labwired_loader::load_elf(&path)?;
         machine.load_firmware(&image)?;
         bound.run(machine)
@@ -221,27 +237,38 @@ fn read_all_regs(stream: &mut TcpStream) -> String {
     regs
 }
 
-/// Write one core register. The plan's `P` packet is a no-op on this target:
-/// it does not implement `SingleRegisterAccess`, so gdbstub answers the empty
-/// envelope `$#00` and changes nothing (observed; scenario 1 pins it). This
-/// helper therefore splices the little-endian value into the shipped `g`/`G`
-/// bulk path instead: read all registers, replace the 8 hex chars, write back.
-fn set_reg(stream: &mut TcpStream, reg_hex: &str, val: u32) {
-    let index: usize = usize::from_str_radix(reg_hex, 16).expect("register index is hex");
-    let mut regs = read_all_regs(stream);
+/// Write one core register with a real `P` packet. The wire format is
+/// `P reg=val` (the `=` is required by both the RSP spec and the crate's
+/// parser) and `val` is the value in target byte order — the little-endian
+/// byte sequence on both supported cores. The reply must be `OK`: before the
+/// target implemented `SingleRegisterAccess`, gdbstub answered the empty
+/// envelope `$#00` and silently changed nothing.
+fn set_reg_via_p(stream: &mut TcpStream, reg_hex: &str, val: u32) {
     let le: String = val
         .to_le_bytes()
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
-    regs.replace_range(index * 8..index * 8 + 8, &le);
-    send_packet(stream, &format!("G{regs}"));
+    send_packet(stream, &format!("P{reg_hex}={le}"));
     let reply = read_packet(stream);
     assert_eq!(
         body(&reply),
         "OK",
-        "G write of register {reg_hex} was refused: {reply:?}"
+        "P write of register {reg_hex} was refused: {reply:?}"
     );
+}
+
+/// `p n` single-register read; expands the crate's RLE before decoding the
+/// little-endian value (gdbstub RLE-compresses these replies too).
+fn read_reg_via_p(stream: &mut TcpStream, reg_hex: &str) -> u32 {
+    send_packet(stream, &format!("p{reg_hex}"));
+    let reply = read_packet(stream);
+    let hex = expand_rle(&body(&reply));
+    assert_eq!(hex.len(), 8, "p {reg_hex} answered {reply:?}");
+    let bytes: [u8; 4] = std::array::from_fn(|i| {
+        u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).expect("p reply is hex")
+    });
+    u32::from_le_bytes(bytes)
 }
 
 /// Nonblocking drain: panics if another complete `$…#chk` envelope arrives
@@ -312,13 +339,30 @@ fn reset_pc_while_stopped_in_wfi_stays_responsive() {
     // wfi at 0x800, then b . (fe e7) at 0x802.
     write_thumb_code(&mut stream, CODE, &[0x30, 0xbf, 0xfe, 0xe7]);
 
-    // The plan specified a `P` packet here. This target has no
-    // `SingleRegisterAccess`, so the crate answers the empty `$#00` and the
-    // register does not change (OBSERVED; `set_reg` uses `g`/`G` instead).
-    send_packet(&mut stream, "P f,20000800");
-    assert_eq!(read_packet(&mut stream), "$#00");
+    // Regression: `P` used to be a silent no-op — the target did not
+    // implement `SingleRegisterAccess`, so the crate answered the empty
+    // envelope `$#00` and left every register where it was. This scenario's
+    // reset-PC move could therefore "pass" while changing nothing. The two
+    // reads below are what make the move observable: `p f` (single-register
+    // read) and then `g` (bulk), so the #51 point is pinned end to end.
+    assert_ne!(
+        read_reg_via_p(&mut stream, "f"),
+        CODE,
+        "precondition: the PC does not already sit at the WFI site"
+    );
+    set_reg_via_p(&mut stream, "f", CODE);
+    assert_eq!(
+        read_reg_via_p(&mut stream, "f"),
+        CODE,
+        "P f must move the PC"
+    );
+    let regs = read_all_regs(&mut stream);
+    assert_eq!(
+        &regs[15 * 8..15 * 8 + 8],
+        "00080020",
+        "g must show the P-written PC"
+    );
 
-    set_reg(&mut stream, "f", CODE);
     send_packet(&mut stream, "c");
     thread::sleep(Duration::from_millis(200));
     stream.write_all(&[0x03]).unwrap();
@@ -330,7 +374,12 @@ fn reset_pc_while_stopped_in_wfi_stays_responsive() {
     // Reset PC to the `b .` site while the target is stopped. The plan said
     // 0x804, but `fe e7` is the 2-byte branch directly after the 2-byte `wfi`,
     // so the branch site is 0x802 — the scenario's stated intent.
-    set_reg(&mut stream, "f", CODE + 2);
+    set_reg_via_p(&mut stream, "f", CODE + 2);
+    assert_eq!(
+        read_reg_via_p(&mut stream, "f"),
+        CODE + 2,
+        "the second P f must move the PC too"
+    );
     send_packet(&mut stream, "c");
     thread::sleep(Duration::from_millis(200));
     stream.write_all(&[0x03]).unwrap();
@@ -382,15 +431,16 @@ fn step_into_fault_reports_fault_and_target_survives() {
 
     // ldr r0, [r1] over an unmapped address.
     write_thumb_code(&mut stream, CODE, &[0x08, 0x68]);
-    set_reg(&mut stream, "1", 0x3000_0004);
-    set_reg(&mut stream, "f", CODE);
+    set_reg_via_p(&mut stream, "1", 0x3000_0004);
+    set_reg_via_p(&mut stream, "f", CODE);
 
     send_packet(&mut stream, "s");
     let stop = read_packet(&mut stream);
     // OBSERVED: S05, not the plan's S0b. The ARMv7-M fault model is on by
     // default, so the unmapped load pends a precise BusFault escalated to
-    // HardFault and the step finishes as StepDone/SIGTRAP; the gdbstub
-    // Err arm (SIGSEGV) is only reachable with LABWIRED_CORTEXM_FAULTS=0.
+    // HardFault and the step finishes as StepDone/SIGTRAP. The Err arm's
+    // S0b is reachable with fault escalation off and is pinned by
+    // `step_into_fault_with_faults_disabled_reports_segv` below.
     assert_eq!(stop_signal(&stop).as_deref(), Some("05"), "{stop:?}");
     assert_no_second_stop(&mut stream, 200);
 
@@ -415,7 +465,7 @@ fn step_into_fault_reports_fault_and_target_survives() {
 
     // Recovery: a clean `b .` site steps to SIGTRAP and the target survives.
     write_thumb_code(&mut stream, CODE + 0x10, &[0x00, 0xbf, 0xfe, 0xe7]);
-    set_reg(&mut stream, "f", CODE + 0x10);
+    set_reg_via_p(&mut stream, "f", CODE + 0x10);
     send_packet(&mut stream, "s");
     let stop = read_packet(&mut stream);
     assert_eq!(stop_signal(&stop).as_deref(), Some("05"), "{stop:?}");
@@ -424,6 +474,39 @@ fn step_into_fault_reports_fault_and_target_survives() {
         &regs[15 * 8..15 * 8 + 8],
         "12080020",
         "the clean nop retired (PC = CODE + 0x12)"
+    );
+
+    shutdown(stream, handle);
+}
+
+/// The other half of #74: with fault escalation turned off, the unmapped load
+/// is not converted into a pended HardFault — the machine's `Err` lands in the
+/// event loop's `Err` arm, which must answer `S0b` (SIGSEGV). The switch is the
+/// public per-core override, so no process-global env is touched.
+#[test]
+fn step_into_fault_with_faults_disabled_reports_segv() {
+    let (port, handle) = start_session_with_faults(false);
+    let mut stream = connect(port);
+
+    // ldr r0, [r1] over an unmapped address.
+    write_thumb_code(&mut stream, CODE, &[0x08, 0x68]);
+    set_reg_via_p(&mut stream, "1", 0x3000_0004);
+    set_reg_via_p(&mut stream, "f", CODE);
+
+    send_packet(&mut stream, "s");
+    let stop = read_packet(&mut stream);
+    assert_eq!(
+        stop_signal(&stop).as_deref(),
+        Some("0b"),
+        "the Err arm must report SIGSEGV when escalation is off: {stop:?}"
+    );
+    assert_no_second_stop(&mut stream, 200);
+
+    let regs = read_all_regs(&mut stream);
+    assert_eq!(
+        &regs[15 * 8..15 * 8 + 8],
+        "00080020",
+        "the faulting ldr must not retire; PC is still the ldr site"
     );
 
     shutdown(stream, handle);
@@ -439,9 +522,9 @@ fn watchpoint_on_a_2kib_object_stops_the_core() {
 
     // str r0, [r1] with r1 = the last word of the 2 KiB object at 0x2000_0000.
     write_thumb_code(&mut stream, CODE, &[0x08, 0x60]);
-    set_reg(&mut stream, "0", 0xAB);
-    set_reg(&mut stream, "1", 0x2000_07FC);
-    set_reg(&mut stream, "f", CODE);
+    set_reg_via_p(&mut stream, "0", 0xAB);
+    set_reg_via_p(&mut stream, "1", 0x2000_07FC);
+    set_reg_via_p(&mut stream, "f", CODE);
 
     send_packet(&mut stream, "Z2,20000000,800");
     assert_eq!(body(&read_packet(&mut stream)), "OK");
@@ -488,9 +571,9 @@ fn exactly_one_stop_reply_per_stop() {
     // Two stores into the watched range, then a self-loop, so each continue
     // has a fresh watched access to stop on.
     write_thumb_code(&mut stream, CODE, &[0x08, 0x60, 0x08, 0x60, 0xfe, 0xe7]);
-    set_reg(&mut stream, "0", 0xAB);
-    set_reg(&mut stream, "1", 0x2000_07FC);
-    set_reg(&mut stream, "f", CODE);
+    set_reg_via_p(&mut stream, "0", 0xAB);
+    set_reg_via_p(&mut stream, "1", 0x2000_07FC);
+    set_reg_via_p(&mut stream, "f", CODE);
 
     send_packet(&mut stream, "Z2,200007FC,4");
     assert_eq!(body(&read_packet(&mut stream)), "OK");

@@ -99,6 +99,61 @@ impl SingleThreadBase for LabwiredTarget<CortexM> {
     ) -> Option<gdbstub::target::ext::base::singlethread::SingleThreadResumeOps<'_, Self>> {
         Some(self)
     }
+
+    fn support_single_register_access(
+        &mut self,
+    ) -> Option<
+        gdbstub::target::ext::base::single_register_access::SingleRegisterAccessOps<'_, (), Self>,
+    > {
+        Some(self)
+    }
+}
+
+/// GDB's `p`/`P` packets against an ARM core: one 32-bit little-endian word
+/// per core register. This is what `set $pc = ...` / `reset $pc` travels on.
+impl gdbstub::target::ext::base::single_register_access::SingleRegisterAccess<()>
+    for LabwiredTarget<CortexM>
+{
+    fn read_register(
+        &mut self,
+        _tid: (),
+        reg_id: gdbstub_arch::arm::reg::id::ArmCoreRegId,
+        buf: &mut [u8],
+    ) -> TargetResult<usize, Self> {
+        use gdbstub_arch::arm::reg::id::ArmCoreRegId;
+        let index = match reg_id {
+            ArmCoreRegId::Gpr(r) => r,
+            ArmCoreRegId::Sp => 13,
+            ArmCoreRegId::Lr => 14,
+            ArmCoreRegId::Pc => 15,
+            ArmCoreRegId::Cpsr => 16,
+            _ => return Err(TargetError::NonFatal),
+        };
+        let slot = buf.get_mut(..4).ok_or(TargetError::NonFatal)?;
+        slot.copy_from_slice(&self.machine.read_core_reg(index).to_le_bytes());
+        Ok(4)
+    }
+
+    fn write_register(
+        &mut self,
+        _tid: (),
+        reg_id: gdbstub_arch::arm::reg::id::ArmCoreRegId,
+        val: &[u8],
+    ) -> TargetResult<(), Self> {
+        use gdbstub_arch::arm::reg::id::ArmCoreRegId;
+        let index = match reg_id {
+            ArmCoreRegId::Gpr(r) => r,
+            ArmCoreRegId::Sp => 13,
+            ArmCoreRegId::Lr => 14,
+            ArmCoreRegId::Pc => 15,
+            ArmCoreRegId::Cpsr => 16,
+            _ => return Err(TargetError::NonFatal),
+        };
+        let bytes: [u8; 4] = val.try_into().map_err(|_| TargetError::NonFatal)?;
+        self.machine
+            .write_core_reg(index, u32::from_le_bytes(bytes));
+        Ok(())
+    }
 }
 
 impl Target for LabwiredTarget<RiscV> {
@@ -168,6 +223,55 @@ impl SingleThreadBase for LabwiredTarget<RiscV> {
         &mut self,
     ) -> Option<gdbstub::target::ext::base::singlethread::SingleThreadResumeOps<'_, Self>> {
         Some(self)
+    }
+
+    fn support_single_register_access(
+        &mut self,
+    ) -> Option<
+        gdbstub::target::ext::base::single_register_access::SingleRegisterAccessOps<'_, (), Self>,
+    > {
+        Some(self)
+    }
+}
+
+/// GDB's `p`/`P` packets against a RISC-V core: one 32-bit little-endian word
+/// per core register (`x0`-`x31`, then `pc`).
+impl gdbstub::target::ext::base::single_register_access::SingleRegisterAccess<()>
+    for LabwiredTarget<RiscV>
+{
+    fn read_register(
+        &mut self,
+        _tid: (),
+        reg_id: gdbstub_arch::riscv::reg::id::RiscvRegId<u32>,
+        buf: &mut [u8],
+    ) -> TargetResult<usize, Self> {
+        use gdbstub_arch::riscv::reg::id::RiscvRegId;
+        let index = match reg_id {
+            RiscvRegId::Gpr(x) => x,
+            RiscvRegId::Pc => 32,
+            _ => return Err(TargetError::NonFatal),
+        };
+        let slot = buf.get_mut(..4).ok_or(TargetError::NonFatal)?;
+        slot.copy_from_slice(&self.machine.read_core_reg(index).to_le_bytes());
+        Ok(4)
+    }
+
+    fn write_register(
+        &mut self,
+        _tid: (),
+        reg_id: gdbstub_arch::riscv::reg::id::RiscvRegId<u32>,
+        val: &[u8],
+    ) -> TargetResult<(), Self> {
+        use gdbstub_arch::riscv::reg::id::RiscvRegId;
+        let index = match reg_id {
+            RiscvRegId::Gpr(x) => x,
+            RiscvRegId::Pc => 32,
+            _ => return Err(TargetError::NonFatal),
+        };
+        let bytes: [u8; 4] = val.try_into().map_err(|_| TargetError::NonFatal)?;
+        self.machine
+            .write_core_reg(index, u32::from_le_bytes(bytes));
+        Ok(())
     }
 }
 
@@ -510,6 +614,91 @@ mod tests {
             .write_registers(&regs)
             .unwrap_or_else(|_| panic!("Failed to write registers"));
         assert_eq!(target.machine.read_core_reg(1), 0xdeadbeef);
+    }
+
+    #[test]
+    fn single_register_access_round_trips_arm() {
+        use gdbstub::target::ext::base::single_register_access::SingleRegisterAccess;
+        use gdbstub_arch::arm::reg::id::ArmCoreRegId;
+
+        let mut bus = SystemBus::new();
+        let (cpu, _nvic) = labwired_core::system::cortex_m::configure_cortex_m(&mut bus);
+        let machine = Machine::new(cpu, bus);
+        let mut target = LabwiredTarget::<CortexM>::new(machine);
+
+        assert!(target.support_single_register_access().is_some());
+
+        // `P f=<le>` then `p f` must round-trip the PC, and the machine's core
+        // register 15 must be the same value — this is what `reset $pc` uses.
+        let pc = 0x0800_0240u32;
+        target
+            .write_register((), ArmCoreRegId::Pc, &pc.to_le_bytes())
+            .unwrap_or_else(|_| panic!("P write of PC refused"));
+        let mut buf = [0u8; 4];
+        let n = target
+            .read_register((), ArmCoreRegId::Pc, &mut buf)
+            .unwrap_or_else(|_| panic!("p read of PC refused"));
+        assert_eq!(n, 4);
+        assert_eq!(u32::from_le_bytes(buf), pc);
+        assert_eq!(target.machine.read_core_reg(15), pc);
+
+        // `P 1,<le>` lands in core register 1, as `G` would.
+        let r1 = 0xdead_beefu32;
+        target
+            .write_register((), ArmCoreRegId::Gpr(1), &r1.to_le_bytes())
+            .unwrap_or_else(|_| panic!("P write of r1 refused"));
+        assert_eq!(target.machine.read_core_reg(1), r1);
+
+        // Register classes this target does not model must be a NonFatal
+        // error, so GDB sees a real refusal rather than a silent no-op.
+        let mut buf = [0u8; 4];
+        assert!(matches!(
+            target.read_register((), ArmCoreRegId::Fpr(0), &mut buf),
+            Err(TargetError::NonFatal)
+        ));
+        assert!(matches!(
+            target.write_register((), ArmCoreRegId::Fps, &[0u8; 4]),
+            Err(TargetError::NonFatal)
+        ));
+    }
+
+    #[test]
+    fn single_register_access_round_trips_riscv() {
+        use gdbstub::target::ext::base::single_register_access::SingleRegisterAccess;
+        use gdbstub_arch::riscv::reg::id::RiscvRegId;
+
+        let machine = Machine::new(labwired_core::cpu::RiscV::new(), SystemBus::new());
+        let mut target = LabwiredTarget::<RiscV>::new(machine);
+
+        assert!(target.support_single_register_access().is_some());
+
+        let pc = 0x8000_0300u32;
+        target
+            .write_register((), RiscvRegId::Pc, &pc.to_le_bytes())
+            .unwrap_or_else(|_| panic!("P write of PC refused"));
+        let mut buf = [0u8; 4];
+        let n = target
+            .read_register((), RiscvRegId::Pc, &mut buf)
+            .unwrap_or_else(|_| panic!("p read of PC refused"));
+        assert_eq!(n, 4);
+        assert_eq!(u32::from_le_bytes(buf), pc);
+        assert_eq!(target.machine.read_core_reg(32), pc);
+
+        let x2 = 0x2000_0800u32;
+        target
+            .write_register((), RiscvRegId::Gpr(2), &x2.to_le_bytes())
+            .unwrap_or_else(|_| panic!("P write of x2 refused"));
+        assert_eq!(target.machine.read_core_reg(2), x2);
+
+        let mut buf = [0u8; 4];
+        assert!(matches!(
+            target.read_register((), RiscvRegId::Csr(0), &mut buf),
+            Err(TargetError::NonFatal)
+        ));
+        assert!(matches!(
+            target.write_register((), RiscvRegId::Priv, &[0u8; 4]),
+            Err(TargetError::NonFatal)
+        ));
     }
 
     #[test]
