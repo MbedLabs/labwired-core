@@ -3805,3 +3805,16 @@ fn jit_gate_refuses_non_default_ram_policy() {
     bus.memory_policy.ram = CpuWritePolicy::Fault;
     assert!(!cpu.jit_gate_allows(&bus, &[]));
 }
+
+#[cfg(feature = "jit")]
+#[test]
+fn jit_gate_refuses_an_armed_debug_watch() {
+    let cpu = CortexM::new();
+    let mut bus = crate::bus::SystemBus::new();
+    assert!(cpu.jit_gate_allows(&bus, &[]));
+    assert!(bus.add_debug_watch(0x2000_0100, 4, false, true));
+    assert!(
+        !cpu.jit_gate_allows(&bus, &[]),
+        "a compiled block writes raw RAM and must not bypass a watch"
+    );
+}
