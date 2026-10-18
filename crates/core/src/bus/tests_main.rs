@@ -6150,6 +6150,58 @@ fn debug_watch_u64_store_latches_too() {
 }
 
 #[test]
+fn debug_watch_u16_store_latches_too() {
+    let mut bus = SystemBus::new();
+    assert!(bus.add_debug_watch(0x2000_0100, 4, false, true));
+    bus.write_u16(0x2000_0102, 0xBEEF).unwrap();
+    assert_eq!(bus.take_debug_watch_hit(), Some(0x2000_0102));
+}
+
+#[test]
+fn debug_watch_latch_keeps_the_first_hit() {
+    let mut bus = SystemBus::new();
+    assert!(bus.add_debug_watch(0x2000_0100, 4, false, true));
+    assert!(bus.add_debug_watch(0x2000_0200, 4, false, true));
+    bus.write_u32(0x2000_0100, 1).unwrap();
+    bus.write_u32(0x2000_0200, 2).unwrap();
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        Some(0x2000_0100),
+        "a second in-range store must not overwrite the pending hit"
+    );
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        None,
+        "the latch holds exactly the first hit"
+    );
+}
+
+#[test]
+fn debug_watch_read_u64_does_not_latch() {
+    let mut bus = SystemBus::new();
+    assert!(bus.add_debug_watch(0x2000_0100, 8, true, false));
+    let _ = crate::Bus::read_u64(&bus, 0x2000_0100).unwrap();
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        None,
+        "64-bit loads are not watched by design (host/bulk path)"
+    );
+}
+
+#[test]
+fn debug_watch_latches_a_policy_rejected_store() {
+    let mut bus = SystemBus::new();
+    assert!(bus.add_debug_watch(0x2000_0100, 4, false, true));
+    bus.memory_policy.ram = crate::bus::CpuWritePolicy::Fault;
+    assert!(bus.write_u32(0x2000_0100, 0xDEAD_BEEF).is_err());
+    assert_eq!(
+        bus.take_debug_watch_hit(),
+        Some(0x2000_0100),
+        "an attempted store latches even when the policy rejects it"
+    );
+}
+
+#[test]
 fn debug_watch_read_only_fires_on_loads() {
     let mut bus = SystemBus::new();
     assert!(bus.add_debug_watch(0x2000_0200, 8, true, false));

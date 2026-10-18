@@ -2673,6 +2673,108 @@ pub mod integration_tests {
         );
     }
 
+    /// A store watch stops the run on the store's own instruction: the store
+    /// commits (GDB semantics: the new value is reported), then the run stops
+    /// instead of retiring anything else.
+    ///
+    /// CONTRACT (pinned): the stop is reported AFTER the store retires, so
+    /// `get_pc()` is the instruction after the store, not the store itself.
+    /// Watches pin the CPU window to one instruction (`plan_cpu_window`), so
+    /// nothing retires between the store and the stop. GDB's "PC at the store"
+    /// rendering would need a pre-decode/pushback the machine does not have;
+    /// Task 4 asserts this contract.
+    #[test]
+    fn store_watch_stops_before_retiring_the_store() {
+        let mut machine = create_machine();
+        let code = 0x2000_0800u32;
+        let watched = 0x2000_0200u32;
+        machine.cpu.set_pc(code);
+        // str r0, [r1] (Thumb-16 0x6008 = bytes 08 60), then NOPs (MOV R0, R0)
+        // so the same program is valid for a full 16-step budget.
+        machine.bus.write_u16(code as u64, 0x6008).unwrap();
+        for i in 1..16u64 {
+            machine.bus.write_u16(code as u64 + i * 2, 0x4600).unwrap();
+        }
+        machine.cpu.set_register(0, 0xAB);
+        machine.cpu.set_register(1, watched);
+        assert!(machine.add_watchpoint(watched as u64, 4, false, true));
+
+        let stop = machine.run(Some(16)).unwrap();
+        assert_eq!(
+            stop,
+            StopReason::Watchpoint(watched as u64),
+            "a store inside the watched range must stop the run"
+        );
+        assert_eq!(
+            machine.bus.ram.read_u32(watched as u64),
+            Some(0xAB),
+            "the watched store must have committed before the stop"
+        );
+        assert_eq!(
+            machine.cpu.get_pc(),
+            code + 2,
+            "PC is PAST the store (pinned contract: stop after the store retires)"
+        );
+    }
+
+    #[test]
+    fn load_watch_stops_on_the_load() {
+        let mut machine = create_machine();
+        let code = 0x2000_0800u32;
+        let watched = 0x2000_0200u32;
+        machine.bus.write_u32(watched as u64, 0x1234_5678).unwrap();
+        machine.cpu.set_pc(code);
+        // ldr r0, [r1] (Thumb-16 0x6808 = bytes 08 68), then NOPs.
+        machine.bus.write_u16(code as u64, 0x6808).unwrap();
+        for i in 1..16u64 {
+            machine.bus.write_u16(code as u64 + i * 2, 0x4600).unwrap();
+        }
+        machine.cpu.set_register(1, watched);
+        assert!(machine.add_watchpoint(watched as u64, 4, true, false));
+
+        let stop = machine.run(Some(16)).unwrap();
+        assert_eq!(
+            stop,
+            StopReason::Watchpoint(watched as u64),
+            "a load from the watched range must stop the run"
+        );
+        assert_eq!(
+            machine.cpu.get_register(0),
+            0x1234_5678,
+            "the watched load must have committed before the stop"
+        );
+        assert_eq!(
+            machine.cpu.get_pc(),
+            code + 2,
+            "PC is PAST the load (pinned contract: stop after the load retires)"
+        );
+    }
+
+    #[test]
+    fn no_watch_default_run_is_unchanged() {
+        let mut machine = create_machine();
+        let code = 0x2000_0800u32;
+        machine.cpu.set_pc(code);
+        machine.bus.write_u16(code as u64, 0x6008).unwrap();
+        for i in 1..16u64 {
+            machine.bus.write_u16(code as u64 + i * 2, 0x4600).unwrap();
+        }
+        machine.cpu.set_register(0, 0xAB);
+        machine.cpu.set_register(1, 0x2000_0200);
+
+        let stop = machine.run(Some(16)).unwrap();
+        assert_eq!(
+            stop,
+            StopReason::MaxStepsReached,
+            "with no watch armed the run must spend its budget exactly as before"
+        );
+        assert_eq!(
+            machine.cpu.get_pc(),
+            code + 32,
+            "all 16 budgeted instructions retired"
+        );
+    }
+
     #[test]
     fn pc_coverage_observer_records_executed_addresses() {
         use crate::pc_coverage::PcCoverageObserver;

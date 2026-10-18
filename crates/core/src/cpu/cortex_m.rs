@@ -2448,6 +2448,16 @@ impl CortexM {
             if sb.ram_cpu_writes_gated() {
                 return false;
             }
+            // Same reasoning, one level up: compiled blocks also bypass the
+            // accessors that latch a debug watch, and they run whole blocks
+            // without the machine getting a window boundary to stop at. Refuse
+            // while ANY watch is armed — store-only watches included, because
+            // the gate's job is to keep raw-RAM writes off the path, and the
+            // per-batch test is cheaper than reasoning about which block might
+            // touch which range.
+            if !sb.debug_watches.is_empty() {
+                return false;
+            }
         }
         true
     }
